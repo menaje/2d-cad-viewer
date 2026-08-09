@@ -6,6 +6,10 @@ import earcut, { deviation } from "earcut";
 export const MASK_BUCKET_STYLE_SHIFT = 17;
 export const MAX_LOCAL_MASK_BUCKET = 0x7fff;
 export const MAX_GLOBAL_MASK_BUCKET = 10_000;
+// A root draw-order bucket is subdivided for XREF-local ordering. 1024 keeps
+// the resulting depth values distinguishable in a 24-bit depth buffer across
+// the complete root bucket range while leaving room in the RGB order map.
+export const DRAW_ORDER_SUBDIVISIONS = 1024;
 
 const DEFAULT_MAXIMUM_DEPTH = 64;
 const DEFAULT_MAXIMUM_EVENTS = 250_000;
@@ -178,9 +182,23 @@ function disabledPlan(diagnostics, reason, masks = []) {
     blockSpans: new Uint32Array(0),
     masks: Object.freeze(masks),
     maximumExpandedMasks: 0,
+    generalOrderEnabled: false,
     modelOwnerHandle: null,
     diagnostics: Object.freeze({ ...diagnostics, reason }),
   });
+}
+
+function readOrderedEntity(source, index, target) {
+  if (typeof source.readDisplayRecord === "function") {
+    return source.readDisplayRecord(index, target);
+  }
+  if (typeof source.readEntity === "function") {
+    return source.readEntity(index, target);
+  }
+  if (typeof source.get === "function") {
+    return source.get(index);
+  }
+  throw new TypeError("ordered entity source is not readable");
 }
 
 function checkedContribution(value, diagnostics) {
@@ -203,12 +221,17 @@ export function buildMaskOrderPlan(
   {
     maximumDepth = DEFAULT_MAXIMUM_DEPTH,
     maximumEvents = DEFAULT_MAXIMUM_EVENTS,
+    orderedEntitySources = [],
+    includeOverrideTargets = true,
+    reservedBlockSpans = null,
   } = {},
 ) {
   const diagnostics = {
     tables: drawOrder.length,
     entries: drawOrder.entryCount,
     sourceMasks: wipeoutSource.length,
+    sourceOrderedEntities: 0,
+    activeOrderedEntities: 0,
     activeMasks: 0,
     events: 0,
     conflictingOverrides: 0,
@@ -221,6 +244,8 @@ export function buildMaskOrderPlan(
     localBucketLimit: 0,
     bucketLimit: 0,
     multipleModelRoots: 0,
+    reservedBlockSpans: 0,
+    reservedInsertEvents: 0,
   };
   if (
     !Number.isInteger(maximumDepth) ||
@@ -230,6 +255,29 @@ export function buildMaskOrderPlan(
   ) {
     throw new RangeError("mask-order limits must be positive integers");
   }
+  if (!Array.isArray(orderedEntitySources)) {
+    throw new TypeError("ordered entity sources must be an array");
+  }
+  if (typeof includeOverrideTargets !== "boolean") {
+    throw new TypeError("draw-order override target mode must be boolean");
+  }
+  if (
+    reservedBlockSpans !== null &&
+    (!(reservedBlockSpans instanceof Uint32Array) ||
+      reservedBlockSpans.length !== blocks.length)
+  ) {
+    throw new TypeError(
+      "reserved block spans must be a block-sized Uint32Array",
+    );
+  }
+  const reservedBlockSpan = (blockIndex) =>
+    reservedBlockSpans?.[blockIndex] ?? 0;
+  diagnostics.reservedBlockSpans = reservedBlockSpans
+    ? reservedBlockSpans.reduce(
+        (count, span) => count + (span > 0 ? 1 : 0),
+        0,
+      )
+    : 0;
   const modelBlocks = blocks.filter(
     (block) => block.name.toUpperCase() === "*MODEL_SPACE",
   );
@@ -248,10 +296,29 @@ export function buildMaskOrderPlan(
         ownerHandle,
         overrides: new Map(),
         events: [],
+        eventByHandle: new Map(),
       };
       ownerBuilders.set(ownerHandle, owner);
     }
     return owner;
+  };
+  const addEvent = (ownerHandle, event) => {
+    const owner = ownerBuilder(canonicalOwner(ownerHandle));
+    const existing = owner.eventByHandle.get(event.handle);
+    if (!existing) {
+      owner.events.push(event);
+      owner.eventByHandle.set(event.handle, event);
+      return event;
+    }
+    if (event.kind === "entity") {
+      return existing;
+    }
+    if (existing.kind !== "entity" && existing.kind !== event.kind) {
+      diagnostics.duplicateEventKeys += 1;
+      return existing;
+    }
+    Object.assign(existing, event);
+    return existing;
   };
 
   const tableTarget = {};
@@ -267,6 +334,17 @@ export function buildMaskOrderPlan(
         continue;
       }
       owner.overrides.set(entry.entityHandle, entry.sortHandle);
+      if (includeOverrideTargets) {
+        addEvent(owner.ownerHandle, {
+          kind: "entity",
+          handle: entry.entityHandle,
+          targetBlockIndex: null,
+          cellCount: 1,
+          contribution: 1,
+          prefix: 0,
+          mask: null,
+        });
+      }
     }
   }
   if (diagnostics.conflictingOverrides > 0) {
@@ -313,7 +391,7 @@ export function buildMaskOrderPlan(
       localBucket: 0,
     };
     masks.push(mask);
-    ownerBuilder(canonicalOwner(entity.ownerHandle)).events.push({
+    addEvent(entity.ownerHandle, {
       kind: "mask",
       handle: entity.handle,
       targetBlockIndex: null,
@@ -329,12 +407,49 @@ export function buildMaskOrderPlan(
   if (diagnostics.invertedMasks > 0) {
     return disabledPlan(diagnostics, "inverted-mask-clip", masks);
   }
-  if (masks.length === 0) {
-    return disabledPlan(diagnostics, "no-active-masks");
-  }
   if (modelBlocks.length !== 1) {
     diagnostics.multipleModelRoots += 1;
     return disabledPlan(diagnostics, "multiple-model-roots", masks);
+  }
+
+  const orderedTarget = {
+    insertionPoint: [0, 0, 0],
+    normal: [0, 0, 1],
+    uVector: [0, 0, 0],
+    vVector: [0, 0, 0],
+    size: [0, 0],
+  };
+  for (const source of orderedEntitySources) {
+    if (
+      !source ||
+      !Number.isSafeInteger(source.length) ||
+      source.length < 0
+    ) {
+      throw new TypeError("ordered entity source has an invalid length");
+    }
+    diagnostics.sourceOrderedEntities += source.length;
+    for (let index = 0; index < source.length; index += 1) {
+      const entity = readOrderedEntity(source, index, orderedTarget);
+      if (
+        typeof entity?.handle !== "bigint" ||
+        typeof entity?.ownerHandle !== "bigint"
+      ) {
+        throw new TypeError("ordered entity identity is invalid");
+      }
+      if ((entity.commonFlags & 1) !== 0) {
+        continue;
+      }
+      diagnostics.activeOrderedEntities += 1;
+      addEvent(entity.ownerHandle, {
+        kind: "entity",
+        handle: entity.handle,
+        targetBlockIndex: null,
+        cellCount: 1,
+        contribution: 1,
+        prefix: 0,
+        mask: null,
+      });
+    }
   }
 
   for (const insert of inserts) {
@@ -345,7 +460,7 @@ export function buildMaskOrderPlan(
       diagnostics.bucketLimit += 1;
       return disabledPlan(diagnostics, "insert-array-limit", masks);
     }
-    ownerBuilder(canonicalOwner(insert.ownerHandle)).events.push({
+    addEvent(insert.ownerHandle, {
       kind: "insert",
       handle: insert.handle,
       targetBlockIndex: insert.blockIndex,
@@ -362,6 +477,23 @@ export function buildMaskOrderPlan(
   );
   if (diagnostics.events > maximumEvents) {
     return disabledPlan(diagnostics, "event-limit", masks);
+  }
+  const hasDrawableOrderEvent = [...ownerBuilders.values()].some(
+    (owner) =>
+      owner.events.some(
+        (event) =>
+          event.kind === "mask" ||
+          event.kind === "entity" ||
+          (event.kind === "insert" &&
+            reservedBlockSpan(event.targetBlockIndex) > 0),
+      ),
+  );
+  if (!hasDrawableOrderEvent) {
+    return disabledPlan(
+      diagnostics,
+      "no-critical-events",
+      masks,
+    );
   }
 
   for (const owner of ownerBuilders.values()) {
@@ -408,9 +540,11 @@ export function buildMaskOrderPlan(
     let span = 0;
     for (const event of owner?.events ?? []) {
       event.prefix = span;
-      if (event.kind === "mask") {
+      if (event.kind === "mask" || event.kind === "entity") {
         event.contribution = 1;
-        event.mask.localBucket = span + 1;
+        if (event.mask) {
+          event.mask.localBucket = span + 1;
+        }
       } else {
         const childSpan = computeBlockSpan(
           event.targetBlockIndex,
@@ -425,6 +559,14 @@ export function buildMaskOrderPlan(
       if (span > MAX_LOCAL_MASK_BUCKET) {
         diagnostics.localBucketLimit += 1;
         throw new RangeError("block WIPEOUT order exceeds style-bit capacity");
+      }
+    }
+    const reserved = reservedBlockSpan(blockIndex);
+    if (reserved > 0) {
+      span = checkedContribution(Math.max(span, reserved), diagnostics);
+      if (span > MAX_LOCAL_MASK_BUCKET) {
+        diagnostics.localBucketLimit += 1;
+        throw new RangeError("reserved block order exceeds style-bit capacity");
       }
     }
     blockSpans[blockIndex] = span;
@@ -488,8 +630,21 @@ export function buildMaskOrderPlan(
       }),
     );
   }
+  diagnostics.reservedInsertEvents = [...ownerBuilders.values()].reduce(
+    (count, owner) =>
+      count +
+      owner.events.filter(
+        (event) =>
+          event.kind === "insert" &&
+          reservedBlockSpan(event.targetBlockIndex) > 0,
+      ).length,
+    0,
+  );
   return Object.freeze({
     enabled: true,
+    generalOrderEnabled:
+      diagnostics.activeOrderedEntities > 0 ||
+      diagnostics.reservedInsertEvents > 0,
     reason: null,
     owners,
     blockSpans,
@@ -556,7 +711,8 @@ export function maskBucketFor(plan, ownerHandle, entityHandle) {
   const position = entityPosition(owner, entityHandle);
   const event = owner.events[position];
   if (
-    event?.kind === "mask" &&
+    event &&
+    event.kind !== "insert" &&
     event.handle === entityHandle
   ) {
     return event.prefix + 1;

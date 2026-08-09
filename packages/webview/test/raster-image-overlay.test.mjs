@@ -372,6 +372,109 @@ test("draws IMAGE placement with clipping and CAD display adjustments", () => {
   assert.equal(canvas.calls.drawImage.length, 2);
 });
 
+test("draws repeated block images in absolute display order", () => {
+  const canvas = fakeCanvas();
+  const records = [10n, 20n].map((handle) => ({
+    ...visibleRecord,
+    handle,
+    ownerHandle: 200n,
+    clippingEnabled: false,
+    clipVertexCount: 0,
+    clipVertices: [],
+  }));
+  const imageEntities = {
+    length: records.length,
+    readEntity(index, target) {
+      Object.assign(target, records[index]);
+      target.insertionPoint = [...records[index].insertionPoint];
+      target.uVector = [...records[index].uVector];
+      target.vVector = [...records[index].vVector];
+      target.size = [...records[index].size];
+      return target;
+    },
+    readPath(index) {
+      return `image-${index}.png`;
+    },
+    readClipVertex() {
+      throw new Error("unclipped image must not read clip vertices");
+    },
+  };
+  const matrix = identityMat4();
+  const events = records.map((record, index) => ({
+    kind: "entity",
+    handle: record.handle,
+    key: record.handle,
+    prefix: index,
+    contribution: 1,
+  }));
+  const overlay = new CanvasRasterImageOverlay(canvas, {
+    imageEntities,
+    blocks: [
+      { index: 0, handle: 100n, name: "*Model_Space" },
+      { index: 1, handle: 200n, name: "RepeatedBlock" },
+    ],
+    layers: [{ name: "0" }],
+    instanceGraph: {
+      rootInstances: modelGraph().rootInstances,
+      instancesByBlock: new Map([
+        [
+          1,
+          {
+            data: new Float64Array([...matrix, ...matrix]),
+            maskBases: new Uint32Array([0, 2]),
+            clipIds: new Uint32Array([0, 0]),
+            layerIndices: new Uint32Array([0xffffffff, 0xffffffff]),
+            opacities: new Float32Array([1, 1]),
+            visibilityRows: new Uint32Array([0, 0]),
+            count: 2,
+          },
+        ],
+      ]),
+      modelBlockIndices: new Set([0]),
+      clipNodes: [],
+    },
+    cacheId: "root",
+    maskOrder: {
+      enabled: true,
+      generalOrderEnabled: true,
+      modelOwnerHandle: 100n,
+      owners: new Map([
+        [
+          200n,
+          {
+            overrides: new Map(),
+            events,
+          },
+        ],
+      ]),
+      masks: [],
+    },
+    assetStore: {
+      lookup(_cacheId, imageIndex) {
+        const bitmap = {
+          name: imageIndex === 0 ? "A" : "B",
+          width: 4,
+          height: 3,
+        };
+        return {
+          status: "ready",
+          bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+        };
+      },
+      snapshot: () => ({}),
+    },
+  });
+
+  overlay.redraw(camera, [true]);
+
+  assert.deepEqual(
+    canvas.calls.drawImage.map(({ values }) => values[0].name),
+    ["A", "B", "A", "B"],
+  );
+});
+
 test("selects visible IMAGE bounds and exposes its insertion point", () => {
   const canvas = fakeCanvas();
   const overlay = new CanvasRasterImageOverlay(canvas, {

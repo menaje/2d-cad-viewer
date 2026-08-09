@@ -25,6 +25,9 @@ function viewKey(view) {
 }
 
 function patternInstanceGraph(state, view) {
+  if (state.external) {
+    return state.modelInstanceGraph;
+  }
   const key = viewKey(view);
   if (state.instanceGraphKey === key) {
     return state.instanceGraph;
@@ -95,6 +98,7 @@ self.addEventListener("message", async (event) => {
       camera,
       maskOrder = null,
       view = null,
+      externalInstanceGraph = null,
     } = event.data;
     messageSource = hostSource
       ? createWorkerHostRangeSource(hostSource)
@@ -128,7 +132,7 @@ self.addEventListener("message", async (event) => {
       blocks.length,
     );
     const modelInstanceGraph = Object.freeze({
-      ...baseInstanceGraph,
+      ...(externalInstanceGraph ?? baseInstanceGraph),
       blockBoundsByIndex,
     });
     const fill = buildHatchFillMesh(source, blocks, modelInstanceGraph, {
@@ -146,6 +150,7 @@ self.addEventListener("message", async (event) => {
       instanceGraphKey: "model",
       instanceGraph: modelInstanceGraph,
       maskOrder,
+      external: Boolean(externalInstanceGraph),
     };
     const instanceGraph = patternInstanceGraph(patternState, view);
     const pattern = camera

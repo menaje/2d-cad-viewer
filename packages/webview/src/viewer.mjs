@@ -6,7 +6,7 @@ import {
 } from "./layout-scene.mjs?v=1.18.2";
 import { readJsHeapSnapshot } from "./memory-telemetry.mjs";
 import { calculateRasterImageBounds } from "./raster-image-overlay.mjs";
-import { WebGlLineRenderer } from "./renderer.mjs?v=1.18.2";
+import { WebGlLineRenderer } from "./renderer.mjs?v=1.18.3";
 import { SceneCacheReader } from "./scene-cache.mjs?v=1.18.8";
 
 function now() {
@@ -122,6 +122,8 @@ function buildViewInstanceGraph(
     layers: metadata.layers,
     insertClips: metadata.insertClips,
     layerLinetypeCodes: layerLineTypes,
+    paperSpaceLinetypeScale:
+      metadata.drawing.paperSpaceLinetypeScale,
     ...options,
   };
   return view.kind === "layout"

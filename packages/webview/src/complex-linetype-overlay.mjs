@@ -7,6 +7,11 @@ import { layerLinetypeCodes } from "./cad-linetype.mjs";
 import { transformPoint } from "./math.mjs";
 import { GpuLineBatchKind } from "./scene-cache.mjs";
 import { systemFallbackFont } from "./text-overlay.mjs";
+import { maskBucketFor } from "./mask-order.mjs";
+import {
+  drawOrderSurfaceFor,
+  resizeDrawOrderSurface,
+} from "./draw-order-overlay.mjs";
 
 const VERTEX_STRIDE = 36;
 const NO_LAYER_OVERRIDE = 0xffffffff;
@@ -164,6 +169,9 @@ export function collectComplexLinetypeSegments({
           layerIndex,
           color: view.getUint32(offset + 16, true),
           linetypeCode: code,
+          handle:
+            BigInt(view.getUint32(offset + 20, true)) |
+            (BigInt(view.getUint32(offset + 24, true)) << 32n),
         }),
       );
       sourceSegments += 1;
@@ -429,6 +437,11 @@ export class ComplexLinetypeOverlay {
       maximumGlyphSegments = DEFAULT_MAXIMUM_GLYPH_SEGMENTS,
       minimumPixelHeight = DEFAULT_MINIMUM_PIXEL_HEIGHT,
       palette = DEFAULT_ACI_PALETTE,
+      blocks = Object.freeze([]),
+      maskOrder = null,
+      orderCompositionEnabled = Boolean(maskOrder?.generalOrderEnabled),
+      orderDepthBias = 0,
+      maskBucketScale = 1,
     },
   ) {
     const context = canvas.getContext("2d", { alpha: true });
@@ -451,6 +464,29 @@ export class ComplexLinetypeOverlay {
     }
     this.canvas = canvas;
     this.context = context;
+    this.orderSurface = orderCompositionEnabled
+      ? drawOrderSurfaceFor(canvas)
+      : null;
+    this.orderCanvas = this.orderSurface?.canvas ?? null;
+    this.orderDepthBias = Number.isFinite(orderDepthBias)
+      ? Math.max(-0.5, Math.min(0.5, orderDepthBias))
+      : 0;
+    this.maskBucketScale =
+      Number.isFinite(maskBucketScale) &&
+      maskBucketScale > 0 &&
+      maskBucketScale <= 1
+        ? maskBucketScale
+        : 1;
+    this.maskOrder = maskOrder?.enabled ? maskOrder : null;
+    this.blocks = blocks;
+    this.modelOwnerHandle =
+      blocks.filter(
+        (block) => block.name.toUpperCase() === "*MODEL_SPACE",
+      ).length === 1
+        ? blocks.find(
+            (block) => block.name.toUpperCase() === "*MODEL_SPACE",
+          ).handle
+        : null;
     this.linetypes = linetypes;
     this.textStyles = textStyles;
     this.layers = layers;
@@ -508,6 +544,7 @@ export class ComplexLinetypeOverlay {
     }
     const width = this.canvas.width;
     const height = this.canvas.height;
+    resizeDrawOrderSurface(this.orderSurface, width, height, { clear });
     if (clear) {
       context.clearRect(0, 0, width, height);
     }
@@ -533,6 +570,10 @@ export class ComplexLinetypeOverlay {
         group.batch,
         this.instanceGraph,
       );
+      const ownerHandle =
+        group.batch.kind === GpuLineBatchKind.BlockDefinition
+          ? this.blocks[group.batch.blockIndex]?.handle
+          : this.modelOwnerHandle;
       for (
         let instanceIndex = 0;
         instanceIndex < instances.count;
@@ -567,6 +608,16 @@ export class ComplexLinetypeOverlay {
           ) {
             continue;
           }
+          const viewportLinetypeScale =
+            this.instanceGraph.linetypeScalesByVisibilityRow?.[
+              visibilityRow
+            ] ?? 1;
+          const effectiveLinetypeScale =
+            this.globalLinetypeScale *
+            (Number.isFinite(viewportLinetypeScale) &&
+            viewportLinetypeScale > 0
+              ? viewportLinetypeScale
+              : 1);
           const code =
             segment.linetypeCode === 0
               ? this.layerCodes[layerIndex] ?? 2
@@ -612,7 +663,7 @@ export class ComplexLinetypeOverlay {
           const lineAngle = Math.atan2(deltaY, deltaX);
           const pixelsPerPatternUnit = screenLength / patternSpan;
           const period =
-            definition.patternLength * this.globalLinetypeScale;
+            definition.patternLength * effectiveLinetypeScale;
           const byBlockColor = decodeCadColor(
             instances.colors?.[instanceIndex] ?? ((2 << 30) | 7),
             {
@@ -638,7 +689,7 @@ export class ComplexLinetypeOverlay {
           context.fillStyle = rgba(color, opacity);
           for (const { dash, phase } of complexDashPhases(
             definition,
-            this.globalLinetypeScale,
+            effectiveLinetypeScale,
           )) {
             const firstRepeat = Math.ceil(
               (segment.patternStart - phase) / period - 1e-9,
@@ -658,7 +709,7 @@ export class ComplexLinetypeOverlay {
               const fraction =
                 (patternPosition - segment.patternStart) / patternSpan;
               const offsetScale =
-                this.globalLinetypeScale * pixelsPerPatternUnit;
+                effectiveLinetypeScale * pixelsPerPatternUnit;
               const x =
                 screenStart[0] +
                 deltaX * fraction +
@@ -709,6 +760,14 @@ export class ComplexLinetypeOverlay {
                 break outer;
               }
               const angle = symbolAngle(dash, lineAngle);
+              const absoluteBucket =
+                (instances.maskBases?.[instanceIndex] ?? 0) +
+                maskBucketFor(
+                  this.maskOrder,
+                  ownerHandle,
+                  segment.handle,
+                ) *
+                  this.maskBucketScale;
               if ((dash.flags & 4) !== 0) {
                 const glyph = this.glyphCache.getGlyph(
                   style,
@@ -734,6 +793,18 @@ export class ComplexLinetypeOverlay {
                   pixelScale,
                   1,
                 );
+                if (this.orderSurface) {
+                  this.orderSurface.setBucket(absoluteBucket);
+                  drawVectorGlyph(
+                    this.orderSurface.proxy,
+                    glyph,
+                    x,
+                    y,
+                    angle,
+                    pixelScale,
+                    1,
+                  );
+                }
                 metrics.vectorGlyphs += 1;
               } else if ((dash.flags & 2) !== 0 && dash.text) {
                 const drawn = drawTextSymbol(
@@ -750,6 +821,20 @@ export class ComplexLinetypeOverlay {
                 metrics.segments += drawn.segments;
                 metrics.vectorGlyphs += drawn.segments > 0 ? 1 : 0;
                 metrics.fallbackGlyphs += drawn.fallbackGlyphs;
+                if (this.orderSurface) {
+                  this.orderSurface.setBucket(absoluteBucket);
+                  drawTextSymbol(
+                    this.orderSurface.proxy,
+                    this.glyphCache,
+                    style,
+                    dash.text,
+                    x,
+                    y,
+                    angle,
+                    pixelScale,
+                    this.maximumGlyphSegments,
+                  );
+                }
                 if (drawn.truncated) {
                   metrics.truncated = true;
                   break outer;

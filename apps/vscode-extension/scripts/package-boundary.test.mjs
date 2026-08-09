@@ -26,6 +26,7 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
     repositoryNotices,
     shxLicense,
     earcutLicense,
+    marketplaceIcon,
   ] = await Promise.all([
     readFile(path.join(extensionRoot, "package.json"), "utf8"),
     readFile(path.join(repositoryRoot, "package.json"), "utf8"),
@@ -64,11 +65,23 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
       ),
       "utf8",
     ),
+    readFile(path.join(extensionRoot, "images", "icon.png")),
   ]);
   const manifest = JSON.parse(manifestText);
   const repositoryManifest = JSON.parse(repositoryManifestText);
 
   assert.equal(manifest.license, "MPL-2.0");
+  assert.equal(manifest.icon, "images/icon.png");
+  assert.deepEqual(manifest.extensionKind, ["workspace"]);
+  assert.deepEqual(manifest.extensionDependencies, [
+    "menaje.dwg-viewer-libredwg",
+  ]);
+  assert.deepEqual(
+    [...marketplaceIcon.subarray(0, 8)],
+    [137, 80, 78, 71, 13, 10, 26, 10],
+  );
+  assert.equal(marketplaceIcon.readUInt32BE(16), 256);
+  assert.equal(marketplaceIcon.readUInt32BE(20), 256);
   assert.equal(
     manifest.repository?.url,
     "https://github.com/menaje/dwg-viewer.git",
@@ -80,7 +93,7 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   );
   assert.match(
     readme,
-    /GPL-3\.0-or-later LibreDWG adapter is never included in the VSIX/u,
+    /GPL-3\.0-or-later LibreDWG adapter is never included in the MPL VSIX/u,
   );
   assert.deepEqual(packagedLicense, repositoryLicense);
   assert.equal(

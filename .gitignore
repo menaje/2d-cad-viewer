@@ -19,6 +19,13 @@ node_modules/
 /apps/vscode-extension/LICENSE
 /apps/vscode-extension/NOTICE
 /apps/vscode-extension/THIRD_PARTY_NOTICES.md
+/apps/vscode-libredwg-adapter/native/
+/apps/vscode-libredwg-adapter/source/
+/apps/vscode-libredwg-adapter/LICENSES/
+/apps/vscode-libredwg-adapter/NOTICE
+/apps/vscode-libredwg-adapter/THIRD_PARTY_NOTICES.md
+/apps/vscode-libredwg-adapter/manifest.json
+/apps/vscode-libredwg-adapter/SHA256SUMS
 
 # Editors
 /.vscode/*

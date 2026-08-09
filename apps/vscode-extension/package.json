@@ -29,6 +29,13 @@
     "measurement"
   ],
   "main": "./dist/src/extension.js",
+  "icon": "images/icon.png",
+  "extensionKind": [
+    "workspace"
+  ],
+  "extensionDependencies": [
+    "menaje.dwg-viewer-libredwg"
+  ],
   "activationEvents": [
     "onCustomEditor:dwgViewer.dwg",
     "onCommand:dwgViewer.addShxFontFolders",
@@ -119,13 +126,41 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Absolute path to the separately installed GPL LibreDWG adapter executable."
+          "description": "Optional absolute path overriding the GPL LibreDWG adapter installed automatically with DWG Viewer."
         },
         "dwgViewer.progressivePreview": {
           "type": "boolean",
           "default": false,
           "scope": "window",
           "description": "Show an overview while full conversion continues. This improves first-frame latency but substantially increases concurrent memory."
+        },
+        "dwgViewer.topToolbarLabels": {
+          "type": "string",
+          "enum": [
+            "hover",
+            "icons"
+          ],
+          "enumDescriptions": [
+            "Expand all top toolbar icons and names together when the ellipsis is hovered, focused, or opened.",
+            "Reveal icon-only actions when the ellipsis is hovered, focused, or opened."
+          ],
+          "default": "hover",
+          "scope": "window",
+          "description": "Choose whether the top-right drawing toolbar shows names when it expands."
+        },
+        "dwgViewer.leftToolbarLabels": {
+          "type": "string",
+          "enum": [
+            "hover",
+            "icons"
+          ],
+          "enumDescriptions": [
+            "Expand the entire left review toolbar and show every tool name when the shelf is hovered or focused.",
+            "Keep the left review toolbar icon-only. Tool names remain available as tooltips."
+          ],
+          "default": "hover",
+          "scope": "window",
+          "description": "Choose whether the left drawing toolbar expands to show tool names."
         },
         "dwgViewer.shxFontDirectories": {
           "type": "array",

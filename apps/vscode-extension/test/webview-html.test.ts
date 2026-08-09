@@ -34,10 +34,30 @@ test("renders a nonce-protected VS Code webview without an import map", () => {
     /nonce="abcdefghijklmnopqrstuvwxyz" type="module"/u,
   );
   assert.match(html, /data-host="vscode"/u);
+  assert.match(
+    html,
+    /<body data-host="vscode" data-top-toolbar-labels="hover" data-left-toolbar-labels="hover">/u,
+  );
   assert.match(html, /<html lang="ko-KR" data-locale="ko-KR">/u);
   assert.match(html, /vscode-webview:\/\/test\/styles\.css/u);
   assert.match(html, /vscode-webview:\/\/test\/main\.mjs/u);
   assert.doesNotMatch(html, /importmap/u);
+});
+
+test("renders independent toolbar preferences", () => {
+  const html = renderWebviewHtml(template, {
+    cspSource: "vscode-webview:",
+    nonce: "abcdefghijklmnopqrstuvwxyz",
+    stylesUri: "vscode-webview://test/styles.css",
+    scriptUri: "vscode-webview://test/main.mjs",
+    topToolbarLabels: "icons",
+    leftToolbarLabels: "hover",
+  });
+
+  assert.match(
+    html,
+    /<body data-host="vscode" data-top-toolbar-labels="icons" data-left-toolbar-labels="hover">/u,
+  );
 });
 
 test("falls back to English for an invalid host locale", () => {
@@ -125,7 +145,15 @@ test("repository Webview CSS keeps host-only controls hidden", async () => {
   );
   assert.match(
     repositoryStyles,
-    /header\.tools-open\s*\{[\s\S]*?width:\s*min\(52rem,\s*calc\(100%\s*-\s*2rem\)\);/u,
+    /body\[data-host="vscode"\]\s+header\s*\{[\s\S]*?--viewer-tools-expanded-width:\s*52rem;[\s\S]*?width:\s*2\.95rem;/u,
+  );
+  assert.match(
+    repositoryStyles,
+    /body\[data-host="vscode"\]\[data-top-toolbar-labels="icons"\]\s+header\s*\{\s*--viewer-tools-expanded-width:\s*38rem;/u,
+  );
+  assert.match(
+    repositoryStyles,
+    /header\.tools-open\s*\{[\s\S]*?width:\s*min\(var\(--viewer-tools-expanded-width\),\s*calc\(100%\s*-\s*2rem\)\);/u,
   );
   assert.doesNotMatch(
     repositoryStyles,
@@ -137,15 +165,23 @@ test("repository Webview CSS keeps host-only controls hidden", async () => {
   );
   assert.match(
     repositoryStyles,
-    /\.review-toolbar button:hover \.review-tool-label,[\s\S]*?\.review-toolbar button:focus-visible \.review-tool-label/u,
-  );
-  assert.doesNotMatch(
-    repositoryStyles,
-    /\.review-toolbar:hover \.review-tool-label/u,
+    /\[data-left-toolbar-labels="hover"\]\s+\.review-toolbar:hover,[\s\S]*?width:\s*13\.5rem;/u,
   );
   assert.match(
     repositoryStyles,
-    /\.toolbar \.viewer-tool-button:hover \.viewer-tool-label,[\s\S]*?visibility:\s*visible;[\s\S]*?opacity:\s*1;/u,
+    /\[data-left-toolbar-labels="hover"\]\s+\.review-toolbar:hover \.review-tool-label,[\s\S]*?\.review-toolbar:focus-within \.review-tool-label[\s\S]*?visibility:\s*visible;[\s\S]*?opacity:\s*1;/u,
+  );
+  assert.match(
+    repositoryStyles,
+    /\[data-top-toolbar-labels="hover"\]\s+header:hover \.toolbar \.viewer-tool-label,[\s\S]*?header\.tools-open \.toolbar \.viewer-tool-label[\s\S]*?visibility:\s*visible;[\s\S]*?opacity:\s*1;/u,
+  );
+  assert.doesNotMatch(
+    repositoryStyles,
+    /\.review-toolbar button:hover \.review-tool-label/u,
+  );
+  assert.doesNotMatch(
+    repositoryStyles,
+    /\.viewer-tool-button:hover \.viewer-tool-label/u,
   );
   assert.match(
     repositoryStyles,
@@ -228,6 +264,8 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   );
   assert.doesNotMatch(template, /캐시 다시 만들기/u);
   assert.match(mainModule, /setViewerToolsOpen/u);
+  assert.match(mainModule, /applyMenuDisplaySettings/u);
+  assert.match(mainModule, /dwg-menu-display-settings\/1/u);
   assert.match(
     mainModule,
     /if\s*\(!open\)\s*\{\s*closeViewerPanels\(\);/u,
@@ -267,7 +305,14 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
       configuration?: {
         properties?: Record<
           string,
-          { default?: unknown; type?: unknown }
+          {
+            default?: unknown;
+            description?: unknown;
+            enum?: unknown;
+            enumDescriptions?: unknown;
+            scope?: unknown;
+            type?: unknown;
+          }
         >;
       };
     };
@@ -292,6 +337,40 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
       when: "view == dwgViewer.textSearch",
       group: "navigation@3",
       toggled: "dwgViewer.textSearchRegularExpressionEnabled",
+    },
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.[
+      "dwgViewer.topToolbarLabels"
+    ],
+    {
+      type: "string",
+      enum: ["hover", "icons"],
+      enumDescriptions: [
+        "Expand all top toolbar icons and names together when the ellipsis is hovered, focused, or opened.",
+        "Reveal icon-only actions when the ellipsis is hovered, focused, or opened.",
+      ],
+      default: "hover",
+      scope: "window",
+      description:
+        "Choose whether the top-right drawing toolbar shows names when it expands.",
+    },
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.[
+      "dwgViewer.leftToolbarLabels"
+    ],
+    {
+      type: "string",
+      enum: ["hover", "icons"],
+      enumDescriptions: [
+        "Expand the entire left review toolbar and show every tool name when the shelf is hovered or focused.",
+        "Keep the left review toolbar icon-only. Tool names remain available as tooltips.",
+      ],
+      default: "hover",
+      scope: "window",
+      description:
+        "Choose whether the left drawing toolbar expands to show tool names.",
     },
   );
   assert.deepEqual(

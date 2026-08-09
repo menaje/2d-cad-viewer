@@ -1413,6 +1413,7 @@ body[data-host="vscode"] main {
 }
 
 body[data-host="vscode"] header {
+  --viewer-tools-expanded-width: 52rem;
   position: absolute;
   z-index: 30;
   top: max(0.75rem, env(safe-area-inset-top));
@@ -1434,9 +1435,13 @@ body[data-host="vscode"] header {
   box-shadow: 0 0.5rem 1.8rem rgb(0 0 0 / 22%);
   backdrop-filter: blur(14px);
   transition:
-    width 150ms ease,
-    background-color 150ms ease,
-    box-shadow 150ms ease;
+    width 150ms ease 220ms,
+    background-color 150ms ease 220ms,
+    box-shadow 150ms ease 220ms;
+}
+
+body[data-host="vscode"][data-top-toolbar-labels="icons"] header {
+  --viewer-tools-expanded-width: 38rem;
 }
 
 body[data-host="vscode"] header > div:first-child {
@@ -1446,11 +1451,12 @@ body[data-host="vscode"] header > div:first-child {
 body[data-host="vscode"] header:hover,
 body[data-host="vscode"] header:focus-within,
 body[data-host="vscode"] header.tools-open {
-  width: min(52rem, calc(100% - 2rem));
+  width: min(var(--viewer-tools-expanded-width), calc(100% - 2rem));
   height: auto;
   overflow: visible;
   background: rgb(12 17 24 / 94%);
   box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 38%);
+  transition-delay: 0s;
 }
 
 body[data-host="vscode"] .viewer-tools-trigger {
@@ -1490,9 +1496,9 @@ body[data-host="vscode"] .toolbar {
   pointer-events: none;
   transform: translateX(0.35rem);
   transition:
-    opacity 120ms ease,
-    transform 150ms ease,
-    visibility 0s linear 150ms;
+    opacity 120ms ease 220ms,
+    transform 150ms ease 220ms,
+    visibility 0s linear 370ms;
 }
 
 body[data-host="vscode"] header:hover .toolbar,
@@ -1523,8 +1529,8 @@ body[data-host="vscode"] .toolbar .viewer-tool-button {
   overflow: hidden;
   padding: 0.1rem;
   transition:
-    max-width 150ms ease,
-    padding-inline-end 150ms ease,
+    max-width 150ms ease 220ms,
+    padding-inline-end 150ms ease 220ms,
     background-color 120ms ease;
 }
 
@@ -1533,21 +1539,22 @@ body[data-host="vscode"] .toolbar .viewer-tool-button .viewer-tool-label {
   opacity: 0;
   transform: translateX(-0.2rem);
   transition:
-    opacity 90ms ease,
-    transform 120ms ease,
-    visibility 0s linear 120ms;
+    opacity 90ms ease 220ms,
+    transform 120ms ease 220ms,
+    visibility 0s linear 340ms;
 }
 
-body[data-host="vscode"] .toolbar .viewer-tool-button:hover,
-body[data-host="vscode"] .toolbar .viewer-tool-button:focus-visible,
-body[data-host="vscode"] .toolbar label.viewer-tool-button:focus-within {
+body[data-host="vscode"][data-top-toolbar-labels="hover"] header:hover .toolbar .viewer-tool-button,
+body[data-host="vscode"][data-top-toolbar-labels="hover"] header:focus-within .toolbar .viewer-tool-button,
+body[data-host="vscode"][data-top-toolbar-labels="hover"] header.tools-open .toolbar .viewer-tool-button {
   max-width: 14rem;
   padding-inline-end: 0.65rem;
+  transition-delay: 0s;
 }
 
-body[data-host="vscode"] .toolbar .viewer-tool-button:hover .viewer-tool-label,
-body[data-host="vscode"] .toolbar .viewer-tool-button:focus-visible .viewer-tool-label,
-body[data-host="vscode"] .toolbar label.viewer-tool-button:focus-within .viewer-tool-label {
+body[data-host="vscode"][data-top-toolbar-labels="hover"] header:hover .toolbar .viewer-tool-label,
+body[data-host="vscode"][data-top-toolbar-labels="hover"] header:focus-within .toolbar .viewer-tool-label,
+body[data-host="vscode"][data-top-toolbar-labels="hover"] header.tools-open .toolbar .viewer-tool-label {
   visibility: visible;
   opacity: 1;
   transform: translateX(0);
@@ -1589,8 +1596,12 @@ body[data-host="vscode"] .review-toolbar {
   width: 2.75rem;
   opacity: 0.72;
   transition:
-    width 150ms ease,
-    opacity 120ms ease;
+    width 150ms ease 220ms,
+    opacity 120ms ease 220ms;
+}
+
+body[data-host="vscode"] .review-toolbar button {
+  width: 12.9rem;
 }
 
 body[data-host="vscode"] .review-toolbar .review-tool-label {
@@ -1598,19 +1609,24 @@ body[data-host="vscode"] .review-toolbar .review-tool-label {
   opacity: 0;
   transform: translateX(-0.25rem);
   transition:
-    opacity 90ms ease,
-    transform 120ms ease,
-    visibility 0s linear 120ms;
+    opacity 90ms ease 220ms,
+    transform 120ms ease 220ms,
+    visibility 0s linear 340ms;
 }
 
 body[data-host="vscode"] .review-toolbar:hover,
-body[data-host="vscode"] .review-toolbar:has(button:focus-visible) {
-  width: 9rem;
+body[data-host="vscode"] .review-toolbar:focus-within {
   opacity: 1;
+  transition-delay: 0s;
 }
 
-body[data-host="vscode"] .review-toolbar button:hover .review-tool-label,
-body[data-host="vscode"] .review-toolbar button:focus-visible .review-tool-label {
+body[data-host="vscode"][data-left-toolbar-labels="hover"] .review-toolbar:hover,
+body[data-host="vscode"][data-left-toolbar-labels="hover"] .review-toolbar:focus-within {
+  width: 13.5rem;
+}
+
+body[data-host="vscode"][data-left-toolbar-labels="hover"] .review-toolbar:hover .review-tool-label,
+body[data-host="vscode"][data-left-toolbar-labels="hover"] .review-toolbar:focus-within .review-tool-label {
   visibility: visible;
   opacity: 1;
   transform: translateX(0);

@@ -131,8 +131,54 @@ test("builds paper and clipped model roots with frozen layer rows", () => {
     [1_050, 1_975, 0],
   );
   assert.equal(graph.modelInstances.coordinateSpaceIds[0], 1);
+  assert.deepEqual([...graph.paperToModelScalesByVisibilityRow], [1, 5]);
+  assert.deepEqual([...graph.linetypeScalesByVisibilityRow], [1, 1]);
   assert.equal(graph.instancesByBlock.get(1).count, 1);
   assert.equal(graph.instancesByBlock.get(1).coordinateSpaceIds[0], 0);
+});
+
+test("normalizes paper-space linetypes by each viewport scale", () => {
+  const plan = buildLayoutRootPlan(blocks, [{}, {}], layout, {
+    paperSpaceLinetypeScale: true,
+  });
+  assert.deepEqual(plan.paperToModelScalesByVisibilityRow, [1, 5]);
+  assert.deepEqual(plan.linetypeScalesByVisibilityRow, [1, 5]);
+
+  const graph = buildLayoutInstanceGraph(
+    blocks,
+    [],
+    [{ name: "0" }, { name: "VP-FROZEN" }],
+    layout,
+    { paperSpaceLinetypeScale: true },
+  );
+  assert.equal(graph.modelInstances.visibilityRows[0], 1);
+  assert.deepEqual([...graph.paperToModelScalesByVisibilityRow], [1, 5]);
+  assert.deepEqual([...graph.linetypeScalesByVisibilityRow], [1, 5]);
+});
+
+test("excludes off and invisible model viewports from an active layout", () => {
+  const activeLayout = {
+    ...layout,
+    viewports: [
+      layout.viewports[0],
+      { ...viewport, handle: 401n, on: 0 },
+      { ...viewport, handle: 402n, id: 3, on: 1, flags: 1 },
+      {
+        ...viewport,
+        handle: 403n,
+        id: 4,
+        on: 1,
+        center: [610, 148.5, 0],
+      },
+    ],
+  };
+
+  const plan = buildLayoutRootPlan(blocks, [{}, {}], activeLayout);
+  assert.deepEqual(
+    plan.modelViewports.map(({ handle }) => handle),
+    [403n],
+  );
+  assert.equal(plan.rootContexts.length, 2);
 });
 
 test("treats an inactive layout's active id-zero viewport as paper space", () => {

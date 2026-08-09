@@ -31,7 +31,10 @@ import {
   layerGroupVisibility,
   setLayerGroupVisibility,
 } from "./layer-groups.mjs?v=1.18.11";
-import { buildMaskOrderPlan } from "./mask-order.mjs";
+import {
+  buildMaskOrderPlan,
+  DRAW_ORDER_SUBDIVISIONS,
+} from "./mask-order.mjs";
 import { WebviewMemoryTelemetry } from "./memory-telemetry.mjs";
 import { BlobRangeSource, TrackedRangeSource } from "./range-source.mjs";
 import {
@@ -39,7 +42,7 @@ import {
   CanvasRasterImageOverlay,
   CompositeRasterImageOverlay,
   RasterImageAssetStore,
-} from "./raster-image-overlay.mjs?v=1.18.13";
+} from "./raster-image-overlay.mjs?v=1.18.14";
 import {
   makePlotStyleLineWeights,
   makePlotStylePalette,
@@ -63,7 +66,7 @@ import {
   MAX_REVIEW_FILLED_VERTICES,
 } from "./filled-object-review.mjs?v=1.18.1";
 import { createMeasurementFormat } from "./measurement-format.mjs";
-import { ComplexLinetypeOverlay } from "./complex-linetype-overlay.mjs?v=1.18.13";
+import { ComplexLinetypeOverlay } from "./complex-linetype-overlay.mjs?v=1.18.14";
 import { curveRefinementCameraKey } from "./curve-contract.mjs";
 import { ReviewTools } from "./review-tools.mjs?v=1.18.16";
 import {
@@ -77,7 +80,7 @@ import {
   CompositeTextOverlay,
   registerLocalOutlineFont,
   unregisterLocalOutlineFont,
-} from "./text-overlay.mjs?v=1.18.14";
+} from "./text-overlay.mjs?v=1.18.16";
 import {
   loadExternalFirstFrame,
 } from "./viewer.mjs?v=1.18.8";
@@ -99,6 +102,27 @@ const i18n = createI18n({
 });
 const t = i18n.t;
 i18n.localize(document);
+
+function normalizeMenuLabelMode(value) {
+  return value === "icons" ? "icons" : "hover";
+}
+
+function applyMenuDisplaySettings({
+  topToolbarLabels,
+  leftToolbarLabels,
+} = {}) {
+  document.body.dataset.topToolbarLabels = normalizeMenuLabelMode(
+    topToolbarLabels,
+  );
+  document.body.dataset.leftToolbarLabels = normalizeMenuLabelMode(
+    leftToolbarLabels,
+  );
+}
+
+applyMenuDisplaySettings({
+  topToolbarLabels: document.body.dataset.topToolbarLabels,
+  leftToolbarLabels: document.body.dataset.leftToolbarLabels,
+});
 
 function setViewerToolMessage(element, key, values) {
   const message = t(key, values);
@@ -212,6 +236,13 @@ let curveRequestInFlight = false;
 let pendingCurveRequest;
 let curveRefinementTimer;
 let curveRequestRevision = 0;
+const externalPrimitiveWorkers = new Set();
+const externalHatchContexts = new Map();
+const externalCurveContexts = new Map();
+let externalCurveRequestInFlight = false;
+let pendingExternalCurveRequest;
+let externalCurveRefinementTimer;
+let externalCurveRequestRevision = 0;
 let activeMaskOrder;
 let activeRenderInstanceGraph;
 let activeMaskStatus;
@@ -271,6 +302,7 @@ const externalHostSources = new Map();
 const externalRangeSources = new Map();
 const externalCacheData = new Map();
 const externalAttachmentsByCache = new Map();
+const externalMaskCounts = new Map();
 const xrefDiagnostics = new Map();
 const pendingImageRequests = new Map();
 let nextImageRequestId = 1;
@@ -1849,7 +1881,30 @@ function renderXrefDiagnostics() {
   xrefStatusList.append(fragment);
 }
 
+function resetExternalDeferredWorkers() {
+  externalCurveRequestRevision += 1;
+  pendingExternalCurveRequest = undefined;
+  if (externalCurveRefinementTimer !== undefined) {
+    clearTimeout(externalCurveRefinementTimer);
+    externalCurveRefinementTimer = undefined;
+  }
+  for (const worker of externalPrimitiveWorkers) {
+    worker.cancel();
+  }
+  externalPrimitiveWorkers.clear();
+  for (const context of externalHatchContexts.values()) {
+    context.worker.cancel();
+  }
+  externalHatchContexts.clear();
+  for (const context of externalCurveContexts.values()) {
+    context.worker?.cancel();
+  }
+  externalCurveContexts.clear();
+  externalCurveRequestInFlight = false;
+}
+
 function resetExternalReferences() {
+  resetExternalDeferredWorkers();
   for (const source of externalHostSources.values()) {
     source.dispose();
   }
@@ -1857,6 +1912,7 @@ function resetExternalReferences() {
   externalRangeSources.clear();
   externalCacheData.clear();
   externalAttachmentsByCache.clear();
+  externalMaskCounts.clear();
   discoveredXrefCaches.clear();
   readyExternalMessages.clear();
   xrefDiagnostics.clear();
@@ -2285,6 +2341,8 @@ function renderMetrics(scene, rangeSource, viewport = null) {
       <div><dt>솔리드 원본</dt><dd>${primitives.sourceSolids.toLocaleString()}개</dd></div>
       <div><dt>솔리드 채움</dt><dd>${primitives.renderedFilledSolids.toLocaleString()}개</dd></div>
       <div><dt>솔리드 외곽선</dt><dd>${primitives.renderedOutlineSolids.toLocaleString()}개</dd></div>
+      <div><dt>폭 폴리라인 원본/표시</dt><dd>${primitives.sourceWidePolylines.toLocaleString()} / ${(primitives.renderedFilledWidePolylines + primitives.renderedOutlineWidePolylines).toLocaleString()}개</dd></div>
+      <div><dt>폭 폴리라인 GPU</dt><dd>${formatBytes(primitives.widePolylineFillGpuBytes + primitives.widePolylineOutlineGpuBytes)}</dd></div>
       <div><dt>3D 면 원본/표시</dt><dd>${primitives.sourceFaces.toLocaleString()} / ${primitives.renderedFaces.toLocaleString()}개</dd></div>
       <div><dt>3D 면 가장자리</dt><dd>${primitives.renderedFaceEdges.toLocaleString()}개</dd></div>
       <div><dt>가림 객체 원본</dt><dd>${primitives.sourceWipeouts.toLocaleString()}개</dd></div>
@@ -2310,9 +2368,12 @@ function renderMetrics(scene, rangeSource, viewport = null) {
     : "";
   const maskRows = activeMaskStatus
     ? `
-      <div><dt>가림 순서</dt><dd>${activeMaskStatus.enabled ? (activeWipeoutMasksVisible ? "표시" : "숨김") : "비활성"}</dd></div>
+      <div><dt>객체 표시 순서</dt><dd>${activeMaskStatus.enabled ? (activeMaskStatus.generalOrderEnabled ? "전체 객체" : activeMaskStatus.masks > 0 ? "가림 객체만" : "정렬표 객체만") : "비활성"}</dd></div>
+      <div><dt>가림 객체</dt><dd>${activeMaskStatus.masks.toLocaleString()}개 · ${activeWipeoutMasksVisible ? "표시" : "숨김"}</dd></div>
       <div><dt>정렬표 읽기</dt><dd>${activeMaskStatus.tables.toLocaleString()} / ${activeMaskStatus.entries.toLocaleString()}개</dd></div>
-      <div><dt>확장 가림</dt><dd>${activeMaskStatus.maximumExpandedMasks.toLocaleString()}개</dd></div>
+      <div><dt>확장 순서 단계</dt><dd>${activeMaskStatus.maximumExpandedMasks.toLocaleString()}개</dd></div>
+      ${activeMaskStatus.generalOrderEnabled ? `<div><dt>Canvas 순서 합성</dt><dd>${render?.orderedOverlayCompositionEnabled ? `${render.orderedOverlayDrawCalls.toLocaleString()}회 · ${formatBytes(render.orderedOverlayGpuBytes)}` : "DOM 대체"}</dd></div>` : ""}
+      ${activeMaskStatus.generalOrderReason ? `<div><dt>전체 순서 제한</dt><dd>${escapeHtml(activeMaskStatus.generalOrderReason)}</dd></div>` : ""}
       <div><dt>순서 계산</dt><dd>${activeMaskStatus.buildMs.toFixed(1)} ms</dd></div>
     `
     : "";
@@ -2365,7 +2426,10 @@ function setControlsEnabled(enabled) {
   }
   layersToggle.disabled = !enabled;
   exportToggle.disabled = !enabled || Boolean(activeExportController);
-  wipeoutToggle.disabled = !enabled || !activeMaskStatus?.enabled;
+  wipeoutToggle.disabled =
+    !enabled ||
+    !activeMaskStatus?.enabled ||
+    activeMaskStatus.masks === 0;
   if (activeReviewTools) {
     activeReviewTools.setEnabled(enabled);
   } else {
@@ -2390,6 +2454,26 @@ function updateWipeoutToggle() {
       ? "toolbar.wipeout.hide"
       : "toolbar.wipeout.show",
   );
+}
+
+function refreshMaskSourceCount() {
+  if (!activeMaskStatus) {
+    return;
+  }
+  const masks =
+    (activeMaskOrder?.masks.length ?? 0) +
+    [...externalMaskCounts.values()].reduce(
+      (total, count) => total + count,
+      0,
+    );
+  if (activeMaskStatus.masks !== masks) {
+    activeMaskStatus = Object.freeze({
+      ...activeMaskStatus,
+      masks,
+    });
+  }
+  setControlsEnabled(viewControlsEnabled);
+  updateWipeoutToggle();
 }
 
 function updateLayerSummary() {
@@ -3087,6 +3171,7 @@ async function initializeImageOverlay(
       cacheId,
       assetStore: activeImageAssetStore,
       requestAsset: requestRasterImage,
+      maskOrder: activeMaskOrder,
       sourceId: "root",
       sourceLabel: "현재 도면",
     });
@@ -3147,6 +3232,8 @@ async function initializeTextOverlay(
     glyphCache,
     globalLinetypeScale:
       scene.metadata.drawing.globalLinetypeScale,
+    blocks: scene.metadata.blocks,
+    maskOrder,
   });
   if (complexOverlay.source.sourceSegments > 0) {
     activeTextComposite.add(complexOverlay);
@@ -3166,6 +3253,86 @@ async function initializeTextOverlay(
   revealQueuedText();
 }
 
+function externalReferenceBlockSpans(blocks) {
+  const spans = new Uint32Array(blocks.length);
+  for (const block of blocks) {
+    if (
+      Number.isSafeInteger(block.index) &&
+      block.index >= 0 &&
+      block.index < spans.length &&
+      (block.flags & (1 << 2)) !== 0
+    ) {
+      spans[block.index] = 1;
+    }
+  }
+  return spans;
+}
+
+function makeSceneMaskOrder(
+  scene,
+  drawOrder,
+  wipeouts,
+  orderedEntities,
+) {
+  const reservedBlockSpans = externalReferenceBlockSpans(
+    scene.metadata.blocks,
+  );
+  let maskOrder = buildMaskOrderPlan(
+    drawOrder,
+    wipeouts,
+    scene.metadata.blocks,
+    scene.metadata.inserts,
+    {
+      orderedEntitySources: orderedEntities.limited
+        ? []
+        : [orderedEntities],
+      reservedBlockSpans,
+    },
+  );
+  if (orderedEntities.limited && maskOrder.enabled) {
+    maskOrder = Object.freeze({
+      ...maskOrder,
+      generalOrderReason: "order-identity-limit",
+    });
+  }
+  if (!maskOrder.enabled) {
+    const generalOrderReason = orderedEntities.limited
+      ? "order-identity-limit"
+      : maskOrder.reason;
+    const maskOnlyFallback = buildMaskOrderPlan(
+      drawOrder,
+      wipeouts,
+      scene.metadata.blocks,
+      scene.metadata.inserts,
+      {
+        includeOverrideTargets: false,
+        reservedBlockSpans,
+      },
+    );
+    if (maskOnlyFallback.enabled) {
+      maskOrder = Object.freeze({
+        ...maskOnlyFallback,
+        generalOrderReason,
+      });
+    }
+  }
+  return maskOrder;
+}
+
+async function readSceneMaskOrder(scene) {
+  const [drawOrder, wipeouts, orderedEntities] = await Promise.all([
+    scene.reader.readDrawOrder(),
+    scene.reader.readWipeoutEntities(),
+    scene.reader.readDisplayOrderIdentities(),
+  ]);
+  return makeSceneMaskOrder(
+    scene,
+    drawOrder,
+    wipeouts,
+    orderedEntities,
+  );
+}
+
 async function initializeMaskComposition(scene, revision) {
   const fallback = Object.freeze({
     maskOrder: null,
@@ -3173,19 +3340,10 @@ async function initializeMaskComposition(scene, revision) {
   });
   status.textContent = "가림 객체의 앞·뒤 순서를 계산하는 중";
   const started = performance.now();
-  const [drawOrder, wipeouts] = await Promise.all([
-    scene.reader.readDrawOrder(),
-    scene.reader.readWipeoutEntities(),
-  ]);
+  const maskOrder = await readSceneMaskOrder(scene);
   if (revision !== openRevision || activeScene !== scene) {
     return fallback;
   }
-  const maskOrder = buildMaskOrderPlan(
-    drawOrder,
-    wipeouts,
-    scene.metadata.blocks,
-    scene.metadata.inserts,
-  );
   const instanceGraph = maskOrder.enabled
     ? typeof scene.buildViewInstanceGraph === "function"
       ? scene.buildViewInstanceGraph(scene.activeView, { maskOrder })
@@ -3200,6 +3358,9 @@ async function initializeMaskComposition(scene, revision) {
   const buildMs = performance.now() - started;
   activeMaskStatus = Object.freeze({
     enabled,
+    generalOrderEnabled: Boolean(maskOrder.generalOrderEnabled),
+    masks: maskOrder.masks.length,
+    generalOrderReason: maskOrder.generalOrderReason ?? null,
     tables: maskOrder.diagnostics.tables,
     entries: maskOrder.diagnostics.entries,
     maximumExpandedMasks: maskOrder.maximumExpandedMasks,
@@ -3288,6 +3449,60 @@ function workerSourcePayload(workerSource) {
   return workerSource.kind === "host"
     ? { hostSource: { size: workerSource.source.size } }
     : { file: workerSource.file };
+}
+
+function remapExternalVertices(
+  vertices,
+  layerMap,
+  {
+    recordSize = 32,
+    linetypeMap = null,
+  } = {},
+) {
+  if (!vertices?.buffer || vertices.byteLength === 0) {
+    return vertices;
+  }
+  remapLineVertexLayers(vertices.buffer, layerMap, recordSize);
+  if (linetypeMap) {
+    remapLineVertexLinetypes(
+      vertices.buffer,
+      linetypeMap,
+      recordSize,
+    );
+  }
+  return vertices;
+}
+
+function remapExternalPrimitiveResult(result, layerMap, linetypeMap) {
+  remapExternalVertices(result.primitives.points.vertices, layerMap);
+  remapExternalVertices(result.primitives.solidFills.vertices, layerMap);
+  remapExternalVertices(
+    result.primitives.solidOutlines.vertices,
+    layerMap,
+    { linetypeMap },
+  );
+  remapExternalVertices(result.primitives.wipeoutMasks.vertices, layerMap);
+  return result;
+}
+
+function remapExternalHatchResult(result, layerMap, linetypeMap) {
+  remapExternalVertices(result.fill.vertices, layerMap);
+  if (result.pattern) {
+    remapExternalVertices(result.pattern.vertices, layerMap, {
+      linetypeMap,
+    });
+  }
+  return result;
+}
+
+function remapExternalCurveResult(result, layerMap, linetypeMap) {
+  for (const entry of result.refinement.entries) {
+    remapExternalVertices(entry.vertices, layerMap, {
+      recordSize: entry.vertices.recordSize ?? 36,
+      linetypeMap,
+    });
+  }
+  return result;
 }
 
 async function createHatchWorker(workerSource) {
@@ -3454,7 +3669,7 @@ async function createPrimitiveWorker(workerSource) {
     workerHandle.terminate();
   };
   return {
-    initialize(wipeoutFrame, maskOrder) {
+    initialize(wipeoutFrame, fillMode, maskOrder) {
       if (settled) {
         return Promise.reject(
           new DOMException("후처리 작업 취소됨", "AbortError"),
@@ -3494,6 +3709,7 @@ async function createPrimitiveWorker(workerSource) {
           type: "initialize",
           ...workerSourcePayload(workerSource),
           wipeoutFrame,
+          fillMode,
           maskOrder,
         });
       });
@@ -3796,7 +4012,7 @@ async function initializePrimitives(
 ) {
   activePrimitiveStatus = Object.freeze({ state: "loading" });
   status.textContent =
-    "점·솔리드·3D 면·가림 객체 원본을 별도 작업 공간에서 읽는 중";
+    "점·솔리드·폭 폴리라인·3D 면·가림 객체 원본을 별도 작업 공간에서 읽는 중";
   const worker = await createPrimitiveWorker(workerSource);
   if (revision !== openRevision || activeScene !== scene) {
     worker.cancel();
@@ -3807,6 +4023,7 @@ async function initializePrimitives(
   try {
     result = await worker.initialize(
       scene.metadata.drawing.wipeoutFrame,
+      scene.metadata.drawing.fillMode,
       maskOrder,
     );
   } finally {
@@ -3828,14 +4045,16 @@ async function initializePrimitives(
   const warnings =
     value.skippedOwners +
     value.skippedDegenerateTriangles +
+    value.skippedInvalidWidePolylines +
     Number(value.pointGpuLimitReached) +
     Number(value.solidFillGpuLimitReached) +
     Number(value.solidOutlineGpuLimitReached) +
     Number(value.faceOutlineGpuLimitReached) +
     Number(value.wipeoutOutlineGpuLimitReached) +
-    Number(value.wipeoutMaskGpuLimitReached);
+    Number(value.wipeoutMaskGpuLimitReached) +
+    Number(value.widePolylineGpuLimitReached);
   status.textContent =
-    `점 ${value.renderedPoints.toLocaleString()}개 · 솔리드 ${(value.renderedFilledSolids + value.renderedOutlineSolids).toLocaleString()}개 · 3D 면 ${value.renderedFaces.toLocaleString()}개 · 가림 ${value.renderedWipeoutMasks.toLocaleString()}개 표시 완료` +
+    `점 ${value.renderedPoints.toLocaleString()}개 · 솔리드 ${(value.renderedFilledSolids + value.renderedOutlineSolids).toLocaleString()}개 · 폭 폴리라인 ${(value.renderedFilledWidePolylines + value.renderedOutlineWidePolylines).toLocaleString()}개 · 3D 면 ${value.renderedFaces.toLocaleString()}개 · 가림 ${value.renderedWipeoutMasks.toLocaleString()}개 표시 완료` +
     (warnings > 0 ? ` · 제한/건너뜀 ${warnings.toLocaleString()}건` : "");
 }
 
@@ -3897,11 +4116,19 @@ async function initializeHatchFills(
 }
 
 function scheduleHatchPatterns(scene, camera, revision) {
-  if (activeHatchStatus?.state !== "ready") {
-    return;
-  }
   const cameraKey = patternCameraKey(camera);
-  if (cameraKey === lastPatternCameraKey) {
+  const rootPending =
+    activeHatchStatus?.state === "ready" &&
+    Boolean(activeHatchWorker) &&
+    cameraKey !== lastPatternCameraKey;
+  const externalPending = [...externalHatchContexts.values()].some(
+    (context) =>
+      context.revision === revision &&
+      context.rootScene === scene &&
+      context.ready &&
+      context.lastCameraKey !== cameraKey,
+  );
+  if (!rootPending && !externalPending) {
     return;
   }
   const requestRevision = ++patternRequestRevision;
@@ -3912,20 +4139,41 @@ function scheduleHatchPatterns(scene, camera, revision) {
     hatchPatternTimer = undefined;
     if (
       revision !== openRevision ||
-      activeScene !== scene ||
-      cameraKey === lastPatternCameraKey
+      activeScene !== scene
     ) {
       return;
     }
-    const worker = activeHatchWorker;
-    if (!worker) {
-      return;
+    if (rootPending && activeHatchWorker) {
+      try {
+        const result = await activeHatchWorker.request("render-pattern", {
+          camera: workerCamera(camera),
+          view: hatchWorkerView(scene),
+        });
+        if (
+          requestRevision !== patternRequestRevision ||
+          revision !== openRevision ||
+          activeScene !== scene
+        ) {
+          return;
+        }
+        scene.renderer.setHatchPatterns(result.pattern);
+        lastPatternCameraKey = cameraKey;
+        activeHatchStatus = Object.freeze({
+          ...activeHatchStatus,
+          patternMetrics: result.pattern.metrics,
+        });
+      } catch (error) {
+        if (
+          error?.name !== "AbortError" &&
+          requestRevision === patternRequestRevision &&
+          revision === openRevision
+        ) {
+          status.textContent = `패턴 해치 표시 실패: ${error.message}`;
+          console.error(error);
+        }
+      }
     }
-    try {
-      const result = await worker.request("render-pattern", {
-        camera: workerCamera(camera),
-        view: hatchWorkerView(scene),
-      });
+    for (const [sceneId, context] of externalHatchContexts) {
       if (
         requestRevision !== patternRequestRevision ||
         revision !== openRevision ||
@@ -3933,23 +4181,44 @@ function scheduleHatchPatterns(scene, camera, revision) {
       ) {
         return;
       }
-      scene.renderer.setHatchPatterns(result.pattern);
-      lastPatternCameraKey = cameraKey;
-      activeHatchStatus = Object.freeze({
-        ...activeHatchStatus,
-        patternMetrics: result.pattern.metrics,
-      });
-      activeInteraction?.refresh();
-    } catch (error) {
       if (
-        error?.name !== "AbortError" &&
-        requestRevision === patternRequestRevision &&
-        revision === openRevision
+        context.revision !== revision ||
+        context.rootScene !== scene ||
+        !context.ready ||
+        context.lastCameraKey === cameraKey
       ) {
-        status.textContent = `패턴 해치 표시 실패: ${error.message}`;
-        console.error(error);
+        continue;
+      }
+      try {
+        const result = await context.worker.request("render-pattern", {
+          camera: workerCamera(camera),
+          view: Object.freeze({ kind: "model" }),
+        });
+        if (
+          requestRevision !== patternRequestRevision ||
+          externalHatchContexts.get(sceneId) !== context
+        ) {
+          return;
+        }
+        remapExternalVertices(result.pattern.vertices, context.layerMap, {
+          linetypeMap: context.linetypeMap,
+        });
+        scene.renderer.setExternalHatchPatterns(
+          sceneId,
+          result.pattern,
+        );
+        context.lastCameraKey = cameraKey;
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          console.error(`참조도면 ${sceneId} 패턴 해치 표시 실패:`, error);
+        }
+        if (externalHatchContexts.get(sceneId) === context) {
+          context.worker.cancel();
+          externalHatchContexts.delete(sceneId);
+        }
       }
     }
+    activeInteraction?.refresh();
   }, HATCH_PATTERN_DEBOUNCE_MS);
 }
 
@@ -4123,6 +4392,164 @@ function scheduleCurveRefinement(scene, viewport, revision) {
   }, CURVE_REFINEMENT_DEBOUNCE_MS);
 }
 
+async function drainExternalCurveRefinementRequest() {
+  if (externalCurveRequestInFlight || !pendingExternalCurveRequest) {
+    return;
+  }
+  const request = pendingExternalCurveRequest;
+  pendingExternalCurveRequest = undefined;
+  externalCurveRequestInFlight = true;
+  try {
+    for (const [sceneId, context] of externalCurveContexts) {
+      if (
+        request.token !== externalCurveRequestRevision ||
+        request.revision !== openRevision ||
+        request.scene !== activeScene
+      ) {
+        return;
+      }
+      if (
+        context.revision !== request.revision ||
+        context.rootScene !== request.scene ||
+        context.cameraKey === request.cameraKey
+      ) {
+        continue;
+      }
+      let worker = context.worker;
+      try {
+        if (!worker) {
+          worker = await createCurveWorker(context.workerSource);
+          if (
+            request.token !== externalCurveRequestRevision ||
+            externalCurveContexts.get(sceneId) !== context
+          ) {
+            worker.cancel();
+            return;
+          }
+          context.worker = worker;
+        }
+        const result = context.ready
+          ? await worker.request("render", {
+              camera: request.camera,
+              cameraKey: request.cameraKey,
+              view: Object.freeze({ kind: "model" }),
+            })
+          : await worker.request("initialize", {
+              ...workerSourcePayload(context.workerSource),
+              camera: request.camera,
+              cameraKey: request.cameraKey,
+              view: Object.freeze({ kind: "model" }),
+              maskOrder: context.maskOrder,
+              metadata: context.metadata,
+              externalInstanceGraph: context.instanceGraph,
+            });
+        context.ready = true;
+        if (
+          request.token !== externalCurveRequestRevision ||
+          request.revision !== openRevision ||
+          request.scene !== activeScene ||
+          externalCurveContexts.get(sceneId) !== context ||
+          request.cameraKey !==
+            curveRefinementCameraKey(
+              activeInteraction?.snapshot().render.camera,
+            )
+        ) {
+          return;
+        }
+        remapExternalCurveResult(
+          result,
+          context.layerMap,
+          context.linetypeMap,
+        );
+        request.scene.renderer.setExternalCurveRefinement(
+          sceneId,
+          {
+            ...result.refinement,
+            cameraKey: request.cameraKey,
+          },
+        );
+        context.cameraKey = request.cameraKey;
+      } catch (error) {
+        if (context.worker === worker) {
+          worker?.cancel();
+          context.worker = null;
+          context.ready = false;
+        }
+        if (error?.name !== "AbortError") {
+          console.error(`참조도면 ${sceneId} 곡선 정밀화 실패:`, error);
+        }
+      }
+    }
+    activeInteraction?.refresh();
+  } finally {
+    externalCurveRequestInFlight = false;
+    if (pendingExternalCurveRequest) {
+      externalCurveRefinementTimer = setTimeout(() => {
+        externalCurveRefinementTimer = undefined;
+        drainExternalCurveRefinementRequest();
+      }, 0);
+    }
+  }
+}
+
+function scheduleExternalCurveRefinement(scene, viewport, revision) {
+  if (
+    revision !== openRevision ||
+    scene !== activeScene ||
+    externalCurveContexts.size === 0
+  ) {
+    return;
+  }
+  if (viewport.render.interactive) {
+    externalCurveRequestRevision += 1;
+    pendingExternalCurveRequest = undefined;
+    if (externalCurveRefinementTimer !== undefined) {
+      clearTimeout(externalCurveRefinementTimer);
+      externalCurveRefinementTimer = undefined;
+    }
+    return;
+  }
+  if (viewport.zoom < CURVE_REFINEMENT_ZOOM_THRESHOLD) {
+    externalCurveRequestRevision += 1;
+    pendingExternalCurveRequest = undefined;
+    if (externalCurveRefinementTimer !== undefined) {
+      clearTimeout(externalCurveRefinementTimer);
+      externalCurveRefinementTimer = undefined;
+    }
+    for (const [sceneId, context] of externalCurveContexts) {
+      if (context.cameraKey !== null) {
+        scene.renderer.clearExternalCurveRefinement(sceneId);
+        context.cameraKey = null;
+      }
+    }
+    return;
+  }
+  const camera = workerCamera(viewport.render.camera);
+  const cameraKey = curveRefinementCameraKey(camera);
+  if (
+    [...externalCurveContexts.values()].every(
+      (context) => context.cameraKey === cameraKey,
+    )
+  ) {
+    return;
+  }
+  const token = ++externalCurveRequestRevision;
+  pendingExternalCurveRequest = Object.freeze({
+    token,
+    revision,
+    scene,
+    camera,
+    cameraKey,
+  });
+  if (externalCurveRefinementTimer !== undefined) {
+    clearTimeout(externalCurveRefinementTimer);
+  }
+  externalCurveRefinementTimer = setTimeout(() => {
+    externalCurveRefinementTimer = undefined;
+    drainExternalCurveRefinementRequest();
+  }, CURVE_REFINEMENT_DEBOUNCE_MS);
+}
+
 async function initializeDeferredGeometry(
   workerSource,
   scene,
@@ -4137,7 +4564,7 @@ async function initializeDeferredGeometry(
         state: "error",
         error: error.message,
       });
-      status.textContent = `점·솔리드 표시 실패: ${error.message}`;
+      status.textContent = `점·솔리드·폭 폴리라인 표시 실패: ${error.message}`;
       console.error(error);
     }
   }
@@ -4155,6 +4582,166 @@ async function initializeDeferredGeometry(
       status.textContent = `해치 표시 실패: ${error.message}`;
       console.error(error);
     }
+  }
+}
+
+async function initializeExternalPrimitives({
+  workerSource,
+  childScene,
+  sceneId,
+  layerMap,
+  linetypeMap,
+  maskOrder,
+  rootScene,
+  revision,
+}) {
+  const worker = await createPrimitiveWorker(workerSource);
+  if (revision !== openRevision || activeScene !== rootScene) {
+    worker.cancel();
+    return;
+  }
+  externalPrimitiveWorkers.add(worker);
+  try {
+    const result = await worker.initialize(
+      childScene.metadata.drawing.wipeoutFrame,
+      childScene.metadata.drawing.fillMode,
+      maskOrder,
+    );
+    if (revision !== openRevision || activeScene !== rootScene) {
+      return;
+    }
+    remapExternalPrimitiveResult(result, layerMap, linetypeMap);
+    rootScene.renderer.setExternalPrimitiveMeshes(
+      sceneId,
+      result.primitives,
+    );
+  } finally {
+    externalPrimitiveWorkers.delete(worker);
+  }
+}
+
+async function initializeExternalHatches({
+  workerSource,
+  childScene,
+  sceneId,
+  composedInstanceGraph,
+  layerMap,
+  linetypeMap,
+  maskOrder,
+  rootScene,
+  revision,
+}) {
+  externalHatchContexts.get(sceneId)?.worker.cancel();
+  const worker = await createHatchWorker(workerSource);
+  const context = {
+    worker,
+    revision,
+    rootScene,
+    layerMap,
+    linetypeMap,
+    lastCameraKey: null,
+    ready: false,
+  };
+  if (revision !== openRevision || activeScene !== rootScene) {
+    worker.cancel();
+    return;
+  }
+  externalHatchContexts.set(sceneId, context);
+  const camera =
+    activeInteraction?.snapshot().render.camera ?? rootScene.render.camera;
+  try {
+    const result = await worker.request("initialize", {
+      ...workerSourcePayload(workerSource),
+      camera: workerCamera(camera),
+      maskOrder,
+      view: Object.freeze({ kind: "model" }),
+      externalInstanceGraph: composedInstanceGraph,
+    });
+    if (
+      revision !== openRevision ||
+      activeScene !== rootScene ||
+      externalHatchContexts.get(sceneId) !== context
+    ) {
+      worker.cancel();
+      return;
+    }
+    remapExternalHatchResult(result, layerMap, linetypeMap);
+    rootScene.renderer.setExternalHatchFills(sceneId, result.fill);
+    context.ready = true;
+    if (result.pattern) {
+      rootScene.renderer.setExternalHatchPatterns(sceneId, result.pattern);
+      context.lastCameraKey = patternCameraKey(camera);
+    }
+  } catch (error) {
+    if (externalHatchContexts.get(sceneId) === context) {
+      externalHatchContexts.delete(sceneId);
+    }
+    worker.cancel();
+    throw error;
+  }
+}
+
+function registerExternalCurveContext({
+  workerSource,
+  childScene,
+  sceneId,
+  composedInstanceGraph,
+  layerMap,
+  linetypeMap,
+  maskOrder,
+  rootScene,
+  revision,
+}) {
+  externalCurveContexts.get(sceneId)?.worker?.cancel();
+  externalCurveContexts.set(sceneId, {
+    workerSource,
+    metadata: {
+      layers: childScene.metadata.layers,
+      linetypes: childScene.metadata.linetypes,
+      blocks: childScene.metadata.blocks,
+      inserts: childScene.metadata.inserts,
+      insertClips: childScene.metadata.insertClips,
+      layouts: childScene.metadata.layouts,
+    },
+    instanceGraph: composedInstanceGraph,
+    layerMap,
+    linetypeMap,
+    maskOrder,
+    rootScene,
+    revision,
+    worker: null,
+    ready: false,
+    cameraKey: null,
+  });
+}
+
+async function initializeExternalDeferredGeometry(options) {
+  const results = await Promise.allSettled([
+    initializeExternalPrimitives(options),
+    initializeExternalHatches(options),
+  ]);
+  for (const result of results) {
+    if (
+      result.status === "rejected" &&
+      result.reason?.name !== "AbortError"
+    ) {
+      console.error(result.reason);
+    }
+  }
+  if (
+    options.revision !== openRevision ||
+    activeScene !== options.rootScene
+  ) {
+    return;
+  }
+  registerExternalCurveContext(options);
+  const viewport = activeInteraction?.snapshot();
+  if (viewport) {
+    scheduleExternalCurveRefinement(
+      options.rootScene,
+      viewport,
+      options.revision,
+    );
   }
 }
 
@@ -4269,6 +4856,7 @@ function externalParentContexts(parentCacheId) {
         id: "root",
         prefix: "",
         instanceGraph: activeRenderInstanceGraph,
+        orderScale: 1,
       },
     ];
   }
@@ -4294,7 +4882,7 @@ function loadExternalCacheData(message, revision) {
       }
     },
   })
-    .then((scene) => {
+    .then(async (scene) => {
       if (revision !== openRevision) {
         throw new Error("stale external reference load");
       }
@@ -4310,7 +4898,33 @@ function loadExternalCacheData(message, revision) {
         );
       }
       externalSourceOverviewBytes += scene.overview.byteLength;
-      return Object.freeze({ scene, source });
+      let maskOrder = null;
+      let maskInstanceGraph = scene.instanceGraph;
+      try {
+        const candidate = await readSceneMaskOrder(scene);
+        if (candidate.enabled) {
+          const orderedGraph = applyMaskOrderToInstanceGraph(
+            scene.instanceGraph,
+            scene.metadata.blocks,
+            candidate,
+          );
+          if (orderedGraph.maskOrderEnabled) {
+            maskOrder = candidate;
+            maskInstanceGraph = orderedGraph;
+          }
+        }
+      } catch (error) {
+        console.warn("참조도면 표시 순서를 적용하지 못했습니다.", error);
+      }
+      if (revision !== openRevision) {
+        throw new Error("stale external reference load");
+      }
+      return Object.freeze({
+        scene,
+        source,
+        maskOrder,
+        maskInstanceGraph,
+      });
     })
     .catch((error) => {
       if (externalCacheData.get(message.cacheId) === loading) {
@@ -4384,6 +4998,8 @@ async function addExternalText(
   sourceId = "external",
   sourceLabel = "외부 참조",
   linetypeMap = null,
+  maskOrder = null,
+  maskBucketScale = 1,
 ) {
   const revision = openRevision;
   const rootScene = activeScene;
@@ -4417,6 +5033,12 @@ async function addExternalText(
     layers: rootScene.metadata.layers,
     instanceGraph: composedInstanceGraph,
     glyphCache,
+    maskOrder,
+    orderCompositionEnabled: Boolean(
+      activeMaskOrder?.generalOrderEnabled,
+    ),
+    orderDepthBias: 0,
+    maskBucketScale,
     sourceId,
     sourceLabel,
     onInlineFonts: (names) =>
@@ -4434,6 +5056,13 @@ async function addExternalText(
       glyphCache,
       globalLinetypeScale:
         rootScene.metadata.drawing.globalLinetypeScale,
+      blocks: externalScene.metadata.blocks,
+      maskOrder,
+      orderCompositionEnabled: Boolean(
+        activeMaskOrder?.generalOrderEnabled,
+      ),
+      orderDepthBias: 0,
+      maskBucketScale,
     });
     if (complexOverlay.source.sourceSegments > 0) {
       textComposite.add(complexOverlay);
@@ -4451,6 +5080,8 @@ async function addExternalImages(
   composedInstanceGraph,
   layerMap,
   sourceLabel,
+  maskOrder = null,
+  maskBucketScale = 1,
 ) {
   const revision = openRevision;
   const rootScene = activeScene;
@@ -4486,6 +5117,11 @@ async function addExternalImages(
       cacheId,
       assetStore: store,
       requestAsset: requestRasterImage,
+      maskOrder,
+      orderCompositionEnabled: Boolean(
+        activeMaskOrder?.generalOrderEnabled,
+      ),
+      orderDepthBias: -0.25 * maskBucketScale,
       layerMap,
       linetypeMap: buildExternalLinetypeMap(
         rootScene.metadata.linetypes,
@@ -4493,12 +5129,39 @@ async function addExternalImages(
       ),
       sourceId: sceneId,
       sourceLabel,
+      maskBucketScale,
     });
   activeImageComposite.add(overlay);
   return rootScene.renderer.setSupplementalBounds(
     `image:${sceneId}`,
     overlay.bounds,
   );
+}
+
+function externalMaskState(loaded, parentContext) {
+  const parentScale =
+    Number.isFinite(parentContext.orderScale) &&
+    parentContext.orderScale > 0 &&
+    parentContext.orderScale <= 1
+      ? parentContext.orderScale
+      : 1;
+  if (!activeMaskOrder?.enabled || !loaded.maskOrder?.enabled) {
+    return Object.freeze({
+      maskOrder: null,
+      instanceGraph: loaded.scene.instanceGraph,
+      maskBucketScale: parentScale,
+      orderMapQuantized: false,
+    });
+  }
+  const maskBucketScale =
+    parentScale / (loaded.maskOrder.maximumExpandedMasks + 1);
+  return Object.freeze({
+    maskOrder: loaded.maskOrder,
+    instanceGraph: loaded.maskInstanceGraph,
+    maskBucketScale,
+    orderMapQuantized:
+      maskBucketScale < 1 / DRAW_ORDER_SUBDIVISIONS,
+  });
 }
 
 async function handleExternalCacheReady(message) {
@@ -4523,9 +5186,15 @@ async function handleExternalCacheReady(message) {
   if (revision !== openRevision || !activeScene || !activeInteraction) {
     return;
   }
+  externalMaskCounts.set(
+    message.cacheId,
+    loaded.maskOrder?.masks.length ?? 0,
+  );
+  refreshMaskSourceCount();
   const childContexts = externalAttachmentsByCache.get(message.cacheId) ?? [];
   let lastFit;
   for (const parentContext of parentContexts) {
+    const maskState = externalMaskState(loaded, parentContext);
     const prefix = parentContext.prefix
       ? `${parentContext.prefix}|${message.name}`
       : message.name;
@@ -4541,10 +5210,11 @@ async function handleExternalCacheReady(message) {
     const composed = composeExternalInstanceGraph(
       parentContext.instanceGraph,
       message.parentBlockIndex,
-      loaded.scene.instanceGraph,
+      maskState.instanceGraph,
       loaded.scene.metadata.batches,
       layerMap,
       linetypeMap,
+      maskState.maskBucketScale,
     );
     if (composed.instanceGraph.instanceCount === 0) {
       continue;
@@ -4574,6 +5244,7 @@ async function handleExternalCacheReady(message) {
         batches: composed.batches,
         blocks: loaded.scene.metadata.blocks,
         instanceGraph: composed.instanceGraph,
+        maskOrder: maskState.maskOrder,
         vertices: {
           buffer: overviewBuffer,
           byteLength: overviewBuffer.byteLength,
@@ -4614,6 +5285,19 @@ async function handleExternalCacheReady(message) {
           recordSize: loaded.scene.overview.recordSize,
         }),
       });
+    } else {
+      lastFit = activeScene.renderer.addExternalOverview({
+        id: sceneId,
+        batches: Object.freeze([]),
+        blocks: loaded.scene.metadata.blocks,
+        instanceGraph: composed.instanceGraph,
+        maskOrder: maskState.maskOrder,
+        vertices: {
+          buffer: new ArrayBuffer(0),
+          byteLength: 0,
+          vertexCount: 0,
+        },
+      });
     }
     activeReviewTools?.addSource(sceneId, {
       id: sceneId,
@@ -4626,6 +5310,8 @@ async function handleExternalCacheReady(message) {
       linetypes: activeScene.metadata.linetypes,
       layerMap,
       linetypeMap,
+      maskOrder: maskState.maskOrder,
+      maskBucketScale: maskState.maskBucketScale,
       reader: loaded.scene.reader,
     });
     await addExternalText(
@@ -4636,6 +5322,8 @@ async function handleExternalCacheReady(message) {
       sceneId,
       prefix,
       linetypeMap,
+      maskState.maskOrder,
+      maskState.maskBucketScale,
     );
     const imageFit = await addExternalImages(
       loaded.scene,
@@ -4644,12 +5332,36 @@ async function handleExternalCacheReady(message) {
       composed.instanceGraph,
       layerMap,
       prefix,
+      maskState.maskOrder,
+      maskState.maskBucketScale,
     );
     lastFit = imageFit ?? lastFit;
+    const externalSource = externalHostSources.get(message.cacheId);
+    if (externalSource) {
+      await initializeExternalDeferredGeometry({
+        workerSource: { kind: "host", source: externalSource },
+        childScene: loaded.scene,
+        sceneId,
+        composedInstanceGraph: composed.instanceGraph,
+        layerMap,
+        linetypeMap,
+        maskOrder: maskState.maskOrder,
+        rootScene: activeScene,
+        revision,
+      });
+      if (revision !== openRevision || !activeScene) {
+        return;
+      }
+      lastFit = Object.freeze({
+        camera: activeScene.renderer.fitCamera(),
+      });
+    }
     childContexts.push({
       id: sceneId,
       prefix,
       instanceGraph: composed.instanceGraph,
+      orderScale: maskState.maskBucketScale,
+      orderMapQuantized: maskState.orderMapQuantized,
       overview: mountedOverview,
       reviewContext: Object.freeze({
         parentBlockIndex: message.parentBlockIndex,
@@ -4714,6 +5426,7 @@ async function handleExternalCacheReady(message) {
 }
 
 async function remountExternalReferences(revision, switchRevision) {
+  resetExternalDeferredWorkers();
   externalAttachmentsByCache.clear();
   const messages = [...readyExternalMessages.values()].sort(
     (left, right) => (left.depth ?? 0) - (right.depth ?? 0),
@@ -4763,6 +5476,7 @@ function installInteraction(
         );
       }
       scheduleCurveRefinement(scene, viewport, revision);
+      scheduleExternalCurveRefinement(scene, viewport, revision);
       status.textContent = viewport.render.interactive
         ? `${viewport.zoom.toFixed(2)}× · 빠른 이동 화면`
         : viewport.detail.loading > 0
@@ -5247,6 +5961,9 @@ async function openCache(source, workerSource, cacheSha256) {
       if (revision === openRevision && activeScene === scene) {
         activeMaskStatus = Object.freeze({
           enabled: false,
+          generalOrderEnabled: false,
+          masks: 0,
+          generalOrderReason: null,
           tables: 0,
           entries: 0,
           maximumExpandedMasks: 0,
@@ -5474,6 +6191,10 @@ if (vscodeApi) {
   setHostedState("preparing");
   window.addEventListener("message", (event) => {
     const message = event.data;
+    if (message?.type === "dwg-menu-display-settings/1") {
+      applyMenuDisplaySettings(message);
+      return;
+    }
     if (message?.type === "dwg-export-save-result/1") {
       const pending = pendingExportSaves.get(message.requestId);
       if (!pending) {

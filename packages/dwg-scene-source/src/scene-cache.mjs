@@ -43,6 +43,8 @@ export const VIEWPORT_FROZEN_LAYER_RECORD_SIZE = 8;
 export const VIEWPORT_CLIP_VERTEX_RECORD_SIZE = 16;
 export const IMAGE_ENTITY_RECORD_SIZE = 176;
 export const IMAGE_CLIP_VERTEX_RECORD_SIZE = 16;
+export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_RECORDS = 10_000;
+export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_BYTES = 8 * 1024 * 1024;
 
 export const SectionKind = Object.freeze({
   Drawing: 1,
@@ -1527,6 +1529,31 @@ export class DrawOrderSourceTable {
       ...table,
       entries: Object.freeze(entries),
     });
+  }
+}
+
+export class DisplayOrderIdentitySourceTable {
+  constructor(records, { sourceRecordCount, byteLength, limited = false }) {
+    this.records = records;
+    this.sourceRecordCount = sourceRecordCount;
+    this.byteLength = byteLength;
+    this.limited = limited;
+  }
+
+  get length() {
+    return this.records.length;
+  }
+
+  readEntity(index, target) {
+    if (!Number.isInteger(index) || index < 0 || index >= this.records.length) {
+      throw new RangeError(
+        `display-order identity index is out of range: ${index}`,
+      );
+    }
+    if (!target || typeof target !== "object") {
+      throw new TypeError("display-order identity target must be an object");
+    }
+    return Object.assign(target, this.records[index], { index });
   }
 }
 
@@ -3607,14 +3634,281 @@ export class SceneCacheReader {
     });
   }
 
+  async readDisplayOrderIdentities({
+    maximumRecords = DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_RECORDS,
+    maximumBytes = DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_BYTES,
+  } = {}) {
+    if (!Number.isSafeInteger(maximumRecords) || maximumRecords <= 0) {
+      throw new RangeError(
+        "display-order identity record limit must be positive",
+      );
+    }
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
+      throw new RangeError(
+        "display-order identity byte limit must be positive",
+      );
+    }
+    return this.memoize(
+      `display-order-identities:${maximumRecords}:${maximumBytes}`,
+      async () => {
+        const specifications = [
+          [SectionKind.TextEntities, TEXT_ENTITY_RECORD_SIZE, true],
+          [SectionKind.HatchEntities, HATCH_ENTITY_RECORD_SIZE, true],
+          [SectionKind.PointEntities, POINT_ENTITY_RECORD_SIZE, false],
+          [SectionKind.SolidEntities, SOLID_ENTITY_RECORD_SIZE, false],
+          [SectionKind.FaceEntities, FACE_ENTITY_RECORD_SIZE, false],
+          [SectionKind.ImageEntities, IMAGE_ENTITY_RECORD_SIZE, true],
+        ].map(([kind, recordSize, stringTable]) => {
+          const section = this.getSection(kind);
+          if (stringTable) {
+            validateStringTableDirectoryEntry(section, recordSize);
+          } else {
+            validateRecordSection(section, recordSize);
+          }
+          const prefixBytes = checkedAdd(
+            stringTable ? STRING_TABLE_HEADER_SIZE : 0,
+            checkedMultiply(
+              section.recordCount,
+              recordSize,
+              "display-order identity record bytes",
+            ),
+            "display-order identity prefix bytes",
+          );
+          return { section, recordSize, stringTable, prefixBytes };
+        });
+        const sourceRecordCount = specifications.reduce(
+          (total, { section }) =>
+            checkedAdd(
+              total,
+              section.recordCount,
+              "display-order identity count",
+            ),
+          0,
+        );
+        const byteLength = specifications.reduce(
+          (total, { prefixBytes }) =>
+            checkedAdd(
+              total,
+              prefixBytes,
+              "display-order identity bytes",
+            ),
+          0,
+        );
+        if (
+          sourceRecordCount > maximumRecords ||
+          byteLength > maximumBytes
+        ) {
+          return Object.freeze(
+            new DisplayOrderIdentitySourceTable(Object.freeze([]), {
+              sourceRecordCount,
+              byteLength,
+              limited: true,
+            }),
+          );
+        }
+
+        const buffers = await Promise.all(
+          specifications.map(({ section, prefixBytes }) =>
+            this.source
+              .read(section.offset, prefixBytes)
+              .then((buffer) =>
+                requireArrayBuffer(
+                  buffer,
+                  prefixBytes,
+                  `display-order identity section ${section.kind}`,
+                ),
+              ),
+          ),
+        );
+        const records = [];
+        for (
+          let specificationIndex = 0;
+          specificationIndex < specifications.length;
+          specificationIndex += 1
+        ) {
+          const {
+            section,
+            recordSize,
+            stringTable,
+            prefixBytes,
+          } = specifications[specificationIndex];
+          const buffer = buffers[specificationIndex];
+          const view = new DataView(buffer);
+          const firstRecord = stringTable ? STRING_TABLE_HEADER_SIZE : 0;
+          if (stringTable) {
+            const recordCount = view.getUint32(0, true);
+            const storedRecordSize = view.getUint32(4, true);
+            const stringOffset = readSafeU64(
+              view,
+              8,
+              `display-order identity section ${section.kind} string offset`,
+            );
+            if (
+              recordCount !== section.recordCount ||
+              storedRecordSize !== recordSize ||
+              stringOffset < prefixBytes ||
+              stringOffset > section.byteLength
+            ) {
+              throw new Error(
+                `display-order identity section ${section.kind} has an invalid string-table header`,
+              );
+            }
+          }
+          for (let index = 0; index < section.recordCount; index += 1) {
+            const offset = firstRecord + index * recordSize;
+            records.push(
+              Object.freeze({
+                handle: view.getBigUint64(offset, true),
+                ownerHandle: view.getBigUint64(offset + 8, true),
+                commonFlags: view.getUint16(offset + 26, true),
+              }),
+            );
+          }
+        }
+        return Object.freeze(
+          new DisplayOrderIdentitySourceTable(Object.freeze(records), {
+            sourceRecordCount,
+            byteLength,
+          }),
+        );
+      },
+    );
+  }
+
+  async readPolylineSource({
+    maximumRangeBytes = MAX_CURVE_SOURCE_RANGE_BYTES,
+    maximumSourceBytes = MAX_CURVE_SOURCE_BYTES,
+  } = {}) {
+    if (
+      !Number.isSafeInteger(maximumRangeBytes) ||
+      maximumRangeBytes < POLYLINE_HEADER_RECORD_SIZE ||
+      maximumRangeBytes > MAX_CURVE_SOURCE_RANGE_BYTES
+    ) {
+      throw new RangeError(
+        `polyline source range limit must be between ${POLYLINE_HEADER_RECORD_SIZE} and ${MAX_CURVE_SOURCE_RANGE_BYTES} bytes`,
+      );
+    }
+    if (
+      !Number.isSafeInteger(maximumSourceBytes) ||
+      maximumSourceBytes < POLYLINE_HEADER_RECORD_SIZE ||
+      maximumSourceBytes > MAX_CURVE_SOURCE_BYTES
+    ) {
+      throw new RangeError(
+        `polyline source byte budget must be between ${POLYLINE_HEADER_RECORD_SIZE} and ${MAX_CURVE_SOURCE_BYTES} bytes`,
+      );
+    }
+    const specifications = [
+      [SectionKind.PolylineHeaders, "polyline headers"],
+      [SectionKind.PolylineVertices, "polyline vertices"],
+    ].map(([kind, label]) => {
+      const section = this.sections.get(kind);
+      if (!section) {
+        throw new Error(`polyline source section ${kind} is missing`);
+      }
+      return { kind, label, section };
+    });
+    const byteLength = specifications.reduce(
+      (total, { section }) =>
+        checkedAdd(total, section.byteLength, "polyline source bytes"),
+      0,
+    );
+    if (byteLength > maximumSourceBytes) {
+      throw new Error(
+        `polyline source is ${byteLength} bytes, above the ${maximumSourceBytes}-byte limit`,
+      );
+    }
+    let requestCount = 0;
+    let maximumReadBytes = 0;
+    const tables = new Map();
+    for (const { kind, label, section } of specifications) {
+      const recordsPerChunk = Math.max(
+        1,
+        Math.floor(maximumRangeBytes / section.recordSize),
+      );
+      const chunks = [];
+      for (
+        let firstRecord = 0;
+        firstRecord < section.recordCount;
+        firstRecord += recordsPerChunk
+      ) {
+        const recordCount = Math.min(
+          recordsPerChunk,
+          section.recordCount - firstRecord,
+        );
+        const chunkByteLength = checkedMultiply(
+          recordCount,
+          section.recordSize,
+          `${label} chunk bytes`,
+        );
+        const offset = checkedAdd(
+          section.offset,
+          checkedMultiply(
+            firstRecord,
+            section.recordSize,
+            `${label} chunk offset`,
+          ),
+          `${label} source offset`,
+        );
+        const buffer = requireArrayBuffer(
+          await this.source.read(offset, chunkByteLength),
+          chunkByteLength,
+          `${label} source chunk`,
+        );
+        chunks.push(
+          Object.freeze({
+            firstRecord,
+            recordCount,
+            buffer,
+            view: new DataView(buffer),
+          }),
+        );
+        requestCount += 1;
+        maximumReadBytes = Math.max(maximumReadBytes, chunkByteLength);
+      }
+      const arguments_ = [
+        Object.freeze(chunks),
+        section.recordSize,
+        section.recordCount,
+        recordsPerChunk,
+      ];
+      tables.set(
+        kind,
+        kind === SectionKind.PolylineHeaders
+          ? new PolylineHeaderSourceTable(
+              ...arguments_,
+              "polyline headers",
+            )
+          : new PolylineVertexSourceTable(
+              ...arguments_,
+              "polyline vertices",
+            ),
+      );
+    }
+    return Object.freeze({
+      polylines: tables.get(SectionKind.PolylineHeaders),
+      polylineVertices: tables.get(SectionKind.PolylineVertices),
+      byteLength,
+      requestCount,
+      maximumReadBytes,
+    });
+  }
+
   async readPrimitiveSource() {
-    const [points, solids, faces, wipeouts] = await Promise.all([
+    const [points, solids, faces, wipeouts, polylineSource] = await Promise.all([
       this.readPointEntities(),
       this.readSolidEntities(),
       this.readFaceEntities(),
       this.readWipeoutEntities(),
+      this.readPolylineSource(),
     ]);
-    return Object.freeze({ points, solids, faces, wipeouts });
+    return Object.freeze({
+      points,
+      solids,
+      faces,
+      wipeouts,
+      polylines: polylineSource.polylines,
+      polylineVertices: polylineSource.polylineVertices,
+    });
   }
 
   async readInsertClips() {
@@ -3789,6 +4083,7 @@ export class SceneCacheReader {
       [SectionKind.SplineKnots, "SPLINE knots"],
       [SectionKind.SplineWeights, "SPLINE weights"],
       [SectionKind.SplineControlPoints, "SPLINE control points"],
+      [SectionKind.SplineFitPoints, "SPLINE fit points"],
     ].map(([kind, label]) => {
       const section = this.sections.get(kind);
       if (!section) {
@@ -3895,6 +4190,7 @@ export class SceneCacheReader {
           table = new SplineScalarSourceTable(...arguments_, label);
           break;
         case SectionKind.SplineControlPoints:
+        case SectionKind.SplineFitPoints:
           table = new SplinePointSourceTable(...arguments_, label);
           break;
         default:
@@ -3912,6 +4208,7 @@ export class SceneCacheReader {
       splineKnots: tables.get(SectionKind.SplineKnots),
       splineWeights: tables.get(SectionKind.SplineWeights),
       splineControlPoints: tables.get(SectionKind.SplineControlPoints),
+      splineFitPoints: tables.get(SectionKind.SplineFitPoints),
       byteLength,
       requestCount,
       maximumReadBytes,

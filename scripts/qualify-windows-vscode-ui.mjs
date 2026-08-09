@@ -33,6 +33,8 @@ const {
 } = vscodeTestElectron;
 const REPORT_SCHEMA = "dwg-windows-vscode-ui-qualification/1";
 export const WINDOWS_UI_EXTENSION_ID = "menaje.dwg-viewer-vscode";
+export const WINDOWS_UI_COMPANION_EXTENSION_ID =
+  "menaje.dwg-viewer-libredwg";
 export const WINDOWS_UI_CLEANUP_OPTIONS = Object.freeze({
   recursive: true,
   force: true,
@@ -97,8 +99,8 @@ export function parseWindowsUiArguments(values) {
     const option = values[index];
     if (
       ![
-        "--adapter",
         "--drawing",
+        "--companion-vsix",
         "--vsix",
         "--output-dir",
       ].includes(option)
@@ -107,8 +109,8 @@ export function parseWindowsUiArguments(values) {
     }
     options[
       {
-        "--adapter": "adapterPath",
         "--drawing": "drawingPath",
+        "--companion-vsix": "companionVsixPath",
         "--vsix": "vsixPath",
         "--output-dir": "outputDirectory",
       }[option]
@@ -116,8 +118,8 @@ export function parseWindowsUiArguments(values) {
     index += 1;
   }
   for (const key of [
-    "adapterPath",
     "drawingPath",
+    "companionVsixPath",
     "vsixPath",
     "outputDirectory",
   ]) {
@@ -839,7 +841,6 @@ async function terminateProcessTree(child) {
 }
 
 async function runScale({
-  adapterPath,
   drawingPath,
   driverDirectory,
   extensionsDirectory,
@@ -860,7 +861,6 @@ async function runScale({
   const port = await availablePort();
   const environment = {
     ...process.env,
-    DWG_VIEWER_LIBREDWG_ADAPTER: adapterPath,
     DWG_VIEWER_QUALIFICATION_DRAWING: drawingPath,
     DWG_VIEWER_QUALIFICATION_TOKEN:
       randomBytes(32).toString("hex"),
@@ -982,13 +982,14 @@ export async function qualifyWindowsVsCodeUi(options) {
   if (process.platform !== "win32" || process.arch !== "x64") {
     throw new Error("Windows VS Code UI qualification requires win32 x64");
   }
-  const [adapter, drawing, vsix] = await Promise.all([
-    ensureFile(options.adapterPath),
+  const [drawing, companionVsix, vsix] = await Promise.all([
     ensureFile(options.drawingPath),
+    ensureFile(options.companionVsixPath),
     ensureFile(options.vsixPath),
   ]);
-  void adapter;
   if (
+    path.extname(options.companionVsixPath).toLocaleLowerCase("en-US") !==
+      ".vsix" ||
     path.extname(options.vsixPath).toLocaleLowerCase("en-US") !==
     ".vsix"
   ) {
@@ -1025,6 +1026,16 @@ export async function qualifyWindowsVsCodeUi(options) {
         `--user-data-dir=${installUserData}`,
         `--extensions-dir=${extensionsDirectory}`,
         "--install-extension",
+        options.companionVsixPath,
+        "--force",
+      ],
+      downloadOptions,
+    );
+    await runVSCodeCommand(
+      [
+        `--user-data-dir=${installUserData}`,
+        `--extensions-dir=${extensionsDirectory}`,
+        "--install-extension",
         options.vsixPath,
         "--force",
       ],
@@ -1048,12 +1059,20 @@ export async function qualifyWindowsVsCodeUi(options) {
       true,
       `packaged extension ${WINDOWS_UI_EXTENSION_ID} was not installed`,
     );
+    assert.equal(
+      installedExtensions
+        .split(/\r?\n/u)
+        .some((line) =>
+          line.startsWith(`${WINDOWS_UI_COMPANION_EXTENSION_ID}@`),
+        ),
+      true,
+      `companion extension ${WINDOWS_UI_COMPANION_EXTENSION_ID} was not installed`,
+    );
 
     const cases = [];
     for (const scaleFactor of SCALE_FACTORS) {
       cases.push(
         await runScale({
-          adapterPath: options.adapterPath,
           drawingPath: options.drawingPath,
           driverDirectory,
           extensionsDirectory,
@@ -1074,12 +1093,17 @@ export async function qualifyWindowsVsCodeUi(options) {
         vscodeChannel: "stable",
         vscodeVersion,
         packagedVsixInstalled: true,
+        packagedCompanionVsixInstalled: true,
       },
       input: {
         drawingBytes: drawing.size,
         drawingSha256: await sha256File(options.drawingPath),
         vsixBytes: vsix.size,
         vsixSha256: await sha256File(options.vsixPath),
+        companionVsixBytes: companionVsix.size,
+        companionVsixSha256: await sha256File(
+          options.companionVsixPath,
+        ),
         pathDisclosure: "none",
       },
       cases,

@@ -12,10 +12,13 @@ import {
 import { MemoryRangeSource } from "../src/range-source.mjs";
 import { SceneCacheReader } from "../src/scene-cache.mjs";
 import {
+  annotativeTextMatrixForInstance,
   cadMTextFlowsVertically,
+  cadTextAlignmentOffsets,
   cadTextAlignmentWidth,
   cadTextEntityMatrix,
   CanvasTextOverlay,
+  CompositeTextOverlay,
   layoutCadTextColumns,
   plainCadTextLines,
   registerLocalOutlineFont,
@@ -38,7 +41,7 @@ import {
   dwgTypeRenderDependencyId,
 } from "../src/render-delta-dependency.mjs";
 
-function fakeCanvas() {
+function fakeCanvas({ measureText } = {}) {
   const calls = {
     fillText: 0,
     fillTextArguments: [],
@@ -91,6 +94,9 @@ function fakeCanvas() {
       calls.stroke += 1;
     },
   };
+  if (typeof measureText === "function") {
+    context.measureText = measureText;
+  }
   Object.defineProperties(context, {
     fillStyle: {
       get() {
@@ -126,6 +132,42 @@ function fakeCanvas() {
     clientHeight: 600,
     width: 0,
     height: 0,
+    getContext(kind) {
+      return kind === "2d" ? context : null;
+    },
+  };
+}
+
+function compositingCanvas() {
+  const makeContext = () => ({
+    globalAlpha: 1,
+    globalCompositeOperation: "source-over",
+    filter: "none",
+    setTransform() {},
+    clearRect() {},
+    drawImage() {},
+  });
+  const makeBackingCanvas = () => {
+    const context = makeContext();
+    return {
+      width: 1,
+      height: 1,
+      getContext(kind) {
+        return kind === "2d" ? context : null;
+      },
+    };
+  };
+  const context = makeContext();
+  return {
+    clientWidth: 10,
+    clientHeight: 10,
+    width: 10,
+    height: 10,
+    ownerDocument: {
+      createElement(name) {
+        return name === "canvas" ? makeBackingCanvas() : null;
+      },
+    },
     getContext(kind) {
       return kind === "2d" ? context : null;
     },
@@ -1094,8 +1136,18 @@ test("renders visible block ATTDEF text and skips only invisible definitions", (
   );
 });
 
-test("uses the DWG-adjusted TEXT insertion point without applying justification twice", () => {
-  const canvas = fakeCanvas();
+test("anchors justified TEXT with measured fallback-font metrics", () => {
+  const canvas = fakeCanvas({
+    measureText(character) {
+      return {
+        width: character === "A" ? 0.5 : 1.5,
+        actualBoundingBoxLeft: 0,
+        actualBoundingBoxRight: character === "A" ? 0.5 : 1.5,
+        actualBoundingBoxAscent: 0.8,
+        actualBoundingBoxDescent: 0.2,
+      };
+    },
+  });
   const record = {
     handle: 5n,
     ownerHandle: 100n,
@@ -1154,15 +1206,19 @@ test("uses the DWG-adjusted TEXT insertion point without applying justification 
 
   overlay.redraw(camera, [true]);
 
-  assert.equal(canvas.calls.fillTextArguments[0][0], "A");
-  assert.equal(canvas.calls.fillTextArguments[0][1], 0);
-  assert.equal(Math.abs(canvas.calls.fillTextArguments[0][2]), 0);
-  assert.equal(canvas.calls.fillTextArguments[1][0], "B");
-  assert.equal(canvas.calls.fillTextArguments[1][1], 1);
-  assert.equal(Math.abs(canvas.calls.fillTextArguments[1][2]), 0);
+  assert.deepEqual(canvas.calls.fillTextArguments, [
+    ["A", -1, 0.30000000000000004],
+    ["B", -0.5, 0.30000000000000004],
+  ]);
   assert.ok(
-    canvas.calls.transforms.some(([a, b, c, d]) =>
-      a === 40 && b === 0 && c === 0 && d === 40,
+    canvas.calls.transforms.some(
+      ([a, b, c, d, e, f]) =>
+        a === 40 &&
+        b === 0 &&
+        c === 0 &&
+        d === 40 &&
+        e === 480 &&
+        f === 280,
     ),
   );
 });
@@ -1325,6 +1381,167 @@ test("maps TEXT insertion points from their stored OCS plane", () => {
   );
 
   assert.deepEqual(transformPoint(matrix, [0, 0, 0]), [4, 2, 3]);
+});
+
+test("keeps annotative text at paper height across layout viewport scales", () => {
+  const matrix = cadTextEntityMatrix(
+    {
+      kind: 0,
+      insertionPoint: [10, 20, 0],
+      normal: [0, 0, 1],
+      height: 2,
+      widthFactor: 1,
+      rotation: 0,
+      obliqueAngle: 0,
+      generationFlags: 0,
+    },
+    { flags: 0, widthFactor: 1 },
+  );
+  const instanceGraph = {
+    paperToModelScalesByVisibilityRow: new Float64Array([1, 100]),
+  };
+  const instances = { visibilityRows: new Uint32Array([1]) };
+  const scaled = annotativeTextMatrixForInstance(
+    matrix,
+    { flags: 1 << 2 },
+    instanceGraph,
+    instances,
+    0,
+  );
+
+  assert.deepEqual(transformPoint(scaled, [0, 0, 0]), [10, 20, 0]);
+  assert.equal(Math.hypot(scaled[4], scaled[5], scaled[6]), 200);
+  assert.strictEqual(
+    annotativeTextMatrixForInstance(
+      matrix,
+      { flags: 0 },
+      instanceGraph,
+      instances,
+      0,
+    ),
+    matrix,
+  );
+});
+
+test("uses the alignment point for justified TEXT and attribute entities", () => {
+  for (const kind of [0, 2, 3]) {
+    const matrix = cadTextEntityMatrix(
+      {
+        kind,
+        mtextType: 0,
+        insertionPoint: [2, 3, 4],
+        alignmentPoint: [5, 6, 7],
+        normal: [1, 0, 0],
+        height: 1,
+        widthFactor: 1,
+        rotation: 0,
+        obliqueAngle: 0,
+        horizontalAlignment: 1,
+        verticalAlignment: 2,
+        generationFlags: 0,
+      },
+      { flags: 0, widthFactor: 1 },
+    );
+
+    assert.deepEqual(
+      transformPoint(matrix, [0, 0, 0]),
+      [7, 5, 6],
+      `kind ${kind}`,
+    );
+  }
+});
+
+test("derives Align and Fit rotation from their endpoint span", () => {
+  for (const horizontalAlignment of [3, 5]) {
+    const matrix = cadTextEntityMatrix(
+      {
+        kind: 0,
+        mtextType: 0,
+        insertionPoint: [0, 0, 0],
+        alignmentPoint: [3, 4, 0],
+        normal: [0, 0, 1],
+        height: 1,
+        widthFactor: 1,
+        rotation: 0,
+        obliqueAngle: 0,
+        horizontalAlignment,
+        verticalAlignment: 0,
+        generationFlags: 0,
+      },
+      { flags: 0, widthFactor: 1 },
+    );
+    const point = transformPoint(matrix, [1, 0, 0]);
+    assert.ok(Math.abs(point[0] - 0.6) < 1e-12);
+    assert.ok(Math.abs(point[1] - 0.8) < 1e-12);
+    assert.ok(Math.abs(point[2]) < 1e-12);
+  }
+});
+
+test("uses embedded MTEXT insertion and world direction for multiline attributes", () => {
+  const matrix = cadTextEntityMatrix(
+    {
+      kind: 3,
+      mtextType: 1,
+      insertionPoint: [1, 2, 3],
+      alignmentPoint: [9, 9, 9],
+      normal: [0, 0, 1],
+      xAxisDirection: [0, 1, 0],
+      height: 1,
+      widthFactor: 1,
+      rotation: 0,
+      obliqueAngle: 0,
+      horizontalAlignment: 2,
+      verticalAlignment: 3,
+      generationFlags: 0,
+    },
+    { flags: 0, widthFactor: 1 },
+  );
+
+  assert.deepEqual(transformPoint(matrix, [0, 0, 0]), [1, 2, 3]);
+  assert.deepEqual(transformPoint(matrix, [1, 0, 0]), [1, 3, 3]);
+});
+
+test("computes every single-line TEXT justification offset from glyph metrics", () => {
+  const horizontalOffsets = new Map([
+    [0, 0],
+    [1, -4],
+    [2, -8],
+    [3, 0],
+    [4, -4],
+    [5, 0],
+  ]);
+  const verticalOffsets = new Map([
+    [0, 0],
+    [1, 0.2],
+    [2, -0.30000000000000004],
+    [3, -0.8],
+  ]);
+  for (let horizontalAlignment = 0; horizontalAlignment <= 5;
+    horizontalAlignment += 1) {
+    for (let verticalAlignment = 0; verticalAlignment <= 3;
+      verticalAlignment += 1) {
+      const offsets = cadTextAlignmentOffsets(
+        {
+          kind: 0,
+          mtextType: 0,
+          horizontalAlignment,
+          verticalAlignment,
+        },
+        { advance: 8, top: 0.8, bottom: -0.2 },
+      );
+      assert.deepEqual(
+        offsets,
+        {
+          horizontal: horizontalOffsets.get(horizontalAlignment),
+          baseline:
+            horizontalAlignment === 4 && verticalAlignment === 0
+              ? -0.30000000000000004
+              : verticalOffsets.get(verticalAlignment),
+        },
+        `${horizontalAlignment}/${verticalAlignment}`,
+      );
+    }
+  }
 });
 
 test("uses endpoint width only for baseline Align and Fit TEXT", () => {
@@ -2082,6 +2299,149 @@ test("resolves text ByLayer and ByBlock colors at the occurrence", () => {
     "rgba(0, 255, 0, 1)",
   ]);
   assert.deepEqual(canvas.calls.strokeStyles, canvas.calls.fillStyles);
+});
+
+test("draws repeated block text in absolute display order", () => {
+  const canvas = fakeCanvas();
+  const records = [10n, 20n].map((handle) => ({
+    handle,
+    ownerHandle: 200n,
+    layerIndex: 0,
+    color: (2 << 30) | 7,
+    commonFlags: 0,
+    kind: 0,
+    insertionPoint: [0, 0, 0],
+    alignmentPoint: [0, 0, 0],
+    normal: [0, 0, 1],
+    height: 1,
+    widthFactor: 1,
+    rotation: 0,
+    obliqueAngle: 0,
+    lineSpacingFactor: 1,
+    sourceFlags: 0,
+    horizontalAlignment: 0,
+    verticalAlignment: 0,
+    generationFlags: 0,
+    attachment: 0,
+    mtextType: 0,
+    valueByteLength: 1,
+    style: null,
+  }));
+  const first = translationMat4(104, 201, 0);
+  const second = translationMat4(106, 201, 0);
+  const events = records.map((record, index) => ({
+    kind: "entity",
+    handle: record.handle,
+    key: record.handle,
+    prefix: index,
+    contribution: 1,
+  }));
+  const maskOrder = {
+    enabled: true,
+    generalOrderEnabled: true,
+    modelOwnerHandle: 100n,
+    owners: new Map([
+      [
+        200n,
+        {
+          overrides: new Map(),
+          events,
+        },
+      ],
+    ]),
+    masks: [],
+  };
+  const overlay = new CanvasTextOverlay(canvas, {
+    textEntities: {
+      length: records.length,
+      readDisplayRecord(index, target) {
+        Object.assign(target, records[index]);
+        target.insertionPoint = [...records[index].insertionPoint];
+        target.alignmentPoint = [...records[index].alignmentPoint];
+        target.normal = [...records[index].normal];
+        return target;
+      },
+      readValue(index) {
+        return index === 0 ? "A" : "B";
+      },
+    },
+    blocks: [
+      {
+        index: 0,
+        handle: 100n,
+        name: "*Model_Space",
+        basePoint: [0, 0, 0],
+      },
+      {
+        index: 1,
+        handle: 200n,
+        name: "RepeatedBlock",
+        basePoint: [0, 0, 0],
+      },
+    ],
+    layers: [{ name: "0", color: (2 << 30) | 7 }],
+    instanceGraph: {
+      instancesByBlock: new Map([
+        [
+          1,
+          {
+            data: new Float64Array([...first, ...second]),
+            maskBases: new Uint32Array([0, 2]),
+            layerIndices: new Uint32Array([0xffffffff, 0xffffffff]),
+            opacities: new Float32Array([1, 1]),
+            count: 2,
+          },
+        ],
+      ]),
+      modelBlockIndices: new Set([0]),
+    },
+    glyphCache: { getGlyph: () => undefined },
+    maskOrder,
+    minimumPixelHeight: 0.1,
+  });
+
+  overlay.redraw(camera, [true]);
+
+  assert.deepEqual(
+    canvas.calls.fillTextArguments.map(([value]) => value),
+    ["A", "B", "A", "B"],
+  );
+});
+
+test("streams composite text layers through one reusable Canvas", () => {
+  const canvas = compositingCanvas();
+  const composite = new CompositeTextOverlay(canvas);
+  const redraws = [];
+  const makeOverlay = (id) => ({
+    id,
+    canvas,
+    orderCanvas: composite.orderCanvas,
+    redraw(_camera, _layers, { clear }) {
+      redraws.push([id, clear]);
+      return {};
+    },
+    dispose() {},
+  });
+  composite.add(makeOverlay("root"));
+  composite.add(makeOverlay("xref"));
+  const composed = [];
+
+  composite.redraw(camera, [true], {
+    canDrawOrderedLayer: () => true,
+    drawOrderedLayer(overlay) {
+      composed.push(overlay.id);
+      return { width: 10, height: 10, gpuBytes: 800 };
+    },
+  });
+
+  assert.deepEqual(redraws, [
+    ["root", true],
+    ["xref", true],
+  ]);
+  assert.deepEqual(composed, ["root", "xref"]);
+  assert.equal(composite.lastOrderedComposition.attempted, true);
+  assert.equal(composite.lastOrderedComposition.succeeded, true);
+  assert.equal(composite.lastOrderedComposition.results.length, 2);
 });
 
 test("draws cached SHX segments and obeys the frame segment cap", async () => {

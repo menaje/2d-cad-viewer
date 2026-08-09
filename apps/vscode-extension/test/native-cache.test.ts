@@ -240,6 +240,34 @@ test("resolves only an absolute executable adapter path", async (context) => {
   );
 });
 
+test("resolves the adapter from the GPL companion extension", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dwg-companion-path-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const mainExtensionRoot = path.join(root, "main");
+  const companionRoot = path.join(root, "companion");
+  const adapterPath = path.join(
+    companionRoot,
+    "native",
+    `${process.platform}-${process.arch}`,
+    process.platform === "win32"
+      ? "libredwg-adapter.exe"
+      : "libredwg-adapter",
+  );
+  await mkdir(path.dirname(adapterPath), { recursive: true });
+  await writeFile(adapterPath, "#!/bin/sh\nexit 0\n");
+  if (process.platform !== "win32") {
+    await chmod(adapterPath, 0o700);
+  }
+
+  assert.equal(
+    await resolveLibreDwgAdapter({
+      extensionPath: mainExtensionRoot,
+      bundledExtensionPath: companionRoot,
+    }),
+    adapterPath,
+  );
+});
+
 test(
   "publishes a bounded native preview before full conversion completes",
   async (context) => {

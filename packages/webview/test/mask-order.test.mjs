@@ -59,6 +59,15 @@ function makeWipeouts(records) {
   };
 }
 
+function makeOrderedEntities(records) {
+  return {
+    length: records.length,
+    readEntity(index, target) {
+      return Object.assign(target, records[index]);
+    },
+  };
+}
+
 function insert({
   handle,
   ownerHandle,
@@ -132,6 +141,7 @@ test("compresses nested and array INSERT draw order into mask buckets", () => {
   );
 
   assert.equal(plan.enabled, true);
+  assert.equal(plan.generalOrderEnabled, false);
   assert.equal(maskSpanForBlock(plan, 2), 1);
   assert.equal(maskSpanForBlock(plan, 1), 4);
   assert.equal(maskSpanForBlock(plan, 0), 4);
@@ -166,6 +176,60 @@ test("compresses nested and array INSERT draw order into mask buckets", () => {
     [...attached.instancesByBlock.get(2).maskBases],
     [2, 3],
   );
+});
+
+test("reserves one root-order interval for an external-reference insert", () => {
+  const plan = buildMaskOrderPlan(
+    makeDrawOrder([]),
+    makeWipeouts([]),
+    blocks,
+    [insert({ handle: 10n, ownerHandle: 100n, blockIndex: 1 })],
+    { reservedBlockSpans: new Uint32Array([0, 1, 0]) },
+  );
+
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.generalOrderEnabled, true);
+  assert.equal(maskSpanForBlock(plan, 1), 1);
+  assert.equal(maskSpanForBlock(plan, 0), 1);
+  assert.equal(plan.maximumExpandedMasks, 1);
+  assert.equal(plan.diagnostics.reservedInsertEvents, 1);
+});
+
+test("uses non-line entities and sort overrides as shared draw-order boundaries", () => {
+  const plan = buildMaskOrderPlan(
+    makeDrawOrder([
+      {
+        handle: 910n,
+        ownerHandle: 100n,
+        entries: [{ entityHandle: 80n, sortHandle: 15n }],
+      },
+    ]),
+    makeWipeouts([]),
+    blocks,
+    [],
+    {
+      orderedEntitySources: [
+        makeOrderedEntities([
+          { handle: 10n, ownerHandle: 100n, commonFlags: 0 },
+          { handle: 20n, ownerHandle: 100n, commonFlags: 0 },
+          { handle: 90n, ownerHandle: 100n, commonFlags: 1 },
+        ]),
+      ],
+    },
+  );
+
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.generalOrderEnabled, true);
+  assert.equal(plan.masks.length, 0);
+  assert.equal(plan.diagnostics.sourceOrderedEntities, 3);
+  assert.equal(plan.diagnostics.activeOrderedEntities, 2);
+  assert.equal(plan.maximumExpandedMasks, 3);
+  assert.equal(maskBucketFor(plan, 100n, 5n), 0);
+  assert.equal(maskBucketFor(plan, 100n, 10n), 1);
+  assert.equal(maskBucketFor(plan, 100n, 80n), 2);
+  assert.equal(maskBucketFor(plan, 100n, 17n), 2);
+  assert.equal(maskBucketFor(plan, 100n, 20n), 3);
+  assert.equal(maskBucketFor(plan, 100n, 90n), 3);
 });
 
 test("disables all masks on cyclic block graphs", () => {

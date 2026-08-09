@@ -144,6 +144,11 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
     SPLINE_POINT_RECORD_SIZE,
     0,
   );
+  addSection(
+    SectionKind.SplineFitPoints,
+    SPLINE_POINT_RECORD_SIZE,
+    0,
+  );
   const reader = new SceneCacheReader(
     source,
     { minor: 18 },
@@ -152,12 +157,62 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
   const curves = await reader.readCurveRefinementSource();
 
   assert.equal(curves.arcs.length, arcCount);
+  assert.equal(curves.splineFitPoints.length, 0);
   assert.equal(curves.requestCount, 2);
   assert.ok(curves.maximumReadBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
   assert.ok(source.maximumRequestBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
   assert.equal(source.bytesRead, arcBytes);
   await assert.rejects(
     reader.readCurveRefinementSource({
+      maximumSourceBytes: 64 * 1024 * 1024 + 1,
+    }),
+    /byte budget must be between/,
+  );
+});
+
+test("reads deferred polyline source in independently bounded chunks", async () => {
+  const headerCount = 5_000;
+  const vertexCount = 9_000;
+  const headerBytes = headerCount * POLYLINE_HEADER_RECORD_SIZE;
+  const vertexBytes = vertexCount * POLYLINE_VERTEX_RECORD_SIZE;
+  const source = new TrackedRangeSource(
+    new MemoryRangeSource(new ArrayBuffer(headerBytes + vertexBytes)),
+  );
+  const sections = new Map([
+    [
+      SectionKind.PolylineHeaders,
+      {
+        kind: SectionKind.PolylineHeaders,
+        recordSize: POLYLINE_HEADER_RECORD_SIZE,
+        recordCount: headerCount,
+        offset: 0,
+        byteLength: headerBytes,
+        flags: 0,
+      },
+    ],
+    [
+      SectionKind.PolylineVertices,
+      {
+        kind: SectionKind.PolylineVertices,
+        recordSize: POLYLINE_VERTEX_RECORD_SIZE,
+        recordCount: vertexCount,
+        offset: headerBytes,
+        byteLength: vertexBytes,
+        flags: 0,
+      },
+    ],
+  ]);
+  const reader = new SceneCacheReader(source, { minor: 18 }, sections);
+  const polylines = await reader.readPolylineSource();
+
+  assert.equal(polylines.polylines.length, headerCount);
+  assert.equal(polylines.polylineVertices.length, vertexCount);
+  assert.equal(polylines.requestCount, 4);
+  assert.ok(polylines.maximumReadBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
+  assert.ok(source.maximumRequestBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
+  assert.equal(source.bytesRead, headerBytes + vertexBytes);
+  await assert.rejects(
+    reader.readPolylineSource({
       maximumSourceBytes: 64 * 1024 * 1024 + 1,
     }),
     /byte budget must be between/,
@@ -444,6 +499,8 @@ test("reads bounded POINT and SOLID source lazily", async () => {
   assert.equal(primitives.points.length, 1);
   assert.equal(primitives.solids.length, 2);
   assert.equal(primitives.faces.length, 5);
+  assert.equal(primitives.polylines.length, 0);
+  assert.equal(primitives.polylineVertices.length, 0);
   assert.deepEqual(primitives.points.get(0).location, [11, 2, 0]);
   assert.equal(primitives.points.get(0).displayMode, 66);
   assert.equal(primitives.points.get(0).displaySize, -3);
@@ -594,6 +651,46 @@ test("reads normalized draw order lazily", async () => {
   );
   assert.equal(drawOrder.readTable(1, {}).firstEntry, 2);
   assert.equal(drawOrder.readEntry(2, {}).entityHandle, 0x401n);
+});
+
+test("reads only bounded entity prefixes for the shared display-order index", async () => {
+  const source = new TrackedRangeSource(
+    new MemoryRangeSource(makeFixtureCache()),
+  );
+  const reader = await SceneCacheReader.open(source);
+  const kinds = [
+    SectionKind.TextEntities,
+    SectionKind.HatchEntities,
+    SectionKind.PointEntities,
+    SectionKind.SolidEntities,
+    SectionKind.FaceEntities,
+    SectionKind.ImageEntities,
+  ];
+  const expectedRecords = kinds.reduce(
+    (total, kind) => total + reader.getSection(kind).recordCount,
+    0,
+  );
+  const requestsBefore = source.requests.length;
+
+  const identities = await reader.readDisplayOrderIdentities();
+
+  assert.equal(identities.limited, false);
+  assert.equal(identities.sourceRecordCount, expectedRecords);
+  assert.equal(identities.length, expectedRecords);
+  assert.equal(source.requests.length - requestsBefore, kinds.length);
+  for (let index = 0; index < identities.length; index += 1) {
+    const identity = identities.readEntity(index, {});
+    assert.equal(typeof identity.handle, "bigint");
+    assert.equal(typeof identity.ownerHandle, "bigint");
+  }
+
+  const requestsBeforeLimit = source.requests.length;
+  const limited = await reader.readDisplayOrderIdentities({
+    maximumRecords: 1,
+  });
+  assert.equal(limited.limited, true);
+  assert.equal(limited.length, 0);
+  assert.equal(source.requests.length, requestsBeforeLimit);
 });
 
 test("rejects a non-contiguous draw-order range", async () => {

@@ -16,6 +16,7 @@ import {
   rectIsContained,
   viewportZoomFromStatus,
   WINDOWS_UI_CLEANUP_OPTIONS,
+  WINDOWS_UI_COMPANION_EXTENSION_ID,
   WINDOWS_UI_EXTENSION_ID,
 } from "./qualify-windows-vscode-ui.mjs";
 
@@ -43,26 +44,29 @@ test("reads only a positive leading viewport zoom status", () => {
 
 test("parses only the bounded Windows UI qualification inputs", () => {
   const options = parseWindowsUiArguments([
-    "--adapter",
-    "./adapter.exe",
     "--drawing",
     "./drawing.dwg",
+    "--companion-vsix",
+    "./companion.vsix",
     "--vsix",
     "./viewer.vsix",
     "--output-dir",
     "./evidence",
   ]);
-  assert.equal(options.adapterPath, path.resolve("./adapter.exe"));
   assert.equal(options.drawingPath, path.resolve("./drawing.dwg"));
+  assert.equal(
+    options.companionVsixPath,
+    path.resolve("./companion.vsix"),
+  );
   assert.equal(options.vsixPath, path.resolve("./viewer.vsix"));
   assert.equal(options.outputDirectory, path.resolve("./evidence"));
   assert.throws(
     () =>
       parseWindowsUiArguments([
-        "--adapter",
-        "./adapter.exe",
         "--drawing",
         "./drawing.dwg",
+        "--companion-vsix",
+        "./companion.vsix",
         "--vsix",
         "./viewer.vsix",
         "--output-dir",
@@ -71,6 +75,10 @@ test("parses only the bounded Windows UI qualification inputs", () => {
         "value",
       ]),
     /unsupported option/u,
+  );
+  assert.equal(
+    WINDOWS_UI_COMPANION_EXTENSION_ID,
+    "menaje.dwg-viewer-libredwg",
   );
 });
 

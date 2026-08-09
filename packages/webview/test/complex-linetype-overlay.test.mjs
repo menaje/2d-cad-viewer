@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   collectComplexLinetypeSegments,
+  ComplexLinetypeOverlay,
   VERTEX_STRIDE,
 } from "../src/complex-linetype-overlay.mjs";
 import { GpuLineBatchKind } from "../src/scene-cache.mjs";
+import { identityMat4 } from "../src/math.mjs";
 
 function vertices(style = 3 << 5) {
   const buffer = new ArrayBuffer(VERTEX_STRIDE * 2);
@@ -113,4 +115,72 @@ test("resolves ByLayer complex patterns and enforces the source cap", () => {
     maximumSegments: 1,
   });
   assert.equal(byLayer.sourceSegments, 1);
+});
+
+test("uses the viewport paper-space scale for complex linetypes", () => {
+  const context = {
+    save() {},
+    restore() {},
+    translate() {},
+    rotate() {},
+    scale() {},
+    beginPath() {},
+    moveTo() {},
+    lineTo() {},
+    stroke() {},
+    clearRect() {},
+    setTransform() {},
+  };
+  const canvas = {
+    width: 200,
+    height: 100,
+    getContext(name) {
+      return name === "2d" ? context : null;
+    },
+  };
+  const matrices = new Float64Array(32);
+  matrices.set(identityMat4(), 0);
+  matrices.set(identityMat4(), 16);
+  const overlay = new ComplexLinetypeOverlay(canvas, {
+    vertices: vertices(),
+    batches: [batch],
+    linetypes: [complex],
+    textStyles: [],
+    layers: [{ color: (2 << 30) | 7, linetype: "Continuous" }],
+    instanceGraph: {
+      modelInstances: {
+        data: matrices,
+        visibilityRows: new Uint32Array([0, 1]),
+        count: 2,
+      },
+      instancesByBlock: new Map(),
+      layerVisibilityRows: [
+        new Uint8Array([1]),
+        new Uint8Array([1]),
+      ],
+      linetypeScalesByVisibilityRow: new Float64Array([1, 5]),
+    },
+    glyphCache: {
+      getGlyph() {
+        return {
+          vertices: new Float64Array([0, 0, 1, 0]),
+          segmentCount: 1,
+          advance: 1,
+        };
+      },
+    },
+    minimumPixelHeight: 0,
+  });
+
+  const metrics = overlay.redraw(
+    {
+      origin: [105, 200, 0],
+      worldWidth: 20,
+      worldHeight: 10,
+    },
+    [true],
+  );
+
+  assert.equal(metrics.visibleSegments, 2);
+  assert.equal(metrics.symbols, 3);
 });

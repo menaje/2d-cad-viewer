@@ -15,6 +15,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import {
   createDeterministicTarGzip,
+  GPL_3_0_SHA256,
   licenseExtractionArguments,
   LIBREDWG_SOURCE_SHA256,
   LIBREDWG_VERSION,
@@ -35,6 +36,21 @@ test("pins the unmodified official MPL text and separate project notice", async 
     MPL_2_0_SHA256,
   );
   assert.match(notice, /Copyright 2026 dwg-viewer contributors/u);
+});
+
+test("pins the unmodified GPLv3 text conveyed with LibreDWG", async () => {
+  const license = await readFile(
+    path.join(
+      path.resolve(import.meta.dirname, "..", ".."),
+      "apps",
+      "vscode-libredwg-adapter",
+      "LICENSE.txt",
+    ),
+  );
+  assert.equal(
+    createHash("sha256").update(license).digest("hex"),
+    GPL_3_0_SHA256,
+  );
 });
 
 test("creates a deterministic archive with fixed paths and executable modes", async (context) => {
@@ -284,5 +300,61 @@ test("normalizes legacy inspection text before corpus metrics", async () => {
   assert.match(
     adapterSource,
     /text_include \(summary, source\);/u,
+  );
+});
+
+test("stores SOLID quadrilaterals in perimeter order", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+  const mapping = sceneCacheSource.match(
+    /AutoCAD records the third SOLID corner[\s\S]*?for \(corner_index = 0; corner_index < 4; corner_index\+\+\)/u,
+  );
+
+  assert.ok(mapping, "SOLID corner mapping is missing");
+  assert.match(mapping[0], /corners\[2\]\[0\] = solid->corner4\.x;/u);
+  assert.match(mapping[0], /corners\[2\]\[1\] = solid->corner4\.y;/u);
+  assert.match(mapping[0], /corners\[3\]\[0\] = solid->corner3\.x;/u);
+  assert.match(mapping[0], /corners\[3\]\[1\] = solid->corner3\.y;/u);
+});
+
+test("uses denser bounded chords for HATCH curves without bloating standalone previews", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /#define MAX_CIRCULAR_SEGMENTS 16u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /#define MAX_HATCH_CIRCULAR_SEGMENTS 64u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /#define HATCH_SPLINE_SEGMENTS_PER_SPAN 8u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /iterate_hatch_polyline_path[\s\S]*?hatch_bulge_segment_count \(bulge\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /iterate_hatch_edge[\s\S]*?hatch_curve_segment_count \(sweep\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /read_hatch_fit_sampling[\s\S]*?HATCH_SPLINE_SEGMENTS_PER_SPAN/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /evaluate_hatch_fit_boundary[\s\S]*?start_tangent_basis[\s\S]*?end_tangent_basis/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /hatch_fit_explicit_tangent \([\s\S]*?segment->start_tangent[\s\S]*?segment->end_tangent/u,
   );
 });

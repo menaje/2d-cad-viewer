@@ -4,7 +4,11 @@ export interface WebviewHtmlOptions {
   stylesUri: string;
   scriptUri: string;
   locale?: string;
+  topToolbarLabels?: MenuLabelMode;
+  leftToolbarLabels?: MenuLabelMode;
 }
+
+export type MenuLabelMode = "hover" | "icons";
 
 function normalizeWebviewLocale(value: string | undefined): string {
   if (
@@ -22,6 +26,12 @@ function normalizeWebviewLocale(value: string | undefined): string {
   }
 }
 
+function normalizeMenuLabelMode(
+  value: MenuLabelMode | undefined,
+): MenuLabelMode {
+  return value === "icons" ? "icons" : "hover";
+}
+
 export function renderWebviewHtml(
   template: string,
   {
@@ -30,6 +40,8 @@ export function renderWebviewHtml(
     stylesUri,
     scriptUri,
     locale,
+    topToolbarLabels,
+    leftToolbarLabels,
   }: WebviewHtmlOptions,
 ): string {
   if (!/^[A-Za-z0-9_-]{16,}$/.test(nonce)) {
@@ -57,9 +69,15 @@ export function renderWebviewHtml(
     /<html\b[^>]*>/iu,
     `<html lang="${resolvedLocale}" data-locale="${resolvedLocale}">`,
   );
+  const resolvedTopToolbarLabels = normalizeMenuLabelMode(
+    topToolbarLabels,
+  );
+  const resolvedLeftToolbarLabels = normalizeMenuLabelMode(
+    leftToolbarLabels,
+  );
   const withHost = withLocale.replace(
     "<body>",
-    '<body data-host="vscode">',
+    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}">`,
   );
   const withStyles = withHost.replace(
     /<link\s+rel=["']stylesheet["']\s+href=["'][^"']+["']\s*\/?>/iu,

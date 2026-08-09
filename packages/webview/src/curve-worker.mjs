@@ -25,6 +25,9 @@ function viewKey(view) {
 }
 
 function instanceGraphForView(state, view) {
+  if (state.external) {
+    return state.modelInstanceGraph;
+  }
   const key = viewKey(view);
   if (state.instanceGraphKey === key) {
     return state.instanceGraph;
@@ -104,6 +107,7 @@ self.addEventListener("message", async (event) => {
       maskOrder = null,
       view = null,
       metadata,
+      externalInstanceGraph = null,
     } = event.data;
     messageSource = hostSource
       ? createWorkerHostRangeSource(hostSource)
@@ -131,12 +135,14 @@ self.addEventListener("message", async (event) => {
       layouts,
     } = metadata;
     const lineTypes = layerLinetypeCodes(layers, linetypes);
-    const modelInstanceGraph = buildInstanceGraph(blocks, inserts, {
-      layers,
-      maskOrder,
-      insertClips,
-      layerLinetypeCodes: lineTypes,
-    });
+    const modelInstanceGraph =
+      externalInstanceGraph ??
+      buildInstanceGraph(blocks, inserts, {
+        layers,
+        maskOrder,
+        insertClips,
+        layerLinetypeCodes: lineTypes,
+      });
     curveState = {
       source,
       layers,
@@ -149,6 +155,7 @@ self.addEventListener("message", async (event) => {
       instanceGraphKey: "model",
       instanceGraph: modelInstanceGraph,
       maskOrder,
+      external: Boolean(externalInstanceGraph),
     };
     const refinement = renderRefinement(curveState, camera, view);
     self.postMessage(

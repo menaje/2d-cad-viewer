@@ -28,6 +28,31 @@ const PATH_FLAG_SELF_INTERSECTING = 64;
 const PATH_FLAG_DUPLICATE = 256;
 const GPU_STYLE_INVISIBLE = 1 << 16;
 
+export const HatchGradientKind = Object.freeze({
+  None: 0,
+  Linear: 1,
+  Cylinder: 2,
+  InverseCylinder: 3,
+  Spherical: 4,
+  Hemispherical: 5,
+  Curved: 6,
+  InverseSpherical: 7,
+  InverseHemispherical: 8,
+  InverseCurved: 9,
+});
+
+const HATCH_GRADIENT_KINDS = new Map([
+  ["LINEAR", HatchGradientKind.Linear],
+  ["CYLINDER", HatchGradientKind.Cylinder],
+  ["INVCYLINDER", HatchGradientKind.InverseCylinder],
+  ["SPHERICAL", HatchGradientKind.Spherical],
+  ["HEMISPHERICAL", HatchGradientKind.Hemispherical],
+  ["CURVED", HatchGradientKind.Curved],
+  ["INVSPHERICAL", HatchGradientKind.InverseSpherical],
+  ["INVHEMISPHERICAL", HatchGradientKind.InverseHemispherical],
+  ["INVCURVED", HatchGradientKind.InverseCurved],
+]);
+
 function clamp01(value) {
   return Math.min(1, Math.max(0, value));
 }
@@ -347,8 +372,9 @@ function classifyOwner(entity, blocks, instanceGraph, blockIndexByHandle) {
 }
 
 class PackedBatchBuilder {
-  constructor(owner, firstPoint) {
+  constructor(owner, firstPoint, gradient) {
     this.owner = owner;
+    this.gradient = gradient;
     this.origin = [...firstPoint];
     this.buffer = new ArrayBuffer(INITIAL_BATCH_BYTES);
     this.view = new DataView(this.buffer);
@@ -448,14 +474,18 @@ class FillMeshBuilder {
     );
   }
 
-  writeTriangle(owner, points, attributes, handle) {
+  writeTriangle(owner, points, attributes, handle, gradient = null) {
     let group = this.groups.get(owner.key);
     if (!group) {
       group = { owner, batches: [], active: null };
       this.groups.set(owner.key, group);
     }
-    if (!group.active || !group.active.canAccept(points)) {
-      group.active = new PackedBatchBuilder(owner, points[0]);
+    if (
+      !group.active ||
+      group.active.gradient !== gradient ||
+      !group.active.canAccept(points)
+    ) {
+      group.active = new PackedBatchBuilder(owner, points[0], gradient);
       group.batches.push(group.active);
     }
     group.active.writeTriangle(points, attributes, handle);
@@ -491,6 +521,7 @@ class FillMeshBuilder {
               max: Object.freeze([...builder.bounds.max]),
             }),
             maximumPositionError: builder.maximumPositionError,
+            gradient: builder.gradient,
           }),
         );
         for (const range of builder.identityRanges) {
@@ -527,32 +558,134 @@ class FillMeshBuilder {
   }
 }
 
-function gradientRange(rings, angle) {
+function gradientFrame(rings, axes, angle, name, shift) {
   const cosine = Math.cos(angle);
   const sine = Math.sin(angle);
-  let minimum = Number.POSITIVE_INFINITY;
-  let maximum = Number.NEGATIVE_INFINITY;
+  let alongMinimum = Number.POSITIVE_INFINITY;
+  let alongMaximum = Number.NEGATIVE_INFINITY;
+  let acrossMinimum = Number.POSITIVE_INFINITY;
+  let acrossMaximum = Number.NEGATIVE_INFINITY;
   for (const ring of rings) {
     for (let index = 0; index < ring.coordinates.length; index += 2) {
-      const value =
-        ring.coordinates[index] * cosine +
-        ring.coordinates[index + 1] * sine;
-      minimum = Math.min(minimum, value);
-      maximum = Math.max(maximum, value);
+      const first = ring.coordinates[index];
+      const second = ring.coordinates[index + 1];
+      const along = first * cosine + second * sine;
+      const across = -first * sine + second * cosine;
+      alongMinimum = Math.min(alongMinimum, along);
+      alongMaximum = Math.max(alongMaximum, along);
+      acrossMinimum = Math.min(acrossMinimum, across);
+      acrossMaximum = Math.max(acrossMaximum, across);
     }
   }
-  return { cosine, sine, minimum, maximum };
+  const alongAxis = [0, 0, 0];
+  const acrossAxis = [0, 0, 0];
+  alongAxis[axes[0]] = cosine;
+  alongAxis[axes[1]] = sine;
+  acrossAxis[axes[0]] = -sine;
+  acrossAxis[axes[1]] = cosine;
+  const normalizedName =
+    typeof name === "string" ? name.trim().toUpperCase() : "LINEAR";
+  return Object.freeze({
+    kind:
+      HATCH_GRADIENT_KINDS.get(normalizedName) ??
+      HatchGradientKind.Linear,
+    name:
+      HATCH_GRADIENT_KINDS.has(normalizedName)
+        ? normalizedName
+        : "LINEAR",
+    sourceName: normalizedName || "LINEAR",
+    alongAxis: Object.freeze(alongAxis),
+    acrossAxis: Object.freeze(acrossAxis),
+    alongRange: Object.freeze([alongMinimum, alongMaximum]),
+    acrossRange: Object.freeze([acrossMinimum, acrossMaximum]),
+    shift: clamp01(shift),
+  });
 }
 
-function gradientMix(point, axes, range, gradient) {
-  if (!gradient || range.maximum - range.minimum <= Number.EPSILON) {
+function maximumCornerDistance(center) {
+  return Math.max(
+    Math.hypot(center[0], center[1]),
+    Math.hypot(1 - center[0], center[1]),
+    Math.hypot(center[0], 1 - center[1]),
+    Math.hypot(1 - center[0], 1 - center[1]),
+  );
+}
+
+export function hatchGradientMix(point, frame) {
+  if (
+    !frame ||
+    frame.kind === HatchGradientKind.None ||
+    frame.alongRange[1] - frame.alongRange[0] <= Number.EPSILON
+  ) {
     return 0;
   }
-  const projected =
-    point[axes[0]] * range.cosine + point[axes[1]] * range.sine;
-  return clamp01(
-    (projected - range.minimum) / (range.maximum - range.minimum),
+  const along = point.reduce(
+    (total, coordinate, axis) =>
+      total + coordinate * frame.alongAxis[axis],
+    0,
   );
+  const across = point.reduce(
+    (total, coordinate, axis) =>
+      total + coordinate * frame.acrossAxis[axis],
+    0,
+  );
+  const u = clamp01(
+    (along - frame.alongRange[0]) /
+      (frame.alongRange[1] - frame.alongRange[0]),
+  );
+  const acrossSpan = frame.acrossRange[1] - frame.acrossRange[0];
+  const v =
+    acrossSpan <= Number.EPSILON
+      ? 0.5
+      : clamp01((across - frame.acrossRange[0]) / acrossSpan);
+  const centered = clamp01(frame.shift);
+  const center = [
+    0.25 + centered * 0.25,
+    0.25 + centered * 0.25,
+  ];
+  const cylinder = clamp01(
+    1 - Math.abs(u - center[0]) / Math.max(center[0], 1 - center[0]),
+  );
+  const spherical = clamp01(
+    1 -
+      Math.hypot(u - center[0], v - center[1]) /
+        maximumCornerDistance(center),
+  );
+  const hemisphereCenter = [
+    0.75 + centered * 0.25,
+    0.25 + centered * 0.25,
+  ];
+  const hemispherical = clamp01(
+    1 -
+      Math.hypot(u - hemisphereCenter[0], v - hemisphereCenter[1]) /
+        maximumCornerDistance(hemisphereCenter),
+  );
+  const curvedCenter = 0.25 + centered * 0.25;
+  const curved = clamp01(
+    u + (0.5 - curvedCenter) - 0.5 * (2 * (v - curvedCenter)) ** 2,
+  );
+  switch (frame.kind) {
+    case HatchGradientKind.Linear:
+      return u;
+    case HatchGradientKind.Cylinder:
+      return cylinder;
+    case HatchGradientKind.InverseCylinder:
+      return 1 - cylinder;
+    case HatchGradientKind.Spherical:
+      return spherical;
+    case HatchGradientKind.Hemispherical:
+      return hemispherical;
+    case HatchGradientKind.Curved:
+      return curved;
+    case HatchGradientKind.InverseSpherical:
+      return 1 - spherical;
+    case HatchGradientKind.InverseHemispherical:
+      return 1 - hemispherical;
+    case HatchGradientKind.InverseCurved:
+      return 1 - curved;
+    default:
+      return u;
+  }
 }
 
 export function buildHatchFillMesh(
@@ -605,6 +738,7 @@ export function buildHatchFillMesh(
     batches: 0,
     maximumDeviation: 0,
     maximumPositionError: 0,
+    unsupportedGradientNames: 0,
     gpuLimitReached: false,
   };
 
@@ -664,7 +798,18 @@ export function buildHatchFillMesh(
     classifyRingNesting(rings);
     const groups = fillGroups(rings, entity.style);
     const colors = hatchColors(source, entity, colorTarget);
-    const range = gradientRange(rings, entity.gradientAngle);
+    const gradient = colors.gradient
+      ? gradientFrame(
+          rings,
+          axes,
+          entity.gradientAngle,
+          source.readGradientName?.(entityIndex),
+          entity.gradientShift,
+        )
+      : null;
+    if (gradient && gradient.sourceName !== gradient.name) {
+      metrics.unsupportedGradientNames += 1;
+    }
     const style = encodeMaskBucket(
       entity.commonFlags & 1 ? GPU_STYLE_INVISIBLE : 0,
       maskBucketFor(maskOrder, entity.ownerHandle, entity.handle),
@@ -713,12 +858,9 @@ export function buildHatchFillMesh(
           const flatIndex = triangleIndices[triangle + corner];
           const sourceIndex = flattened.sourceIndices[flatIndex];
           source.readVertex(sourceIndex, pointTargets[corner]);
-          mixes[corner] = gradientMix(
-            pointTargets[corner],
-            axes,
-            range,
-            colors.gradient,
-          );
+          mixes[corner] = gradient
+            ? hatchGradientMix(pointTargets[corner], gradient)
+            : 0;
         }
         mesh.writeTriangle(
           owner,
@@ -731,6 +873,7 @@ export function buildHatchFillMesh(
             style,
           },
           entity.handle,
+          gradient,
         );
         entityTriangles += 1;
         metrics.triangles += 1;

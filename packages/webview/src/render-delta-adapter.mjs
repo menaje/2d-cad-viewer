@@ -1309,11 +1309,23 @@ export class DwgRenderDeltaAdapter {
     const textsByOperation = new Map();
     const transformsByOperation = new Map();
     const stylesByOperation = new Map();
+    const operationsById = new Map(
+      delta.operations.map((operation) => [
+        operation.operationId,
+        operation,
+      ]),
+    );
     try {
       for (const [
         operationId,
         packetOperation,
       ] of packetOperations) {
+        const operation = operationsById.get(operationId);
+        if (!operation) {
+          throw new TypeError(
+            "DWG render delta packet operation is unavailable",
+          );
+        }
         const byRenderId = new Map();
         for (const [index, line] of packetOperation.lines.entries()) {
           const entry = this.#own(
@@ -1349,6 +1361,9 @@ export class DwgRenderDeltaAdapter {
                 batch: fill.batch,
                 vertices: fill.vertices,
                 instanceIndices: fill.instanceIndices,
+                entityHandle: identities.get(
+                  logicalKey(operation.layerId, fill.renderId),
+                ).handle,
               }),
               "DWG renderer stageRenderDeltaFill",
             ),
@@ -1373,6 +1388,9 @@ export class DwgRenderDeltaAdapter {
                 batch: point.batch,
                 vertices: point.vertices,
                 instanceIndices: point.instanceIndices,
+                entityHandle: identities.get(
+                  logicalKey(operation.layerId, point.renderId),
+                ).handle,
               }),
               "DWG renderer stageRenderDeltaPoint",
             ),

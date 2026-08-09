@@ -9,6 +9,7 @@ import {
   appendRenderIdentityRange,
   packRenderIdentityRanges,
 } from "./render-identity-ranges.mjs";
+import { buildWidePolylineGeometry } from "./wide-polyline.mjs";
 
 export const PRIMITIVE_VERTEX_STRIDE = 32;
 export const MAX_POINT_GPU_BYTES = 8 * 1024 * 1024;
@@ -277,6 +278,49 @@ function requireBudget(value, minimum, label) {
   }
 }
 
+function writePackedPrimitives(
+  builder,
+  owner,
+  points,
+  verticesPerPrimitive,
+  attributes,
+  handle,
+) {
+  if (
+    points.length === 0 ||
+    points.length % verticesPerPrimitive !== 0 ||
+    !builder.canWrite(points.length)
+  ) {
+    return false;
+  }
+  const maximumChunkVertices =
+    Math.floor(MAX_BATCH_VERTICES / verticesPerPrimitive) *
+    verticesPerPrimitive;
+  for (
+    let firstVertex = 0;
+    firstVertex < points.length;
+    firstVertex += maximumChunkVertices
+  ) {
+    const chunk = points.slice(
+      firstVertex,
+      Math.min(firstVertex + maximumChunkVertices, points.length),
+    );
+    if (!builder.write(owner, chunk, attributes, handle)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function handleWords(handles) {
+  const words = new Uint32Array(handles.length * 2);
+  for (let index = 0; index < handles.length; index += 1) {
+    words[index * 2] = Number(handles[index] & 0xffffffffn);
+    words[index * 2 + 1] = Number(handles[index] >> 32n);
+  }
+  return words;
+}
+
 function pointAttributes(entity, maskOrder) {
   const style = encodeMaskBucket(
     (entity.displayMode & 0xffff) |
@@ -363,6 +407,7 @@ export function buildPrimitiveMeshes(
     maximumSolidOutlineGpuBytes = MAX_SOLID_OUTLINE_GPU_BYTES,
     maximumWipeoutMaskGpuBytes = MAX_WIPEOUT_MASK_GPU_BYTES,
     wipeoutFrame = null,
+    fillMode = true,
     maskOrder = null,
   } = {},
 ) {
@@ -375,10 +420,14 @@ export function buildPrimitiveMeshes(
     typeof source.faces.readEntity !== "function" ||
     !source?.wipeouts ||
     typeof source.wipeouts.readEntity !== "function" ||
-    typeof source.wipeouts.readClipVertex !== "function"
+    typeof source.wipeouts.readClipVertex !== "function" ||
+    !source?.polylines ||
+    typeof source.polylines.readEntity !== "function" ||
+    !source?.polylineVertices ||
+    typeof source.polylineVertices.readVertex !== "function"
   ) {
     throw new TypeError(
-      "primitive mesh builder requires POINT, SOLID, 3DFACE and WIPEOUT source tables",
+      "primitive mesh builder requires POINT, SOLID, 3DFACE, WIPEOUT and polyline source tables",
     );
   }
   if (
@@ -386,6 +435,9 @@ export function buildPrimitiveMeshes(
     (!Number.isInteger(wipeoutFrame) || wipeoutFrame < 0 || wipeoutFrame > 2)
   ) {
     throw new RangeError("WIPEOUT frame setting must be null, 0, 1 or 2");
+  }
+  if (typeof fillMode !== "boolean") {
+    throw new TypeError("drawing FILLMODE must be a boolean");
   }
   requireBudget(
     maximumPointGpuBytes,
@@ -442,6 +494,8 @@ export function buildPrimitiveMeshes(
       [0, 0, 0],
     ],
   };
+  const polyline = { normal: [0, 0, 1] };
+  const lineReplacementHandles = [];
   const wipeout = {
     insertionPoint: [0, 0, 0],
     uVector: [0, 0, 0],
@@ -486,6 +540,17 @@ export function buildPrimitiveMeshes(
     sourceSolids: source.solids.length,
     renderedFilledSolids: 0,
     renderedOutlineSolids: 0,
+    sourcePolylines: source.polylines.length,
+    sourceWidePolylines: 0,
+    renderedFilledWidePolylines: 0,
+    renderedOutlineWidePolylines: 0,
+    mixedWidthPolylines: 0,
+    skippedInvalidWidePolylines: 0,
+    widePolylineFillVertices: 0,
+    widePolylineOutlineVertices: 0,
+    widePolylineFillGpuBytes: 0,
+    widePolylineOutlineGpuBytes: 0,
+    widePolylineGpuLimitReached: false,
     sourceFaces: source.faces.length,
     renderedFaces: 0,
     renderedFaceEdges: 0,
@@ -636,6 +701,67 @@ export function buildPrimitiveMeshes(
     }
     if (rendered) {
       metrics.renderedOutlineSolids += 1;
+    }
+  }
+
+  for (let index = 0; index < source.polylines.length; index += 1) {
+    source.polylines.readEntity(index, polyline);
+    if (polyline.polylineKind !== 1 && polyline.polylineKind !== 2) {
+      continue;
+    }
+    const geometry = buildWidePolylineGeometry(source, polyline, {
+      fillMode,
+    });
+    if (!geometry) {
+      metrics.skippedInvalidWidePolylines += 1;
+      continue;
+    }
+    const points = fillMode
+      ? geometry.fillVertices
+      : geometry.outlineVertices;
+    if (points.length === 0) {
+      continue;
+    }
+    metrics.sourceWidePolylines += 1;
+    if (geometry.mixedWidth) {
+      metrics.mixedWidthPolylines += 1;
+    }
+    const owner = classifyOwner(
+      polyline,
+      blocks,
+      instanceGraph,
+      blockIndexByHandle,
+    );
+    if (!owner) {
+      metrics.skippedOwners += 1;
+      continue;
+    }
+    const mesh = fillMode ? solidFillMesh : surfaceOutlineMesh;
+    const attributes = fillMode
+      ? solidFillAttributes(polyline, maskOrder)
+      : solidOutlineAttributes(polyline, maskOrder);
+    if (
+      !writePackedPrimitives(
+        mesh,
+        owner,
+        points,
+        fillMode ? 3 : 2,
+        attributes,
+        polyline.handle,
+      )
+    ) {
+      metrics.widePolylineGpuLimitReached = true;
+      continue;
+    }
+    if (fillMode) {
+      metrics.renderedFilledWidePolylines += 1;
+      metrics.widePolylineFillVertices += points.length;
+    } else {
+      metrics.renderedOutlineWidePolylines += 1;
+      metrics.widePolylineOutlineVertices += points.length;
+    }
+    if (geometry.allDrawableEdgesWide) {
+      lineReplacementHandles.push(polyline.handle);
     }
   }
 
@@ -856,6 +982,10 @@ export function buildPrimitiveMeshes(
     metrics.wipeoutOutlineVertices * PRIMITIVE_VERTEX_STRIDE;
   metrics.wipeoutMaskVertices = wipeoutMasks.vertices.vertexCount;
   metrics.wipeoutMaskGpuBytes = wipeoutMasks.vertices.byteLength;
+  metrics.widePolylineFillGpuBytes =
+    metrics.widePolylineFillVertices * PRIMITIVE_VERTEX_STRIDE;
+  metrics.widePolylineOutlineGpuBytes =
+    metrics.widePolylineOutlineVertices * PRIMITIVE_VERTEX_STRIDE;
   metrics.surfaceOutlineGpuBytes = solidOutlines.vertices.byteLength;
   metrics.gpuBytes =
     metrics.pointGpuBytes +
@@ -873,6 +1003,7 @@ export function buildPrimitiveMeshes(
     solidFills,
     solidOutlines,
     wipeoutMasks,
+    lineReplacementHandleWords: handleWords(lineReplacementHandles),
     metrics: Object.freeze(metrics),
   });
 }

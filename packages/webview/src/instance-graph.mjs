@@ -468,6 +468,8 @@ export function buildInstanceGraph(
     layerLinetypeCodes = Object.freeze([]),
     rootContexts = null,
     layerVisibilityRows = null,
+    paperToModelScalesByVisibilityRow = null,
+    linetypeScalesByVisibilityRow = null,
   } = {},
 ) {
   const blockIndexByHandle = new Map(
@@ -504,6 +506,34 @@ export function buildInstanceGraph(
       : Object.freeze([
           new Uint8Array(layers.length).fill(1),
         ]);
+  const viewportLinetypeScales =
+    linetypeScalesByVisibilityRow === null
+      ? new Float64Array(visibilityRows.length).fill(1)
+      : Float64Array.from(linetypeScalesByVisibilityRow);
+  if (
+    viewportLinetypeScales.length !== visibilityRows.length ||
+    !viewportLinetypeScales.every(
+      (scale) => Number.isFinite(scale) && scale > 0,
+    )
+  ) {
+    throw new TypeError(
+      "viewport linetype scales must match the layer visibility rows",
+    );
+  }
+  const viewportPaperToModelScales =
+    paperToModelScalesByVisibilityRow === null
+      ? new Float64Array(visibilityRows.length).fill(1)
+      : Float64Array.from(paperToModelScalesByVisibilityRow);
+  if (
+    viewportPaperToModelScales.length !== visibilityRows.length ||
+    !viewportPaperToModelScales.every(
+      (scale) => Number.isFinite(scale) && scale > 0,
+    )
+  ) {
+    throw new TypeError(
+      "viewport paper-to-model scales must match the layer visibility rows",
+    );
+  }
   const diagnostics = {
     invalidOwner: 0,
     invalidTarget: 0,
@@ -965,6 +995,8 @@ export function buildInstanceGraph(
     rootInstances: modelInstances,
     clipNodes: Object.freeze(clipNodes),
     layerVisibilityRows: visibilityRows,
+    paperToModelScalesByVisibilityRow: viewportPaperToModelScales,
+    linetypeScalesByVisibilityRow: viewportLinetypeScales,
     instanceCount,
     diagnostics: Object.freeze(diagnostics),
     layerZeroIndex:

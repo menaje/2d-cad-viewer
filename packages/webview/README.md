@@ -157,10 +157,13 @@ built-in languages, template keys, or runtime shell keys diverge.
   current on-screen size and upgrades only after a meaningful zoom. IMAGE clip
   pixels are converted from their saved top-origin Y convention before
   placement so cropped rasters stay aligned with CAD geometry.
-- Remaps child layers to root XREF-dependent names and renders external
-  overview/detail lines and source text without expanding a full scene graph.
+- Remaps child layers and linetypes to root XREF-dependent definitions and
+  renders external overview/detail lines, HATCH fills and patterns,
+  POINT/SOLID/3DFACE primitives, stable-view curve refinement and source text
+  without expanding a full scene graph.
 - Serializes external first-frame loads and caps aggregate external overview
-  source, overview GPU and detail GPU data at 32 MiB each.
+  source, overview GPU and detail GPU data at 32 MiB each. Deferred external
+  fill, primitive and refined-curve GPU data has a separate 64 MiB cap.
 - Stores instance transforms in packed `Float64Array` collections.
 - Rebases world coordinates around the camera before WebGL2 `f32` upload.
 - Renders overview lines with batched, instanced draw calls.
@@ -234,11 +237,18 @@ built-in languages, template keys, or runtime shell keys diverge.
   `layout-names.txt` map so native ZIP tools retain arbitrary Unicode layout
   labels across macOS, Windows and Linux.
 - Displays bounded first-pass chords for arcs, circles, ellipses, polyline
-  bulges, NURBS splines and HATCH boundaries emitted by the converter.
+  bulges, NURBS splines and HATCH boundaries emitted by the converter. HATCH
+  curves use their own denser 64-segment circular and eight-per-span spline
+  limits without increasing ordinary first-frame curve density; fit-point-only
+  HATCH splines are interpolated through their points with saved endpoint
+  tangents and periodic closure instead of displaying their control polygon.
 - Starts a persistent worker after the first line frame and range-reads the
   v1.6/v1.7 HATCH source sections independently of the first frame.
 - Triangulates solid and gradient HATCH rings with pinned Earcut 3.2.3, keeps
-  holes and source HATCH styles, and draws fills before boundary lines.
+  holes and source HATCH styles, and draws fills before boundary lines. Named
+  LINEAR, CYLINDER, SPHERICAL, HEMISPHERICAL and CURVED gradients plus their
+  inverse variants are evaluated per fragment from the saved angle and shift;
+  unknown names fall back to LINEAR and remain visible in diagnostics.
 - Retains shared block instances and layer visibility for fill geometry
   without expanding a whole-drawing scene graph.
 - Caps HATCH fill GPU vertices at 32 MiB, triangles at 65,536 per entity,
@@ -301,9 +311,11 @@ built-in languages, template keys, or runtime shell keys diverge.
 - Renders explicit top-to-bottom MTEXT and by-style vertical flow as upright
   glyphs descending within right-to-left logical columns. A by-style record
   remains horizontal unless its referenced text style is actually vertical.
-- Maps single-line TEXT from its stored OCS plane, retains the decoder-adjusted
-  insertion point for left/center/right/middle and vertical justifications,
-  and uses the two endpoint span only for Align/Fit.
+- Maps single-line TEXT, ATTRIB and ATTDEF from their stored OCS plane. Plain
+  left/baseline text uses the insertion point; center, right, middle and
+  vertical justification use the alignment point plus resolved SHX or
+  fallback-font glyph metrics. Align/Fit retain their two-point span and
+  direction, while multiline attributes use their embedded MTEXT basis.
 - Separates strict EUC-KR from CP949/UHC, encodes all 11,172 modern Hangul
   syllables plus the KS X 1001 symbol and Hanja rows as Johab/CP1361, and
   probes actual glyph presence instead of guessing from BigFont filenames.
@@ -312,11 +324,13 @@ built-in languages, template keys, or runtime shell keys diverge.
 
 The current page is an engine verification harness, not the final VS Code
 extension UI. At a stable 4× or higher zoom, a dedicated worker now refines
-ARC, CIRCLE, ELLIPSE, polyline-bulge and valid NURBS geometry to a 0.5 px
-screen-error contract without changing the bounded first frame. External
-image baselines for every TEXT OCS/justification combination, lossless
-analytic HATCH boundary topology and further real-world Korean SHX corpus
-expansion remain follow-up work.
+ARC, CIRCLE, ELLIPSE, polyline-bulge, control-point NURBS and fit-point-only
+SPLINE geometry to a 0.5 px screen-error contract without changing the bounded
+first frame. Fit-point interpolation distinguishes chord, centripetal and
+uniform knot spacing, honors stored endpoint tangents and closes periodic
+curves smoothly. External image baselines for every TEXT OCS/justification
+combination, lossless analytic HATCH boundary topology and further real-world
+Korean SHX corpus expansion remain follow-up work.
 
 ## Run
 

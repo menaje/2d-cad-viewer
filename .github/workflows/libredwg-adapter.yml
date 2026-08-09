@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "adapters/libredwg/**"
+      - "apps/vscode-libredwg-adapter/**"
       - "apps/vscode-extension/src/native-cache.ts"
       - "apps/vscode-extension/src/scene-cache-manager.ts"
       - "apps/vscode-extension/src/scene-engine.ts"
@@ -23,6 +24,7 @@ on:
   pull_request:
     paths:
       - "adapters/libredwg/**"
+      - "apps/vscode-libredwg-adapter/**"
       - "apps/vscode-extension/src/native-cache.ts"
       - "apps/vscode-extension/src/scene-cache-manager.ts"
       - "apps/vscode-extension/src/scene-engine.ts"
@@ -59,14 +61,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.12.0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
+          cache: pnpm
 
-      - uses: pnpm/action-setup@v4
-        if: runner.os == 'Windows'
-        with:
-          version: 11.12.0
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
 
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
@@ -163,11 +167,67 @@ jobs:
           sha256sum -c SHA256SUMS
           bin/libredwg-adapter.exe doctor
 
-      - name: Install locked host qualification dependencies
+      - name: Package and inspect non-Windows GPL companion
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          package_root=$(find "$RUNNER_TEMP/extracted" -mindepth 1 -maxdepth 1 -type d)
+          output="$RUNNER_TEMP/dwg-viewer-libredwg-$version-${{ matrix.target }}.vsix"
+          pnpm --dir apps/vscode-libredwg-adapter run prepare:package -- \
+            --package-root "$package_root" \
+            --target "${{ matrix.target }}"
+          pnpm --dir apps/vscode-libredwg-adapter exec vsce package \
+            --target "${{ matrix.target }}" \
+            --no-dependencies \
+            --out "$output"
+          unzip -Z1 "$output" | grep -Fxq \
+            "extension/native/${{ matrix.target }}/libredwg-adapter"
+          unzip -Z1 "$output" | grep -Fxq \
+            "extension/source/libredwg-0.14.tar.xz"
+          cmp \
+            <(unzip -p "$output" extension/LICENSE.txt) \
+            "$package_root/LICENSES/GPL-3.0-or-later.txt"
+
+      - name: Package and inspect Windows GPL companion
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          pnpm install --frozen-lockfile
+          $version = node -p "require('./package.json').version"
+          $packageRoot = Get-ChildItem `
+            -Path "$env:RUNNER_TEMP\extracted" `
+            -Directory | Select-Object -First 1
+          $output = Join-Path `
+            $env:RUNNER_TEMP `
+            "dwg-viewer-libredwg-$version-${{ matrix.target }}.vsix"
+          pnpm --dir apps/vscode-libredwg-adapter run prepare:package -- `
+            --package-root $packageRoot.FullName `
+            --target "${{ matrix.target }}"
+          pnpm --dir apps/vscode-libredwg-adapter exec vsce package `
+            --target "${{ matrix.target }}" `
+            --no-dependencies `
+            --out $output
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($output)
+          try {
+            $entries = @($archive.Entries | ForEach-Object FullName)
+            foreach ($required in @(
+              "extension/LICENSE.txt",
+              "extension/native/${{ matrix.target }}/libredwg-adapter.exe",
+              "extension/source/libredwg-0.14.tar.xz"
+            )) {
+              if ($entries -notcontains $required) {
+                throw "companion VSIX is missing $required"
+              }
+            }
+          } finally {
+            $archive.Dispose()
+          }
+
+      - name: Build the main VSIX for host qualification
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
           pnpm --filter dwg-viewer-vscode package:vsix
 
       - name: Create private Windows UNC qualification share
@@ -218,9 +278,12 @@ jobs:
           $vsixPath = Join-Path `
             $env:GITHUB_WORKSPACE `
             "apps\vscode-extension\dwg-viewer-vscode-$extensionVersion.vsix"
+          $companionVsixPath = Join-Path `
+            $env:RUNNER_TEMP `
+            "dwg-viewer-libredwg-$extensionVersion-${{ matrix.target }}.vsix"
           node scripts/qualify-windows-vscode-ui.mjs `
-            --adapter "$env:RUNNER_TEMP\libredwg-adapter.exe" `
             --drawing "$env:DWG_VIEWER_UI_DRAWING" `
+            --companion-vsix $companionVsixPath `
             --vsix $vsixPath `
             --output-dir "$env:RUNNER_TEMP\windows-vscode-ui-qualification"
 
@@ -253,6 +316,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: dwg-viewer-libredwg-${{ matrix.target }}
-          path: ${{ runner.temp }}/dwg-viewer-libredwg-${{ matrix.target }}.tar.gz
+          path: |
+            ${{ runner.temp }}/dwg-viewer-libredwg-${{ matrix.target }}.tar.gz
+            ${{ runner.temp }}/dwg-viewer-libredwg-*-${{ matrix.target }}.vsix
           archive: false
           if-no-files-found: error

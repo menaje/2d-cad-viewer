@@ -2,6 +2,12 @@ name: Release packages
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_marketplace:
+        description: Publish both extensions to the VS Code Marketplace as prereleases
+        required: true
+        type: boolean
+        default: false
   push:
     tags:
       - "v[0-9]*"
@@ -38,8 +44,9 @@ jobs:
         run: |
           repository_version=$(node -p "require('./package.json').version")
           extension_version=$(node -p "require('./apps/vscode-extension/package.json').version")
-          if [[ "$repository_version" != "$extension_version" ]]; then
-            echo "repository and extension versions differ" >&2
+          companion_version=$(node -p "require('./apps/vscode-libredwg-adapter/package.json').version")
+          if [[ "$repository_version" != "$extension_version" || "$repository_version" != "$companion_version" ]]; then
+            echo "repository, viewer, and companion extension versions differ" >&2
             exit 1
           fi
           if [[ "$GITHUB_REF" == refs/tags/* ]] && [[ "$GITHUB_REF_NAME" != "v$repository_version" ]]; then
@@ -94,6 +101,7 @@ jobs:
       - name: Upload VSIX
         uses: actions/upload-artifact@v7
         with:
+          name: dwg-viewer-vscode
           path: ${{ runner.temp }}/release/dwg-viewer-vscode-${{ steps.version.outputs.version }}.vsix
           archive: false
           if-no-files-found: error
@@ -119,9 +127,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.12.0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
+          cache: pnpm
+
+      - name: Install locked packaging dependencies
+        run: pnpm install --frozen-lockfile
 
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
@@ -217,17 +232,203 @@ jobs:
           sha256sum -c SHA256SUMS
           bin/libredwg-adapter.exe doctor
 
-      - name: Attest adapter provenance
+      - name: Build, reproduce, and inspect GPL companion VSIX
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          extension_version=$(node -p "require('./package.json').version")
+          package_root=$(find "$RUNNER_TEMP/extracted" -mindepth 1 -maxdepth 1 -type d)
+          companion_path="$RUNNER_TEMP/dwg-viewer-libredwg-$extension_version-${{ matrix.target }}.vsix"
+          repeated_path="$RUNNER_TEMP/dwg-viewer-libredwg-$extension_version-${{ matrix.target }}-repeated.vsix"
+          pnpm --dir apps/vscode-libredwg-adapter run prepare:package -- \
+            --package-root "$package_root" \
+            --target "${{ matrix.target }}"
+          pnpm --dir apps/vscode-libredwg-adapter exec vsce package \
+            --target "${{ matrix.target }}" \
+            --no-dependencies \
+            --out "$companion_path"
+          pnpm --dir apps/vscode-libredwg-adapter exec vsce package \
+            --target "${{ matrix.target }}" \
+            --no-dependencies \
+            --out "$repeated_path"
+          node scripts/normalize-vsix-archive.mjs \
+            "$companion_path" \
+            "$repeated_path"
+          cmp "$companion_path" "$repeated_path"
+          rm "$repeated_path"
+          unzip -Z1 "$companion_path" > "$RUNNER_TEMP/companion-vsix-files.txt"
+          grep -Fxq "extension/LICENSE.txt" "$RUNNER_TEMP/companion-vsix-files.txt"
+          grep -Fxq "extension/manifest.json" "$RUNNER_TEMP/companion-vsix-files.txt"
+          grep -Fxq "extension/SHA256SUMS" "$RUNNER_TEMP/companion-vsix-files.txt"
+          grep -Fxq \
+            "extension/native/${{ matrix.target }}/libredwg-adapter" \
+            "$RUNNER_TEMP/companion-vsix-files.txt"
+          grep -Fxq \
+            "extension/source/libredwg-0.14.tar.xz" \
+            "$RUNNER_TEMP/companion-vsix-files.txt"
+          grep -Fxq \
+            "extension/source/dwg-viewer/adapters/libredwg/prepare.sh" \
+            "$RUNNER_TEMP/companion-vsix-files.txt"
+          cmp \
+            <(unzip -p "$companion_path" extension/LICENSE.txt) \
+            "$package_root/LICENSES/GPL-3.0-or-later.txt"
+
+      - name: Build, reproduce, and inspect Windows GPL companion VSIX
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $extensionVersion = node -p "require('./package.json').version"
+          $packageRoot = Get-ChildItem `
+            -Path "$env:RUNNER_TEMP\extracted" `
+            -Directory | Select-Object -First 1
+          if (-not $packageRoot) {
+            throw "extracted adapter package root was not found"
+          }
+          $companionPath = Join-Path `
+            $env:RUNNER_TEMP `
+            "dwg-viewer-libredwg-$extensionVersion-${{ matrix.target }}.vsix"
+          $repeatedPath = Join-Path `
+            $env:RUNNER_TEMP `
+            "dwg-viewer-libredwg-$extensionVersion-${{ matrix.target }}-repeated.vsix"
+          pnpm --dir apps/vscode-libredwg-adapter run prepare:package -- `
+            --package-root $packageRoot.FullName `
+            --target "${{ matrix.target }}"
+          pnpm --dir apps/vscode-libredwg-adapter exec vsce package `
+            --target "${{ matrix.target }}" `
+            --no-dependencies `
+            --out $companionPath
+          pnpm --dir apps/vscode-libredwg-adapter exec vsce package `
+            --target "${{ matrix.target }}" `
+            --no-dependencies `
+            --out $repeatedPath
+          node scripts/normalize-vsix-archive.mjs `
+            $companionPath `
+            $repeatedPath
+          if ((Get-FileHash $companionPath -Algorithm SHA256).Hash -ne `
+              (Get-FileHash $repeatedPath -Algorithm SHA256).Hash) {
+            throw "companion VSIX is not reproducible"
+          }
+          Remove-Item $repeatedPath
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($companionPath)
+          try {
+            $entries = @($archive.Entries | ForEach-Object FullName)
+            foreach ($required in @(
+              "extension/LICENSE.txt",
+              "extension/manifest.json",
+              "extension/SHA256SUMS",
+              "extension/native/${{ matrix.target }}/libredwg-adapter.exe",
+              "extension/source/libredwg-0.14.tar.xz",
+              "extension/source/dwg-viewer/adapters/libredwg/prepare.sh"
+            )) {
+              if ($entries -notcontains $required) {
+                throw "companion VSIX is missing $required"
+              }
+            }
+            $licenseEntry = $archive.GetEntry("extension/LICENSE.txt")
+            $licenseStream = $licenseEntry.Open()
+            try {
+              $sha256 = [System.Security.Cryptography.SHA256]::Create()
+              $packagedLicenseHash = [Convert]::ToHexString(
+                $sha256.ComputeHash($licenseStream)
+              )
+            } finally {
+              $licenseStream.Dispose()
+            }
+            $sourceLicense = Join-Path `
+              $packageRoot.FullName `
+              "LICENSES\GPL-3.0-or-later.txt"
+            if ($packagedLicenseHash -ne `
+                (Get-FileHash $sourceLicense -Algorithm SHA256).Hash) {
+              throw "companion VSIX GPL text differs from the source package"
+            }
+          } finally {
+            $archive.Dispose()
+          }
+
+      - name: Attest adapter and companion provenance
         uses: actions/attest@v4
         with:
-          subject-path: ${{ runner.temp }}/dwg-viewer-libredwg-0.14-${{ matrix.target }}.tar.gz
+          subject-path: |
+            ${{ runner.temp }}/dwg-viewer-libredwg-0.14-${{ matrix.target }}.tar.gz
+            ${{ runner.temp }}/dwg-viewer-libredwg-*-${{ matrix.target }}.vsix
 
       - name: Upload adapter package
         uses: actions/upload-artifact@v7
         with:
+          name: dwg-viewer-libredwg-archive-${{ matrix.target }}
           path: ${{ runner.temp }}/dwg-viewer-libredwg-0.14-${{ matrix.target }}.tar.gz
           archive: false
           if-no-files-found: error
+
+      - name: Upload GPL companion VSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: dwg-viewer-libredwg-vsix-${{ matrix.target }}
+          path: ${{ runner.temp }}/dwg-viewer-libredwg-*-${{ matrix.target }}.vsix
+          archive: false
+          if-no-files-found: error
+
+  marketplace:
+    name: Optional Marketplace prerelease
+    needs:
+      - vsix
+      - adapter
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_marketplace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.12.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dwg-viewer-*
+          path: dist
+          merge-multiple: true
+
+      - name: Install locked publishing dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate explicit tag publication
+        id: version
+        shell: bash
+        run: |
+          release_version=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF" != "refs/tags/v$release_version" ]]; then
+            echo "Marketplace publication requires manually dispatching the matching v$release_version tag" >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "$release_version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GPL platform companions before the MPL viewer
+        shell: bash
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [[ -z "$VSCE_PAT" ]]; then
+            echo "VSCE_PAT is required for Marketplace publication" >&2
+            exit 1
+          fi
+          version="${{ steps.version.outputs.version }}"
+          for target in linux-x64 darwin-arm64 win32-x64; do
+            pnpm --dir apps/vscode-libredwg-adapter exec vsce publish \
+              --packagePath "$GITHUB_WORKSPACE/dist/dwg-viewer-libredwg-$version-$target.vsix" \
+              --pre-release \
+              --pat "$VSCE_PAT"
+          done
+          pnpm --dir apps/vscode-extension exec vsce publish \
+            --packagePath "$GITHUB_WORKSPACE/dist/dwg-viewer-vscode-$version.vsix" \
+            --pre-release \
+            --pat "$VSCE_PAT"
 
   assemble:
     name: Checksums and optional GitHub release
@@ -259,12 +460,18 @@ jobs:
             exit 1
           fi
           test -f "dist/dwg-viewer-vscode-$release_version.vsix"
+          test -f "dist/dwg-viewer-libredwg-$release_version-linux-x64.vsix"
+          test -f "dist/dwg-viewer-libredwg-$release_version-darwin-arm64.vsix"
+          test -f "dist/dwg-viewer-libredwg-$release_version-win32-x64.vsix"
           test -f "dist/dwg-viewer-libredwg-0.14-linux-x64.tar.gz"
           test -f "dist/dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz"
           test -f "dist/dwg-viewer-libredwg-0.14-win32-x64.tar.gz"
           cd dist
           sha256sum \
             "dwg-viewer-vscode-$release_version.vsix" \
+            "dwg-viewer-libredwg-$release_version-linux-x64.vsix" \
+            "dwg-viewer-libredwg-$release_version-darwin-arm64.vsix" \
+            "dwg-viewer-libredwg-$release_version-win32-x64.vsix" \
             "dwg-viewer-libredwg-0.14-linux-x64.tar.gz" \
             "dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz" \
             "dwg-viewer-libredwg-0.14-win32-x64.tar.gz" \
@@ -279,6 +486,7 @@ jobs:
       - name: Upload checksums
         uses: actions/upload-artifact@v7
         with:
+          name: dwg-viewer-checksums
           path: dist/SHA256SUMS
           archive: false
           if-no-files-found: error
@@ -293,12 +501,15 @@ jobs:
           printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
             "Prerelease: open, inspect, search, measure, and export DWG drawings directly in VS Code." \
             "Navigation supports click-drag, two-finger trackpad panning, stronger pinch zoom, compact icon tools with hover labels, and English or Korean controls selected from the VS Code environment." \
-            "Download the VSIX and the separate LibreDWG adapter for Linux x64, macOS arm64, or Windows x64." \
-            "The VSIX is MPL-2.0; the source-complete LibreDWG adapters are GPL-3.0-or-later and remain separate artifacts." \
+            "Marketplace installation adds the matching LibreDWG Engine companion automatically. For manual installation, install the main VSIX and the companion VSIX for Linux x64, macOS arm64, or Windows x64." \
+            "The main VSIX is MPL-2.0. Each separate GPL-3.0-or-later companion VSIX includes its executable's complete corresponding source and unmodified license texts." \
             "Verify SHA256SUMS and the GitHub artifact attestations before installation." \
             > "$release_notes"
           gh release create "$GITHUB_REF_NAME" \
             "dist/dwg-viewer-vscode-${{ steps.version.outputs.version }}.vsix" \
+            "dist/dwg-viewer-libredwg-${{ steps.version.outputs.version }}-linux-x64.vsix" \
+            "dist/dwg-viewer-libredwg-${{ steps.version.outputs.version }}-darwin-arm64.vsix" \
+            "dist/dwg-viewer-libredwg-${{ steps.version.outputs.version }}-win32-x64.vsix" \
             "dist/dwg-viewer-libredwg-0.14-linux-x64.tar.gz" \
             "dist/dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz" \
             "dist/dwg-viewer-libredwg-0.14-win32-x64.tar.gz" \

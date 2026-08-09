@@ -43,8 +43,11 @@ This is a deliberately partial conversion milestone:
 - valid SPLINE definitions use one segment for linear spans or two per
   non-empty curved knot span, capped at 256 segments per entity; malformed
   definitions fall back to bounded fit/control-point chords;
-- HATCH line, circular, elliptic, bulge and spline boundaries share those
-  chord rules and are capped at 65,536 segments per HATCH; reports expose
+- HATCH line, circular, elliptic, bulge and spline boundaries use a denser
+  bounded pass: circular curves and bulges use at most 64 segments per
+  revolution, curved spline spans use eight segments, and fit-point-only
+  boundary splines use a tangent-aware cubic interpolation with periodic
+  closure; one HATCH remains capped at 65,536 segments and reports expose
   rendered boundary segments and any capped entities;
 - bounded HATCH entity records retain pattern/gradient metadata, closed `f64`
   rings, gradient colors and seed points; rings are capped at 65,536 vertices
@@ -53,8 +56,8 @@ This is a deliberately partial conversion milestone:
   sequence in packed source sections; one HATCH is capped at 4,096 definition
   lines and 65,536 dash values, with global caps of 262,144 and 1,048,576;
 - POINT retains WCS location, normal, thickness, X-axis angle and drawing
-  `PDMODE`/`PDSIZE`; SOLID retains four OCS corners, normal, thickness and
-  drawing `FILLMODE`;
+  `PDMODE`/`PDSIZE`; SOLID retains four OCS corners in 1-2-4-3 perimeter
+  order, normal, thickness and drawing `FILLMODE`;
 - 3DFACE retains four WCS corners and all four invisible-edge bits; its current
   wireframe display emits only visible, non-degenerate edges;
 - WIPEOUT retains its image basis, display properties, exact rectangular or
@@ -88,7 +91,10 @@ This is a deliberately partial conversion milestone:
   stacked horizontal/diagonal fractions and tolerances. The Webview also
   applies bounded paragraph indents, left/center/right tab stops and upright
   top-to-bottom MTEXT flow. Single-line TEXT uses its OCS plane and
-  DWG-adjusted insertion point, applying endpoint width only to Align/Fit;
+  preserves both raw placement points so the Webview can apply measured
+  center/right/vertical justification, while endpoint width and direction are
+  reserved for Align/Fit. Multiline ATTRIB/ATTDEF records preserve their
+  embedded MTEXT insertion point and basis;
   external image baselines for every OCS/justification combination remain
   open in GitHub issues #5 and #7.
 
@@ -202,8 +208,11 @@ private delete-on-close native temporary files and non-inheritable handles.
 Its qualification also exercises cancellation plus drive, UNC, relative,
 Unicode, normalization, and case-insensitive paths on the Windows runner.
 
-The MPL-only VSIX never bundles this executable. The complete reviewed
-publication and verification procedure is in
+The MPL-only VSIX never bundles this executable. A separate, platform-specific
+GPL companion VSIX is staged only from this verified source-complete package;
+it keeps the executable, exact corresponding source, licenses, manifest and
+checksums together. The complete reviewed publication and verification
+procedure is in
 [`docs/distribution.md`](../../docs/distribution.md). This packaging policy is
 engineering guidance, not legal advice.
 
@@ -308,9 +317,9 @@ corners. `example_2018.dwg` also contains two polygonal WIPEOUT records with
 byte-identical between both engines. `2018/Dynblocks.dwg` matched at one
 solid and three pattern
 HATCHes, eight loops, 104 fill vertices and four definition lines, again with
-byte-identical pattern sections. `2004/HatchG.dwg` matched at two gradient
-HATCHes, two loops and 269 fill vertices. None of those fixtures reached a cap
-or skipped an invalid source record.
+byte-identical pattern sections. With the denser HATCH-only chord pass,
+`2004/HatchG.dwg` produces two gradient HATCHes, two loops and 1,064 fill
+vertices. It reaches neither a cap nor an invalid-source skip.
 
 The browser first-frame path opens the cache with eight range reads totaling
 5,001,837 bytes,

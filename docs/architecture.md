@@ -258,8 +258,11 @@ INSERT/XREF spatial-clip boundaries. The VS Code host resolves
 relative, drive, UNC and POSIX forms through bounded project-local search,
 persists explicit manual mappings, converts child caches serially and the
 Webview composes their shared line/text instances under the parent INSERT.
-Aggregate XREF overview source, overview GPU and detail GPU data are each
-capped at 32 MiB. Versions 1.14–1.17 add drawing display settings, named
+The same composed instance graph now drives child HATCH, primitive and
+stable-view exact-curve workers, with child layer and linetype indices remapped
+before upload. Aggregate XREF overview source, overview GPU and detail GPU data
+are each capped at 32 MiB; external deferred geometry has a separate 64 MiB GPU
+cap. Versions 1.14–1.17 add drawing display settings, named
 linetypes, saved model view and paper/model layout viewport state. Scene Cache
 v1.18 adds IMAGE/IMAGEDEF paths, placement bases and clip vertices without
 adding raster bytes to the cache or first-frame read. The host resolves only
@@ -693,7 +696,10 @@ segments per revolution. Valid splines use two segments per non-empty knot span
 with a 256-segment entity cap; malformed splines fall back to bounded fit-point
 or control-point chords. Approximation bits stay attached to the GPU vertices,
 and the source-precision records remain available for later view-adaptive
-high-zoom refinement. Batch-local position error is recorded as a conservative
+high-zoom refinement. That refinement evaluates valid NURBS data first and,
+when a drawing stores only fit data, constructs a bounded cubic interpolant
+using chord, square-root chord or uniform spacing, stored endpoint tangents and
+periodic closure. Batch-local position error is recorded as a conservative
 `f32` upper bound without a second geometry traversal.
 
 The v1.5 display slice extends the same path to HATCH boundaries. Each HATCH
@@ -703,6 +709,17 @@ edges all stay in the existing overview, Morton detail and byte-bounded cache
 pipeline. Reports count rendered boundary segments and capped HATCH entities.
 Solid, gradient and clipped pattern fills are intentionally left for a
 separate source-backed renderer.
+
+The current converter applies a denser bounded rule only to those HATCH
+boundaries: circular, elliptic and bulge curves use at most 64 chords per
+revolution, while curved spline knot spans use eight and remain capped at
+1,024 spline segments. A HATCH spline that contains fit points but lacks a
+valid control-point/knot definition uses a chord-parameterized cubic Hermite
+path, including stored endpoint tangents and periodic closure, rather than
+straight fit-point links. Ordinary first-frame curves keep the original
+16/two limits because their analytic source is refined after zoom settles.
+The public `2004/HatchG.dwg` fixture consequently retains 1,064 rather than
+269 HATCH ring vertices without reaching a per-entity or global cap.
 
 The v1.6 fill slice implements that separate path without changing the line
 first frame. After the overview is visible, a dedicated worker reopens the
@@ -714,6 +731,12 @@ batches and draw before boundary lines. Source planning is capped at 65,536
 vertices per HATCH and 1,048,576 globally; browser work is capped at 2,048
 loops and 65,536 triangles per entity and 32 MiB of GPU vertices overall.
 Opening another file terminates the previous worker.
+
+Gradient batches retain the named AutoCAD profile as a compact descriptor.
+The fill fragment shader evaluates LINEAR, CYLINDER, SPHERICAL,
+HEMISPHERICAL, CURVED and all inverse forms from HATCH-local coordinates,
+angle and shift, avoiding a profile-dependent tessellation increase. Unknown
+names use LINEAR while incrementing an explicit diagnostic counter.
 
 The v1.7 pattern slice retains the same worker and source buffers after fill
 initialization. Camera changes are debounced by 160 ms and regenerate pattern
@@ -739,8 +762,8 @@ block-instance metadata, reuses the instance graph including DIMENSION picture
 references,
 transfers only the packed display buffers and exits. POINT keeps WCS location
 and drawing `PDMODE`/`PDSIZE`;
-its shader draws bounded screen-space glyphs. SOLID keeps four OCS corners
-and drawing `FILLMODE`; the worker applies the arbitrary-axis transform and
+its shader draws bounded screen-space glyphs. SOLID keeps four OCS corners in
+1-2-4-3 perimeter order and drawing `FILLMODE`; the worker applies the arbitrary-axis transform and
 emits either fill triangles or three/four outline edges.
 
 The v1.9 3DFACE slice adds WCS corners and four source invisible-edge bits to

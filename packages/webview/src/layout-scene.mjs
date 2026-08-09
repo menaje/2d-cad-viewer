@@ -85,13 +85,23 @@ export function paperViewportForLayout(layout) {
   );
 }
 
-function visibilityKey(viewport) {
-  return [...new Set(viewport.frozenLayerIndices ?? [])]
+function visibilityKey(viewport, paperToModelScale, linetypeScale) {
+  const frozenLayers = [...new Set(viewport.frozenLayerIndices ?? [])]
     .sort((left, right) => left - right)
     .join(",");
+  return `${frozenLayers}|${paperToModelScale}|${linetypeScale}`;
 }
 
-export function buildLayoutRootPlan(blocks, layers, layout) {
+function viewportPaperToModelScale(viewport) {
+  return viewport.viewHeight / viewport.height;
+}
+
+export function buildLayoutRootPlan(
+  blocks,
+  layers,
+  layout,
+  { paperSpaceLinetypeScale = false } = {},
+) {
   if (
     !layout ||
     !Number.isInteger(layout.blockIndex) ||
@@ -104,7 +114,9 @@ export function buildLayoutRootPlan(blocks, layers, layout) {
     .map((block) => block.index);
   const allVisible = new Uint8Array(layers.length).fill(1);
   const layerVisibilityRows = [allVisible];
-  const visibilityRowByKey = new Map([["", 0]]);
+  const paperToModelScalesByVisibilityRow = [1];
+  const linetypeScalesByVisibilityRow = [1];
+  const visibilityRowByKey = new Map([["|1|1", 0]]);
   const rootContexts = [
     Object.freeze({
       blockIndex: layout.blockIndex,
@@ -117,15 +129,28 @@ export function buildLayoutRootPlan(blocks, layers, layout) {
     }),
   ];
   const paperViewport = paperViewportForLayout(layout);
+  const hasActiveViewportState = layout.viewports.some(
+    (viewport) => viewport !== paperViewport && viewport.id > 0,
+  );
   const modelViewports = layout.viewports.filter(
     (viewport) =>
       viewport !== paperViewport &&
+      (viewport.flags & 1) === 0 &&
+      (!hasActiveViewportState || viewport.on !== 0) &&
       viewport.width > 0 &&
       viewport.height > 0 &&
       viewport.viewHeight > 0,
   );
   for (const viewport of modelViewports) {
-    const key = visibilityKey(viewport);
+    const paperToModelScale = viewportPaperToModelScale(viewport);
+    const linetypeScale = paperSpaceLinetypeScale
+      ? paperToModelScale
+      : 1;
+    const key = visibilityKey(
+      viewport,
+      paperToModelScale,
+      linetypeScale,
+    );
     let visibilityRow = visibilityRowByKey.get(key);
     if (visibilityRow === undefined) {
       if (layerVisibilityRows.length >= MAX_VISIBILITY_ROWS) {
@@ -142,6 +167,8 @@ export function buildLayoutRootPlan(blocks, layers, layout) {
       visibilityRow = layerVisibilityRows.length;
       visibilityRowByKey.set(key, visibilityRow);
       layerVisibilityRows.push(row);
+      paperToModelScalesByVisibilityRow.push(paperToModelScale);
+      linetypeScalesByVisibilityRow.push(linetypeScale);
     }
     const matrix = viewportModelToPaperMatrix(viewport);
     const clipPoints =
@@ -167,6 +194,12 @@ export function buildLayoutRootPlan(blocks, layers, layout) {
   return Object.freeze({
     rootContexts: Object.freeze(rootContexts),
     layerVisibilityRows: Object.freeze(layerVisibilityRows),
+    paperToModelScalesByVisibilityRow: Object.freeze(
+      paperToModelScalesByVisibilityRow,
+    ),
+    linetypeScalesByVisibilityRow: Object.freeze(
+      linetypeScalesByVisibilityRow,
+    ),
     paperViewport,
     modelViewports: Object.freeze(modelViewports),
   });
@@ -179,11 +212,15 @@ export function buildLayoutInstanceGraph(
   layout,
   options = {},
 ) {
-  const plan = buildLayoutRootPlan(blocks, layers, layout);
+  const plan = buildLayoutRootPlan(blocks, layers, layout, options);
   return buildInstanceGraph(blocks, inserts, {
     ...options,
     layers,
     rootContexts: plan.rootContexts,
     layerVisibilityRows: plan.layerVisibilityRows,
+    paperToModelScalesByVisibilityRow:
+      plan.paperToModelScalesByVisibilityRow,
+    linetypeScalesByVisibilityRow:
+      plan.linetypeScalesByVisibilityRow,
   });
 }
