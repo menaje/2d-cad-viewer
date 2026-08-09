@@ -2483,7 +2483,8 @@ write_drawing_section (CacheWriter *writer, Dwg_Data *dwg,
                        SectionEntry *entry)
 {
   uint64_t offset;
-  uint32_t display_settings = wipeout_frame;
+  uint32_t display_settings
+      = wipeout_frame == UINT32_MAX ? 3u : wipeout_frame;
   double min[3];
   double max[3];
   SavedModelView saved_view;
@@ -2505,15 +2506,12 @@ write_drawing_section (CacheWriter *writer, Dwg_Data *dwg,
           break;
         }
     }
-  if (display_settings != UINT32_MAX)
-    {
-      if (dwg->header_vars.LWDISPLAY)
-        display_settings |= 1u << 2;
-      if (dwg->header_vars.FILLMODE)
-        display_settings |= 1u << 3;
-      if (dwg->header_vars.TILEMODE)
-        display_settings |= 1u << 4;
-    }
+  if (dwg->header_vars.LWDISPLAY)
+    display_settings |= 1u << 2;
+  if (dwg->header_vars.FILLMODE)
+    display_settings |= 1u << 3;
+  if (dwg->header_vars.TILEMODE)
+    display_settings |= 1u << 4;
   if (!align_writer (writer, &offset)
       || !write_u32 (writer, source_version)
       || !write_u32 (writer,

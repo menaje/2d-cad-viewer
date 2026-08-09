@@ -277,6 +277,22 @@ test("reads current drawing display settings", async () => {
   assert.equal(metadata.drawing.lineWeightDisplay, true);
   assert.equal(metadata.drawing.fillMode, false);
   assert.equal(metadata.drawing.modelSpaceActive, false);
+
+  const missingWipeoutReader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        wipeoutFrame: null,
+        lineWeightDisplay: true,
+        fillMode: false,
+        modelSpaceActive: false,
+      }),
+    ),
+  );
+  const missingWipeoutDrawing = await missingWipeoutReader.readDrawing();
+  assert.equal(missingWipeoutDrawing.wipeoutFrame, null);
+  assert.equal(missingWipeoutDrawing.lineWeightDisplay, true);
+  assert.equal(missingWipeoutDrawing.fillMode, false);
+  assert.equal(missingWipeoutDrawing.modelSpaceActive, false);
 });
 
 test("reads current linetype definitions and scale", async () => {

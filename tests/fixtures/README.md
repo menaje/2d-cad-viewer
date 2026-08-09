@@ -20,4 +20,6 @@ Encode that DXF as an R2004 DWG with a separate trusted fixture converter, then
 pass the DWG to `pnpm run qualify:viewport-layer-overrides`. Neither the
 write-enabled converter nor its output is part of the product package. The
 source definition contains only generated geometry and has no private drawing
-content.
+content. `Layout1` contains a paper viewport and one model viewport so the
+qualification exercises the final layout composition path, not only sparse
+override metadata.

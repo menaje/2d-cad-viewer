@@ -42,6 +42,32 @@ const SNAP_LABELS = Object.freeze({
   nearest: "근처점",
 });
 
+const SOURCE_KIND_MESSAGE_KEYS = Object.freeze([
+  "review.runtime.kind.line",
+  "review.runtime.kind.lightweightPolyline",
+  "review.runtime.kind.polyline2d",
+  "review.runtime.kind.polyline3d",
+  "review.runtime.kind.arc",
+  "review.runtime.kind.circle",
+  "review.runtime.kind.ellipse",
+  "review.runtime.kind.spline",
+  "review.runtime.kind.hatchBoundary",
+  "review.runtime.kind.constructionLine",
+  "review.runtime.kind.multileader",
+  "review.runtime.kind.viewportBoundary",
+  "review.runtime.kind.leader",
+  "review.runtime.kind.oleBoundary",
+]);
+
+function fallbackMessage(template, values) {
+  if (!values || typeof values !== "object") {
+    return template;
+  }
+  return template.replace(/\{([a-zA-Z][a-zA-Z0-9]*)\}/gu, (match, key) =>
+    Object.hasOwn(values, key) ? String(values[key]) : match,
+  );
+}
+
 const MAX_DETAIL_REVIEW_BYTES = 8 * 1024 * 1024;
 const MAX_DETAIL_REVIEW_BATCHES = 96;
 const MAX_EXACT_CURVE_REVIEW_BYTES = 4 * 1024 * 1024;
@@ -281,6 +307,11 @@ export class ReviewTools {
     onReviewModeChange = () => {},
     onSelectionChange = () => {},
     onStatus = () => {},
+    measurementLocale = "ko-KR",
+    drawingUnitLabel = "도면 단위",
+    translate = (_key, values, fallback) =>
+      fallbackMessage(fallback, values),
+    formatCount = (value) => Number(value).toLocaleString(),
   }) {
     if (typeof resolveRenderPick !== "function") {
       throw new TypeError(
@@ -304,6 +335,19 @@ export class ReviewTools {
     this.onReviewModeChange = onReviewModeChange;
     this.onSelectionChange = onSelectionChange;
     this.onStatus = onStatus;
+    if (typeof translate !== "function") {
+      throw new TypeError("review translator must be a function");
+    }
+    if (typeof formatCount !== "function") {
+      throw new TypeError("review number formatter must be a function");
+    }
+    this.translate = translate;
+    this.formatCount = formatCount;
+    this.measurementLocale = measurementLocale;
+    this.measurementFormatOptions = Object.freeze({
+      locale: measurementLocale,
+      drawingUnitLabel,
+    });
     this.reviewUi = new ViewerReviewUiController({
       canvas,
       toolbar,
@@ -317,6 +361,7 @@ export class ReviewTools {
     const initialMeasurementFormat = createMeasurementFormat(
       scene.metadata.drawing.insertionUnits,
       normalizedPreferences,
+      this.measurementFormatOptions,
     );
     this.measurementPreferences =
       !initialMeasurementFormat.canUsePhysicalUnits &&
@@ -330,6 +375,7 @@ export class ReviewTools {
     this.measurementFormat = createMeasurementFormat(
       scene.metadata.drawing.insertionUnits,
       this.measurementPreferences,
+      this.measurementFormatOptions,
     );
     this.sources = new Map();
     this.index = null;
@@ -358,7 +404,11 @@ export class ReviewTools {
     this.abortController = new AbortController();
     this.addSource("root", {
       id: "root",
-      label: "현재 도면",
+      label: this.message(
+        "review.runtime.currentDrawing",
+        {},
+        "현재 도면",
+      ),
       batches: scene.metadata.batches,
       vertices: scene.overview,
       instanceGraph,
@@ -370,6 +420,78 @@ export class ReviewTools {
     this.resetToolControls();
     this.bind();
     this.setEnabled(true);
+  }
+
+  message(key, values = {}, fallback = key) {
+    return typeof this.translate === "function"
+      ? this.translate(key, values, fallback)
+      : fallbackMessage(fallback, values);
+  }
+
+  formattedCount(value) {
+    return typeof this.formatCount === "function"
+      ? this.formatCount(value)
+      : Number(value).toLocaleString();
+  }
+
+  plainNumber(value) {
+    return formatMeasurementNumber(
+      value,
+      null,
+      this.measurementLocale ?? "ko-KR",
+    );
+  }
+
+  snapLabel(kind) {
+    const fallback = SNAP_LABELS[kind] ?? String(kind ?? "");
+    return this.message(
+      `review.runtime.snap.${kind}`,
+      {},
+      fallback,
+    );
+  }
+
+  sourceKindLabel(candidate, fallback = "도면 객체") {
+    if (
+      candidate?.entityType === "text" &&
+      ["TEXT", "MTEXT", "ATTDEF", "ATTRIB"].includes(
+        candidate.sourceKindName,
+      )
+    ) {
+      return candidate.sourceKindName;
+    }
+    const entityKey = {
+      text: "text",
+      image: "image",
+      block: "blockReference",
+      dimension: "dimension",
+      xref: "externalReference",
+      hatch: "hatch",
+      solid: "solid",
+      face: "face",
+    }[candidate?.entityType];
+    const key = entityKey
+      ? `review.runtime.kind.${entityKey}`
+      : Number.isSafeInteger(candidate?.sourceKind)
+        ? SOURCE_KIND_MESSAGE_KEYS[candidate.sourceKind]
+        : candidate?.kind === "intersection"
+          ? "review.runtime.snap.intersection"
+          : null;
+    return key
+      ? this.message(key, {}, candidate?.sourceKindName || fallback)
+      : candidate?.sourceKindName || fallback;
+  }
+
+  fieldLabel(key, fallback) {
+    return this.message(`review.runtime.field.${key}`, {}, fallback);
+  }
+
+  countLabel(value) {
+    return this.message(
+      "review.runtime.value.count",
+      { count: this.formattedCount(value) },
+      "{count}개",
+    );
   }
 
   resetToolControls() {
@@ -388,7 +510,13 @@ export class ReviewTools {
     }
     if (action === "fit") {
       this.onFit();
-      this.onStatus("도면 전체가 보이도록 화면을 맞췄습니다.");
+      this.onStatus(
+        this.message(
+          "review.runtime.status.fit",
+          {},
+          "도면 전체가 보이도록 화면을 맞췄습니다.",
+        ),
+      );
       return true;
     }
     if (action === "clear") {
@@ -411,8 +539,16 @@ export class ReviewTools {
       const changed = this.onIsolateLayer(layerIndex);
       this.onStatus(
         changed === false
-          ? "이미 선택한 레이어만 표시 중입니다."
-          : "선택한 객체의 레이어만 표시했습니다.",
+          ? this.message(
+              "review.runtime.status.layerAlreadyIsolated",
+              {},
+              "이미 선택한 레이어만 표시 중입니다.",
+            )
+          : this.message(
+              "review.runtime.status.layerIsolated",
+              {},
+              "선택한 객체의 레이어만 표시했습니다.",
+            ),
       );
       return true;
     }
@@ -420,8 +556,16 @@ export class ReviewTools {
       const restored = this.onRestoreLayers();
       this.onStatus(
         restored === false
-          ? "복원할 이전 레이어 상태가 없습니다."
-          : "이전 레이어 표시 상태로 복원했습니다.",
+          ? this.message(
+              "review.runtime.status.noLayerState",
+              {},
+              "복원할 이전 레이어 상태가 없습니다.",
+            )
+          : this.message(
+              "review.runtime.status.layersRestored",
+              {},
+              "이전 레이어 표시 상태로 복원했습니다.",
+            ),
       );
       return true;
     }
@@ -483,12 +627,24 @@ export class ReviewTools {
         if (this.measurementPoints.length > 0) {
           this.measurementPoints = [];
           this.hover = null;
-          this.onStatus("진행 중인 측정을 취소했습니다.");
+          this.onStatus(
+            this.message(
+              "review.runtime.status.measurementCancelled",
+              {},
+              "진행 중인 측정을 취소했습니다.",
+            ),
+          );
           this.redraw();
         } else if (this.firstPoint) {
           this.firstPoint = null;
           this.hover = null;
-          this.onStatus("첫 번째 점 선택을 취소했습니다.");
+          this.onStatus(
+            this.message(
+              "review.runtime.status.firstPointCancelled",
+              {},
+              "첫 번째 점 선택을 취소했습니다.",
+            ),
+          );
           this.redraw();
         } else {
           this.activate(null);
@@ -523,6 +679,7 @@ export class ReviewTools {
       this.measurementFormat = createMeasurementFormat(
         this.scene?.metadata?.drawing?.insertionUnits ?? 0,
         this.measurementPreferences,
+        this.measurementFormatOptions,
       );
     }
     return this.measurementFormat;
@@ -536,6 +693,7 @@ export class ReviewTools {
     let measurement = createMeasurementFormat(
       this.scene.metadata.drawing.insertionUnits,
       preferences,
+      this.measurementFormatOptions,
     );
     if (
       !measurement.canUsePhysicalUnits &&
@@ -549,6 +707,7 @@ export class ReviewTools {
       measurement = createMeasurementFormat(
         this.scene.metadata.drawing.insertionUnits,
         preferences,
+        this.measurementFormatOptions,
       );
     }
     this.measurementPreferences = preferences;
@@ -575,8 +734,16 @@ export class ReviewTools {
     summary.className = "measurement-settings-summary";
     summary.textContent =
       sourceUnit.key === "drawing"
-        ? "이 DWG에는 삽입 단위가 지정되어 있지 않습니다."
-        : `DWG 지정 단위: ${sourceUnit.label}`;
+        ? this.message(
+            "review.runtime.settings.noInsertionUnit",
+            {},
+            "이 DWG에는 삽입 단위가 지정되어 있지 않습니다.",
+          )
+        : this.message(
+            "review.runtime.settings.sourceUnit",
+            { unit: sourceUnit.label },
+            "DWG 지정 단위: {unit}",
+          );
     form.append(summary);
 
     const addSelect = (labelText, select) => {
@@ -592,14 +759,26 @@ export class ReviewTools {
     displaySelect.name = "display-unit";
     const automaticOption = document.createElement("option");
     automaticOption.value = "auto";
-    automaticOption.textContent = `자동 (${measurement.displayUnit.label})`;
+    automaticOption.textContent = this.message(
+      "review.runtime.settings.automaticUnit",
+      { unit: measurement.displayUnit.label },
+      "자동 ({unit})",
+    );
     displaySelect.append(automaticOption);
     const drawingOption = document.createElement("option");
     drawingOption.value = "drawing";
     drawingOption.textContent =
       sourceUnit.key === "drawing"
-        ? "원본 도면 단위"
-        : `원본 단위 (${sourceUnit.label})`;
+        ? this.message(
+            "review.runtime.settings.drawingUnit",
+            {},
+            "원본 도면 단위",
+          )
+        : this.message(
+            "review.runtime.settings.originalUnit",
+            { unit: sourceUnit.label },
+            "원본 단위 ({unit})",
+          );
     displaySelect.append(drawingOption);
     for (const unit of COMMON_DISPLAY_UNITS) {
       const option = document.createElement("option");
@@ -620,18 +799,33 @@ export class ReviewTools {
       });
       this.showMeasurementSettings();
     });
-    addSelect("표시 단위", displaySelect);
+    addSelect(
+      this.message(
+        "review.runtime.settings.displayUnit",
+        {},
+        "표시 단위",
+      ),
+      displaySelect,
+    );
 
     const precisionSelect = document.createElement("select");
     precisionSelect.name = "measurement-precision";
     const automaticPrecision = document.createElement("option");
     automaticPrecision.value = "auto";
-    automaticPrecision.textContent = "자동";
+    automaticPrecision.textContent = this.message(
+      "review.runtime.settings.automatic",
+      {},
+      "자동",
+    );
     precisionSelect.append(automaticPrecision);
     for (let precision = 0; precision <= 6; precision += 1) {
       const option = document.createElement("option");
       option.value = String(precision);
-      option.textContent = `소수 ${precision}자리`;
+      option.textContent = this.message(
+        "review.runtime.settings.decimalPlaces",
+        { count: precision },
+        "소수 {count}자리",
+      );
       precisionSelect.append(option);
     }
     precisionSelect.value =
@@ -647,18 +841,33 @@ export class ReviewTools {
       });
       this.showMeasurementSettings();
     });
-    addSelect("표시 정밀도", precisionSelect);
+    addSelect(
+      this.message(
+        "review.runtime.settings.precision",
+        {},
+        "표시 정밀도",
+      ),
+      precisionSelect,
+    );
 
     const preview = document.createElement("p");
     preview.className = "measurement-settings-preview";
-    preview.textContent = `표시 예: ${measurement.length(1234.5678)}`;
+    preview.textContent = this.message(
+      "review.runtime.settings.example",
+      { value: measurement.length(1234.5678) },
+      "표시 예: {value}",
+    );
     form.append(preview);
 
     if (sourceUnit.key === "drawing") {
       const calibration = document.createElement("section");
       calibration.className = "measurement-calibration";
       const heading = document.createElement("strong");
-      heading.textContent = "실제 단위 보정";
+      heading.textContent = this.message(
+        "review.runtime.settings.calibration",
+        {},
+        "실제 단위 보정",
+      );
       calibration.append(heading);
 
       const help = document.createElement("p");
@@ -667,23 +876,49 @@ export class ReviewTools {
         const referenceUnit = COMMON_DISPLAY_UNITS.find(
           (unit) => unit.key === preferences.calibration.referenceUnit,
         );
-        help.textContent =
-          `보정됨: ${formatNumber(preferences.calibration.drawingDistance)} 도면 단위 = ` +
-          `${formatNumber(preferences.calibration.referenceDistance)} ${referenceUnit?.label ?? preferences.calibration.referenceUnit}`;
+        help.textContent = this.message(
+          "review.runtime.settings.calibrated",
+          {
+            drawing: this.plainNumber(
+              preferences.calibration.drawingDistance,
+            ),
+            reference: this.plainNumber(
+              preferences.calibration.referenceDistance,
+            ),
+            unit:
+              referenceUnit?.label ??
+              preferences.calibration.referenceUnit,
+          },
+          "보정됨: {drawing} 도면 단위 = {reference} {unit}",
+        );
       } else {
-        help.textContent =
-          "보정 전에는 실제 mm·m·in 값으로 표시하지 않습니다. 실제 길이를 아는 구간의 두 점을 선택해 보정하세요.";
+        help.textContent = this.message(
+          "review.runtime.settings.calibrationHelp",
+          {},
+          "보정 전에는 실제 mm·m·in 값으로 표시하지 않습니다. 실제 길이를 아는 구간의 두 점을 선택해 보정하세요.",
+        );
       }
       calibration.append(help);
 
       if (this.pendingCalibration) {
         const selected = document.createElement("p");
         selected.className = "measurement-settings-selection";
-        selected.textContent =
-          `선택한 구간: ${formatNumber(this.pendingCalibration.drawingDistance)} 도면 단위` +
-          (this.pendingCalibration.approximated
-            ? " · 화면 근사 포함"
-            : "");
+        selected.textContent = this.message(
+          "review.runtime.settings.selectedSegment",
+          {
+            distance: this.plainNumber(
+              this.pendingCalibration.drawingDistance,
+            ),
+            approximation: this.pendingCalibration.approximated
+              ? this.message(
+                  "review.runtime.value.approximationSuffix",
+                  {},
+                  " · 화면 근사 포함",
+                )
+              : "",
+          },
+          "선택한 구간: {distance} 도면 단위{approximation}",
+        );
         calibration.append(selected);
 
         const referenceRow = document.createElement("div");
@@ -694,11 +929,29 @@ export class ReviewTools {
         input.min = "0";
         input.step = "any";
         input.inputMode = "decimal";
-        input.placeholder = "실제 거리";
-        input.setAttribute("aria-label", "선택한 구간의 실제 거리");
+        input.placeholder = this.message(
+          "review.runtime.settings.referenceDistance",
+          {},
+          "실제 거리",
+        );
+        input.setAttribute(
+          "aria-label",
+          this.message(
+            "review.runtime.settings.referenceDistanceAria",
+            {},
+            "선택한 구간의 실제 거리",
+          ),
+        );
         const unitSelect = document.createElement("select");
         unitSelect.name = "reference-unit";
-        unitSelect.setAttribute("aria-label", "실제 거리 단위");
+        unitSelect.setAttribute(
+          "aria-label",
+          this.message(
+            "review.runtime.settings.referenceUnitAria",
+            {},
+            "실제 거리 단위",
+          ),
+        );
         for (const unit of COMMON_DISPLAY_UNITS) {
           const option = document.createElement("option");
           option.value = unit.key;
@@ -723,7 +976,11 @@ export class ReviewTools {
         const apply = document.createElement("button");
         apply.type = "button";
         apply.className = "measurement-primary-action";
-        apply.textContent = "이 거리로 보정";
+        apply.textContent = this.message(
+          "review.runtime.settings.applyCalibration",
+          {},
+          "이 거리로 보정",
+        );
         apply.addEventListener("click", () => {
           const referenceDistance = Number(input.value);
           const result = calibrationFromKnownDistance(
@@ -732,8 +989,11 @@ export class ReviewTools {
             unitSelect.value,
           );
           if (!result) {
-            validation.textContent =
-              "0보다 큰 실제 거리를 입력하세요.";
+            validation.textContent = this.message(
+              "review.runtime.settings.invalidReferenceDistance",
+              {},
+              "0보다 큰 실제 거리를 입력하세요.",
+            );
             input.focus();
             return;
           }
@@ -746,7 +1006,11 @@ export class ReviewTools {
             displayUnit: unitSelect.value,
           });
           this.onStatus(
-            `측정 단위를 보정했습니다. 이후 결과를 ${selectedUnit?.label ?? unitSelect.value} 단위로 표시합니다.`,
+            this.message(
+              "review.runtime.status.calibrated",
+              { unit: selectedUnit?.label ?? unitSelect.value },
+              "측정 단위를 보정했습니다. 이후 결과를 {unit} 단위로 표시합니다.",
+            ),
           );
           this.showMeasurementSettings();
           this.redraw();
@@ -759,8 +1023,16 @@ export class ReviewTools {
       const selectPoints = document.createElement("button");
       selectPoints.type = "button";
       selectPoints.textContent = preferences.calibration
-        ? "다시 두 점 선택"
-        : "두 점으로 보정";
+        ? this.message(
+            "review.runtime.settings.reselectCalibration",
+            {},
+            "다시 두 점 선택",
+          )
+        : this.message(
+            "review.runtime.settings.selectCalibration",
+            {},
+            "두 점으로 보정",
+          );
       selectPoints.addEventListener("click", () =>
         this.startMeasurementCalibration(),
       );
@@ -768,7 +1040,11 @@ export class ReviewTools {
       if (preferences.calibration) {
         const reset = document.createElement("button");
         reset.type = "button";
-        reset.textContent = "보정 초기화";
+        reset.textContent = this.message(
+          "review.runtime.settings.resetCalibration",
+          {},
+          "보정 초기화",
+        );
         reset.addEventListener("click", () => {
           this.pendingCalibration = null;
           this.measurementGuide = null;
@@ -777,7 +1053,11 @@ export class ReviewTools {
             displayUnit: "auto",
           });
           this.onStatus(
-            "측정 단위 보정을 초기화했습니다. 값을 도면 단위로 표시합니다.",
+            this.message(
+              "review.runtime.status.calibrationReset",
+              {},
+              "측정 단위 보정을 초기화했습니다. 값을 도면 단위로 표시합니다.",
+            ),
           );
           this.showMeasurementSettings();
           this.redraw();
@@ -789,7 +1069,11 @@ export class ReviewTools {
     }
 
     this.reviewUi.showContent({
-      title: "측정 설정",
+      title: this.message(
+        "review.runtime.settings.title",
+        {},
+        "측정 설정",
+      ),
       content: form,
       view: "measurement-settings",
     });
@@ -797,7 +1081,13 @@ export class ReviewTools {
 
   startMeasurementCalibration() {
     if (this.measurementDisplay().sourceUnit.key !== "drawing") {
-      this.onStatus("DWG에 지정된 단위를 사용하므로 보정할 필요가 없습니다.");
+      this.onStatus(
+        this.message(
+          "review.runtime.status.calibrationNotNeeded",
+          {},
+          "DWG에 지정된 단위를 사용하므로 보정할 필요가 없습니다.",
+        ),
+      );
       return false;
     }
     this.pendingCalibration = null;
@@ -809,7 +1099,11 @@ export class ReviewTools {
       this.firstPoint = null;
       this.hover = null;
       this.onStatus(
-        "실제 길이를 알고 있는 구간의 첫 번째 점을 선택하세요.",
+        this.message(
+          "review.runtime.status.calibrationSelectFirst",
+          {},
+          "실제 길이를 알고 있는 구간의 첫 번째 점을 선택하세요.",
+        ),
       );
       this.redraw();
     } else {
@@ -822,13 +1116,21 @@ export class ReviewTools {
     if (!this.firstPoint) {
       this.firstPoint = candidate;
       this.onStatus(
-        `보정 첫 점: ${SNAP_LABELS[candidate.kind] ?? candidate.kind} · 두 번째 점을 선택하세요.`,
+        this.message(
+          "review.runtime.status.calibrationFirstPoint",
+          { snap: this.snapLabel(candidate.kind) },
+          "보정 첫 점: {snap} · 두 번째 점을 선택하세요.",
+        ),
       );
       return false;
     }
     if (this.firstPoint.coordinateSpace !== candidate.coordinateSpace) {
       this.onStatus(
-        "모델 공간과 종이 공간의 점은 보정에 함께 사용할 수 없습니다. 같은 공간에서 선택하세요.",
+        this.message(
+          "review.runtime.status.calibrationSpaceMismatch",
+          {},
+          "모델 공간과 종이 공간의 점은 보정에 함께 사용할 수 없습니다. 같은 공간에서 선택하세요.",
+        ),
       );
       return false;
     }
@@ -838,7 +1140,13 @@ export class ReviewTools {
       candidate.measurementPoint,
     );
     if (drawingDistance <= Number.EPSILON) {
-      this.onStatus("첫 점과 다른 위치의 두 번째 점을 선택하세요.");
+      this.onStatus(
+        this.message(
+          "review.runtime.status.differentSecondPoint",
+          {},
+          "첫 점과 다른 위치의 두 번째 점을 선택하세요.",
+        ),
+      );
       return false;
     }
     this.measurementGuide = Object.freeze({
@@ -856,7 +1164,11 @@ export class ReviewTools {
     this.activate(null);
     this.showMeasurementSettings();
     this.onStatus(
-      `선택한 구간은 ${formatNumber(drawingDistance)} 도면 단위입니다. 실제 거리를 입력하세요.`,
+      this.message(
+        "review.runtime.status.calibrationSegmentSelected",
+        { distance: this.plainNumber(drawingDistance) },
+        "선택한 구간은 {distance} 도면 단위입니다. 실제 거리를 입력하세요.",
+      ),
     );
     return true;
   }
@@ -1128,9 +1440,21 @@ export class ReviewTools {
     const snapshot = this.index.snapshot();
     const elapsed = performance.now() - started;
     this.onStatus(
-      `검토 인덱스 ${snapshot.segments.toLocaleString()}개 선분 준비 · ` +
-        `${elapsed.toFixed(0)} ms` +
-        (snapshot.truncated ? " · 인스턴스 상한 적용" : ""),
+      this.message(
+        "review.runtime.status.indexReady",
+        {
+          segments: this.formattedCount(snapshot.segments),
+          elapsed: elapsed.toFixed(0),
+          limit: snapshot.truncated
+            ? this.message(
+                "review.runtime.status.instanceLimitSuffix",
+                {},
+                " · 인스턴스 상한 적용",
+              )
+            : "",
+        },
+        "검토 인덱스 {segments}개 선분 준비 · {elapsed} ms{limit}",
+      ),
     );
     return this.index;
   }
@@ -1189,7 +1513,11 @@ export class ReviewTools {
               sources: [
                 {
                   id: "root",
-                  label: "현재 도면",
+                  label: this.message(
+                    "review.runtime.currentDrawing",
+                    {},
+                    "현재 도면",
+                  ),
                   layers: this.scene.metadata.layers,
                   data,
                 },
@@ -1210,17 +1538,37 @@ export class ReviewTools {
         const snapshot = this.filledIndex.snapshot();
         const sourceSummary =
           snapshot.sources > 1
-            ? ` · 외부참조 포함 ${snapshot.sources.toLocaleString()}개 도면`
+            ? this.message(
+                "review.runtime.status.externalSourcesSuffix",
+                { count: this.formattedCount(snapshot.sources) },
+                " · 외부참조 포함 {count}개 도면",
+              )
             : "";
         const failedSummary =
           snapshot.failedSources > 0
-            ? ` · 참조 ${snapshot.failedSources.toLocaleString()}개 생략`
+            ? this.message(
+                "review.runtime.status.failedSourcesSuffix",
+                { count: this.formattedCount(snapshot.failedSources) },
+                " · 참조 {count}개 생략",
+              )
             : "";
         this.onStatus(
-          `해치·솔리드·3D 면 ${snapshot.records.toLocaleString()}개 선택 준비 완료` +
-            sourceSummary +
-            failedSummary +
-            (snapshot.truncated ? " · 안전 상한 적용" : ""),
+          this.message(
+            "review.runtime.status.filledReady",
+            {
+              count: this.formattedCount(snapshot.records),
+              sources: sourceSummary,
+              failed: failedSummary,
+              limit: snapshot.truncated
+                ? this.message(
+                    "review.runtime.status.safetyLimitSuffix",
+                    {},
+                    " · 안전 상한 적용",
+                  )
+                : "",
+            },
+            "해치·솔리드·3D 면 {count}개 선택 준비 완료{sources}{failed}{limit}",
+          ),
         );
         this.redraw();
         return this.filledIndex;
@@ -1235,9 +1583,14 @@ export class ReviewTools {
         }
         this.filledState = "error";
         this.onStatus(
-          `해치·솔리드·3D 면 선택 정보 준비 실패: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          this.message(
+            "review.runtime.status.filledFailed",
+            {
+              detail:
+                error instanceof Error ? error.message : String(error),
+            },
+            "해치·솔리드·3D 면 선택 정보 준비 실패: {detail}",
+          ),
         );
         return null;
       })
@@ -1261,7 +1614,17 @@ export class ReviewTools {
     if (next) {
       this.loadExactCurves();
       this.ensureIndex();
-      const instructions = {
+      const instructionKeys = {
+        distance: "distance",
+        path: "path",
+        area: "area",
+        angle: "angle",
+        radius: "radius",
+        coordinate: "coordinate",
+        calibrate: "calibrate",
+        select: "select",
+      };
+      const instructionFallbacks = {
         distance:
           "첫 번째 점을 선택하세요. 끝점·교차점·중심점·수직점·삽입점 등에 자동 스냅됩니다.",
         path:
@@ -1277,7 +1640,20 @@ export class ReviewTools {
         select:
           "속성을 확인할 선·곡선·해치·솔리드·3D 면·문자·블록·이미지를 선택하세요.",
       };
-      this.onStatus(instructions[next] ?? "검토할 객체를 선택하세요.");
+      const instructionKey = instructionKeys[next];
+      this.onStatus(
+        instructionKey
+          ? this.message(
+              `review.runtime.instruction.${instructionKey}`,
+              {},
+              instructionFallbacks[next],
+            )
+          : this.message(
+              "review.runtime.instruction.default",
+              {},
+              "검토할 객체를 선택하세요.",
+            ),
+      );
       if (next === "select") {
         this.prepareFilledObjects();
       } else {
@@ -1286,7 +1662,13 @@ export class ReviewTools {
     } else {
       this.releaseFilledObjects();
       this.clearExactCurves();
-      this.onStatus("검토 도구를 종료했습니다. 마우스로 도면을 이동할 수 있습니다.");
+      this.onStatus(
+        this.message(
+          "review.runtime.status.closed",
+          {},
+          "검토 도구를 종료했습니다. 마우스로 도면을 이동할 수 있습니다.",
+        ),
+      );
     }
     this.redraw();
   }
@@ -1438,7 +1820,13 @@ export class ReviewTools {
     const candidate =
       this.find(event, this.snapKinds()) ?? this.hover;
     if (!candidate) {
-      this.onStatus("표시된 객체 가까이에서 다시 선택하세요.");
+      this.onStatus(
+        this.message(
+          "review.runtime.status.selectCloser",
+          {},
+          "표시된 객체 가까이에서 다시 선택하세요.",
+        ),
+      );
       return;
     }
     if (this.activeTool === "select") {
@@ -1462,48 +1850,90 @@ export class ReviewTools {
   showSelection(candidate) {
     const source = this.sources.get(candidate.sourceId);
     const measurement = this.measurementDisplay();
+    const label = (key, fallback) =>
+      this.message(`review.runtime.field.${key}`, {}, fallback);
+    const countText = (value) =>
+      this.message(
+        "review.runtime.value.count",
+        { count: this.formattedCount(value) },
+        "{count}개",
+      );
+    const kind = this.sourceKindLabel(candidate);
+    const lineWeight =
+      candidate.lineWeight === -3
+        ? this.message(
+            "review.runtime.value.default",
+            {},
+            "기본값",
+          )
+        : lineWeightText(candidate.lineWeight);
+    const linetype =
+      Number.isInteger(candidate.linetypeCode) &&
+      candidate.linetypeCode > 2 &&
+      !source?.linetypes?.some(
+        (entry) => entry.code === candidate.linetypeCode,
+      )
+        ? this.message(
+            "review.runtime.value.code",
+            { code: candidate.linetypeCode },
+            "코드 {code}",
+          )
+        : linetypeText(candidate.linetypeCode, source);
     const rows = [
-      ["종류", candidate.sourceKindName || "도면 객체"],
-      ["핸들", handleText(candidate.handle)],
-      ["레이어", candidate.layerName || `#${candidate.layerIndex}`],
-      ["참조", candidate.sourceLabel || "현재 도면"],
-      ["색상", colorText(candidate.color)],
-      ["선종류", linetypeText(candidate.linetypeCode, source)],
-      ["선가중치", lineWeightText(candidate.lineWeight)],
+      [label("type", "종류"), kind],
+      [label("handle", "핸들"), handleText(candidate.handle)],
+      [label("layer", "레이어"), candidate.layerName || `#${candidate.layerIndex}`],
+      [
+        label("reference", "참조"),
+        candidate.sourceLabel ||
+          this.message(
+            "review.runtime.currentDrawing",
+            {},
+            "현재 도면",
+          ),
+      ],
+      [label("color", "색상"), colorText(candidate.color)],
+      [label("linetype", "선종류"), linetype],
+      [label("lineWeight", "선가중치"), lineWeight],
     ];
     const record = candidate.entityRecord;
     if (candidate.entityType === "text" && record) {
       const value = cleanedText(record.value);
-      rows.push(["내용", value ? value.slice(0, 500) : "—"]);
+      rows.push([label("content", "내용"), value ? value.slice(0, 500) : "—"]);
       if (record.tag) {
-        rows.push(["태그", String(record.tag).slice(0, 160)]);
+        rows.push([label("tag", "태그"), String(record.tag).slice(0, 160)]);
       }
       if (record.prompt) {
-        rows.push(["프롬프트", String(record.prompt).slice(0, 240)]);
+        rows.push([label("prompt", "프롬프트"), String(record.prompt).slice(0, 240)]);
       }
       if (record.style?.name) {
-        rows.push(["문자 스타일", record.style.name]);
+        rows.push([label("textStyle", "문자 스타일"), record.style.name]);
       }
       if (Number.isFinite(record.height)) {
-        rows.push(["문자 높이", measurement.length(record.height)]);
+        rows.push([label("textHeight", "문자 높이"), measurement.length(record.height)]);
       }
       if (Number.isFinite(record.rotation)) {
         rows.push([
-          "회전",
+          label("rotation", "회전"),
           `${measurement.number((record.rotation * 180) / Math.PI)}°`,
         ]);
       }
     } else if (candidate.entityType === "image" && record) {
       rows.push(
-        ["파일", record.path || "—"],
+        [label("file", "파일"), record.path || "—"],
         [
-          "이미지 크기",
-          `${formatNumber(record.size?.[0])} × ${formatNumber(record.size?.[1])}`,
+          label("imageSize", "이미지 크기"),
+          `${this.plainNumber(record.size?.[0])} × ${this.plainNumber(record.size?.[1])}`,
         ],
-        ["밝기", `${formatNumber(record.brightness)}%`],
-        ["대비", `${formatNumber(record.contrast)}%`],
-        ["페이드", `${formatNumber(record.fade)}%`],
-        ["자르기", record.clippingEnabled ? "켜짐" : "꺼짐"],
+        [label("brightness", "밝기"), `${this.plainNumber(record.brightness)}%`],
+        [label("contrast", "대비"), `${this.plainNumber(record.contrast)}%`],
+        [label("fade", "페이드"), `${this.plainNumber(record.fade)}%`],
+        [
+          label("clipping", "자르기"),
+          record.clippingEnabled
+            ? this.message("review.runtime.value.on", {}, "켜짐")
+            : this.message("review.runtime.value.off", {}, "꺼짐"),
+        ],
       );
     } else if (
       candidate.entityType === "block" ||
@@ -1511,9 +1941,9 @@ export class ReviewTools {
       candidate.entityType === "xref"
     ) {
       rows.push(
-        ["블록 이름", candidate.blockName || "—"],
+        [label("blockName", "블록 이름"), candidate.blockName || "—"],
         [
-          "삽입 좌표",
+          label("insertionPoint", "삽입 좌표"),
           candidate.insertionPoint
             ? measurement.point(candidate.insertionPoint)
             : "—",
@@ -1521,73 +1951,88 @@ export class ReviewTools {
       );
       if (candidate.transform?.scale) {
         rows.push([
-          "축척",
-          candidate.transform.scale.map(formatNumber).join(" · "),
+          label("scale", "축척"),
+          candidate.transform.scale
+            .map((value) => this.plainNumber(value))
+            .join(" · "),
         ]);
       }
       if (Number.isFinite(candidate.transform?.rotation)) {
         rows.push([
-          "회전",
+          label("rotation", "회전"),
           `${measurement.number(candidate.transform.rotation)}°`,
         ]);
       }
     } else if (candidate.entityType === "hatch" && record) {
       const style =
-        ["일반", "외곽만", "내부 무시"][record.hatchStyle] ??
-        `코드 ${record.hatchStyle}`;
+        [
+          this.message("review.runtime.value.hatchNormal", {}, "일반"),
+          this.message("review.runtime.value.hatchOuter", {}, "외곽만"),
+          this.message("review.runtime.value.hatchIgnore", {}, "내부 무시"),
+        ][record.hatchStyle] ??
+        this.message(
+          "review.runtime.value.code",
+          { code: record.hatchStyle },
+          "코드 {code}",
+        );
       rows.push(
-        ["패턴", record.patternName || record.gradientName || "—"],
-        ["해치 방식", style],
-        ["경계 루프", `${record.loopCount.toLocaleString()}개`],
+        [label("pattern", "패턴"), record.patternName || record.gradientName || "—"],
+        [label("hatchStyle", "해치 방식"), style],
+        [label("boundaryLoops", "경계 루프"), countText(record.loopCount)],
       );
       if (Number.isFinite(record.patternAngle)) {
         rows.push([
-          "패턴 각도",
+          label("patternAngle", "패턴 각도"),
           `${measurement.number((record.patternAngle * 180) / Math.PI)}°`,
         ]);
       }
       if (Number.isFinite(record.patternScale)) {
-        rows.push(["패턴 축척", formatNumber(record.patternScale)]);
+        rows.push([label("patternScale", "패턴 축척"), this.plainNumber(record.patternScale)]);
       }
       rows.push(
         [
-          "둘레",
+          label("perimeter", "둘레"),
           measurement.length(candidate.objectMeasurement?.length),
         ],
         [
-          "면적",
+          label("area", "면적"),
           measurement.area(candidate.objectMeasurement?.area),
         ],
       );
     } else if (candidate.entityType === "solid" && record) {
       rows.push(
-        ["표시", record.fillMode ? "채움" : "외곽선"],
         [
-          "둘레",
+          label("display", "표시"),
+          record.fillMode
+            ? this.message("review.runtime.value.filled", {}, "채움")
+            : this.message("review.runtime.value.outline", {}, "외곽선"),
+        ],
+        [
+          label("perimeter", "둘레"),
           measurement.length(candidate.objectMeasurement?.length),
         ],
         [
-          "면적",
+          label("area", "면적"),
           measurement.area(candidate.objectMeasurement?.area),
         ],
       );
       if (Number.isFinite(record.thickness)) {
-        rows.push(["두께", measurement.length(record.thickness)]);
+        rows.push([label("thickness", "두께"), measurement.length(record.thickness)]);
       }
     } else if (candidate.entityType === "face" && record) {
       rows.push(
         [
-          "숨긴 모서리",
-          `${[0, 1, 2, 3].filter(
+          label("hiddenEdges", "숨긴 모서리"),
+          countText([0, 1, 2, 3].filter(
             (edge) => record.invisibleEdges & (1 << edge),
-          ).length.toLocaleString()}개`,
+          ).length),
         ],
         [
-          "둘레",
+          label("perimeter", "둘레"),
           measurement.length(candidate.objectMeasurement?.length),
         ],
         [
-          "면적",
+          label("area", "면적"),
           measurement.area(candidate.objectMeasurement?.area),
         ],
       );
@@ -1606,29 +2051,35 @@ export class ReviewTools {
         Math.max(majorRadius, 1) * 1e-6;
       rows.push(
         [
-          circular ? "반지름" : "장축 반지름",
+          circular
+            ? label("radius", "반지름")
+            : label("majorRadius", "장축 반지름"),
           measurement.length(majorRadius),
         ],
         [
-          circular ? "지름" : "단축 반지름",
+          circular
+            ? label("diameter", "지름")
+            : label("minorRadius", "단축 반지름"),
           measurement.length(
             circular ? majorRadius * 2 : minorRadius,
           ),
         ],
-        ["길이", measurement.length(curve.length)],
+        [label("length", "길이"), measurement.length(curve.length)],
       );
       if (Number.isFinite(curve.area)) {
-        rows.push(["면적", measurement.area(curve.area)]);
+        rows.push([label("area", "면적"), measurement.area(curve.area)]);
       }
       if (!curve.closed && Number.isFinite(curve.sweepRadians)) {
         rows.push([
-          "포함각",
+          label("includedAngle", "포함각"),
           `${measurement.number((curve.sweepRadians * 180) / Math.PI)}°`,
         ]);
       }
     } else if (candidate.objectMeasurement) {
       rows.push([
-        candidate.objectMeasurement.closed ? "전체 길이" : "길이",
+        candidate.objectMeasurement.closed
+          ? label("totalLength", "전체 길이")
+          : label("length", "길이"),
         measurement.length(candidate.objectMeasurement.length),
       ]);
       if (
@@ -1636,13 +2087,15 @@ export class ReviewTools {
         Number.isFinite(candidate.objectMeasurement.area)
       ) {
         rows.push([
-          "면적",
+          label("area", "면적"),
           measurement.area(candidate.objectMeasurement.area),
         ]);
       }
     } else if (candidate.measurementSegment?.length === 2) {
       rows.push([
-        candidate.sourceKind === 0 ? "길이" : "선택 구간",
+        candidate.sourceKind === 0
+          ? label("length", "길이")
+          : label("selectedSegment", "선택 구간"),
         measurement.length(
           pointDistance(
             candidate.measurementSegment[0],
@@ -1651,12 +2104,23 @@ export class ReviewTools {
         ),
       ]);
     }
-    rows.push(["선택점", SNAP_LABELS[candidate.kind] ?? candidate.kind]);
+    rows.push([label("selectedPoint", "선택점"), this.snapLabel(candidate.kind)]);
     if (candidate.approximated) {
-      rows.push(["정밀도", "화면 근사 형상"]);
+      rows.push([
+        label("precision", "정밀도"),
+        this.message(
+          "review.runtime.value.screenApproximation",
+          {},
+          "화면 근사 형상",
+        ),
+      ]);
     }
     this.showResult(
-      `${candidate.sourceKindName || "객체"} 속성`,
+      this.message(
+        "review.runtime.result.properties",
+        { kind: this.sourceKindLabel(candidate, "객체") },
+        "{kind} 속성",
+      ),
       rows,
       {
         layerActions:
@@ -1667,7 +2131,21 @@ export class ReviewTools {
       },
     );
     this.onStatus(
-      `${candidate.sourceKindName || "도면 객체"} · ${candidate.layerName || "레이어 없음"} · 핸들 ${handleText(candidate.handle)}`,
+      this.message(
+        "review.runtime.status.selection",
+        {
+          kind,
+          layer:
+            candidate.layerName ||
+            this.message(
+              "review.runtime.value.noLayer",
+              {},
+              "레이어 없음",
+            ),
+          handle: handleText(candidate.handle),
+        },
+        "{kind} · {layer} · 핸들 {handle}",
+      ),
     );
   }
 
@@ -1677,12 +2155,26 @@ export class ReviewTools {
       ["X", measurement.length(candidate.measurementPoint[0])],
       ["Y", measurement.length(candidate.measurementPoint[1])],
       ["Z", measurement.length(candidate.measurementPoint[2])],
-      ["스냅", SNAP_LABELS[candidate.kind] ?? candidate.kind],
+      [this.fieldLabel("snap", "스냅"), this.snapLabel(candidate.kind)],
     ];
     if (candidate.approximated) {
-      rows.push(["정밀도", "화면 근사 형상"]);
+      rows.push([
+        this.fieldLabel("precision", "정밀도"),
+        this.message(
+          "review.runtime.value.screenApproximation",
+          {},
+          "화면 근사 형상",
+        ),
+      ]);
     }
-    this.showResult("점 좌표", rows);
+    this.showResult(
+      this.message(
+        "review.runtime.result.coordinate",
+        {},
+        "점 좌표",
+      ),
+      rows,
+    );
     this.onStatus(measurement.point(candidate.measurementPoint));
   }
 
@@ -1690,13 +2182,21 @@ export class ReviewTools {
     if (!this.firstPoint) {
       this.firstPoint = candidate;
       this.onStatus(
-        `첫 점: ${SNAP_LABELS[candidate.kind] ?? candidate.kind} · 두 번째 점을 선택하세요.`,
+        this.message(
+          "review.runtime.status.firstPoint",
+          { snap: this.snapLabel(candidate.kind) },
+          "첫 점: {snap} · 두 번째 점을 선택하세요.",
+        ),
       );
       return;
     }
     if (this.firstPoint.coordinateSpace !== candidate.coordinateSpace) {
       this.onStatus(
-        "모델 공간과 종이 공간의 점은 직접 비교할 수 없습니다. 같은 공간에서 두 점을 선택하세요.",
+        this.message(
+          "review.runtime.status.distanceSpaceMismatch",
+          {},
+          "모델 공간과 종이 공간의 점은 직접 비교할 수 없습니다. 같은 공간에서 두 점을 선택하세요.",
+        ),
       );
       return;
     }
@@ -1718,18 +2218,41 @@ export class ReviewTools {
       lastKind: candidate.kind,
     });
     const rows = [
-      ["거리", measurement.length(distance)],
+      [this.fieldLabel("distance", "거리"), measurement.length(distance)],
       ["ΔX", measurement.length(deltaX)],
       ["ΔY", measurement.length(deltaY)],
       ["ΔZ", measurement.length(deltaZ)],
-      ["각도", `${measurement.number(angle)}°`],
+      [this.fieldLabel("angle", "각도"), `${measurement.number(angle)}°`],
     ];
     if (firstCandidate.approximated || candidate.approximated) {
-      rows.push(["정밀도", "곡선 화면 근사 포함"]);
+      rows.push([
+        this.fieldLabel("precision", "정밀도"),
+        this.message(
+          "review.runtime.value.curveApproximation",
+          {},
+          "곡선 화면 근사 포함",
+        ),
+      ]);
     }
-    this.showResult("두 점 거리", rows);
+    this.showResult(
+      this.message(
+        "review.runtime.result.distance",
+        {},
+        "두 점 거리",
+      ),
+      rows,
+    );
     this.onStatus(
-      `거리 ${measurement.length(distance)} · ΔX ${measurement.length(deltaX)} · ΔY ${measurement.length(deltaY)} · 각도 ${measurement.number(angle)}°`,
+      this.message(
+        "review.runtime.status.distanceResult",
+        {
+          distance: measurement.length(distance),
+          deltaX: measurement.length(deltaX),
+          deltaY: measurement.length(deltaY),
+          angle: measurement.number(angle),
+        },
+        "거리 {distance} · ΔX {deltaX} · ΔY {deltaY} · 각도 {angle}°",
+      ),
     );
     this.firstPoint = null;
   }
@@ -1739,7 +2262,11 @@ export class ReviewTools {
     const first = points[0];
     if (first && first.coordinateSpace !== candidate.coordinateSpace) {
       this.onStatus(
-        "모델 공간과 종이 공간의 점은 함께 측정할 수 없습니다. 같은 공간에서 점을 선택하세요.",
+        this.message(
+          "review.runtime.status.measurementSpaceMismatch",
+          {},
+          "모델 공간과 종이 공간의 점은 함께 측정할 수 없습니다. 같은 공간에서 점을 선택하세요.",
+        ),
       );
       return;
     }
@@ -1749,24 +2276,52 @@ export class ReviewTools {
       pointDistance(previous.measurementPoint, candidate.measurementPoint) <=
         Number.EPSILON
     ) {
-      this.onStatus("앞 점과 다른 위치를 선택하세요.");
+      this.onStatus(
+        this.message(
+          "review.runtime.status.differentPoint",
+          {},
+          "앞 점과 다른 위치를 선택하세요.",
+        ),
+      );
       return;
     }
     this.clearSelection("measurement.start");
     points.push(candidate);
     if (this.activeTool === "angle") {
       if (points.length === 1) {
-        this.onStatus("각도의 꼭짓점을 선택하세요.");
+        this.onStatus(
+          this.message(
+            "review.runtime.status.angleVertex",
+            {},
+            "각도의 꼭짓점을 선택하세요.",
+          ),
+        );
       } else if (points.length === 2) {
-        this.onStatus("두 번째 방향점을 선택하세요.");
+        this.onStatus(
+          this.message(
+            "review.runtime.status.angleSecondDirection",
+            {},
+            "두 번째 방향점을 선택하세요.",
+          ),
+        );
       } else {
         this.finishAngleMeasurement();
       }
       return;
     }
-    const noun = this.activeTool === "area" ? "꼭짓점" : "점";
+    const noun =
+      this.activeTool === "area"
+        ? this.message("review.runtime.value.vertex", {}, "꼭짓점")
+        : this.message("review.runtime.value.point", {}, "점");
     this.onStatus(
-      `${noun} ${points.length.toLocaleString()}개 선택 · 계속 선택하거나 Enter 또는 측정 완료를 누르세요.`,
+      this.message(
+        "review.runtime.status.pointsSelected",
+        {
+          noun,
+          count: this.formattedCount(points.length),
+        },
+        "{noun} {count}개 선택 · 계속 선택하거나 Enter 또는 측정 완료를 누르세요.",
+      ),
     );
     if (points.length >= MAX_MEASUREMENT_POINTS) {
       this.finishMeasurement();
@@ -1803,7 +2358,13 @@ export class ReviewTools {
   finishPathMeasurement() {
     const candidates = [...this.measurementPoints];
     if (candidates.length < 2) {
-      this.onStatus("누적 거리는 두 점 이상 선택해야 합니다.");
+      this.onStatus(
+        this.message(
+          "review.runtime.status.pathNeedsTwoPoints",
+          {},
+          "누적 거리는 두 점 이상 선택해야 합니다.",
+        ),
+      );
       return false;
     }
     const length = polylineLength(
@@ -1811,17 +2372,34 @@ export class ReviewTools {
     );
     const measurement = this.measurementDisplay();
     const rows = [
-      ["총 거리", measurement.length(length)],
-      ["구간", `${(candidates.length - 1).toLocaleString()}개`],
-      ["선택점", `${candidates.length.toLocaleString()}개`],
+      [this.fieldLabel("totalDistance", "총 거리"), measurement.length(length)],
+      [this.fieldLabel("segments", "구간"), this.countLabel(candidates.length - 1)],
+      [this.fieldLabel("selectedPoint", "선택점"), this.countLabel(candidates.length)],
     ];
     if (candidates.some((candidate) => candidate.approximated)) {
-      rows.push(["정밀도", "곡선 화면 근사 포함"]);
+      rows.push([
+        this.fieldLabel("precision", "정밀도"),
+        this.message(
+          "review.runtime.value.curveApproximation",
+          {},
+          "곡선 화면 근사 포함",
+        ),
+      ]);
     }
     this.setMeasurementPath(candidates);
-    this.showResult("누적 거리", rows);
+    this.showResult(
+      this.message("review.runtime.result.path", {}, "누적 거리"),
+      rows,
+    );
     this.onStatus(
-      `누적 거리 ${measurement.length(length)} · ${candidates.length - 1}개 구간`,
+      this.message(
+        "review.runtime.status.pathResult",
+        {
+          distance: measurement.length(length),
+          count: this.formattedCount(candidates.length - 1),
+        },
+        "누적 거리 {distance} · {count}개 구간",
+      ),
     );
     return true;
   }
@@ -1829,7 +2407,13 @@ export class ReviewTools {
   finishAreaMeasurement() {
     const candidates = [...this.measurementPoints];
     if (candidates.length < 3) {
-      this.onStatus("면적은 세 꼭짓점 이상 선택해야 합니다.");
+      this.onStatus(
+        this.message(
+          "review.runtime.status.areaNeedsThreePoints",
+          {},
+          "면적은 세 꼭짓점 이상 선택해야 합니다.",
+        ),
+      );
       return false;
     }
     const points = candidates.map(
@@ -1839,23 +2423,48 @@ export class ReviewTools {
     const perimeter = polylineLength(points, { closed: true });
     if (area <= Number.EPSILON) {
       this.onStatus(
-        "선택한 점으로 면적을 만들 수 없습니다. 일직선이 아닌 꼭짓점을 선택하세요.",
+        this.message(
+          "review.runtime.status.areaInvalid",
+          {},
+          "선택한 점으로 면적을 만들 수 없습니다. 일직선이 아닌 꼭짓점을 선택하세요.",
+        ),
       );
       return false;
     }
     const measurement = this.measurementDisplay();
     const rows = [
-      ["면적", measurement.area(area)],
-      ["둘레", measurement.length(perimeter)],
-      ["꼭짓점", `${candidates.length.toLocaleString()}개`],
+      [this.fieldLabel("area", "면적"), measurement.area(area)],
+      [this.fieldLabel("perimeter", "둘레"), measurement.length(perimeter)],
+      [this.fieldLabel("vertices", "꼭짓점"), this.countLabel(candidates.length)],
     ];
     if (candidates.some((candidate) => candidate.approximated)) {
-      rows.push(["정밀도", "곡선 화면 근사 포함"]);
+      rows.push([
+        this.fieldLabel("precision", "정밀도"),
+        this.message(
+          "review.runtime.value.curveApproximation",
+          {},
+          "곡선 화면 근사 포함",
+        ),
+      ]);
     }
     this.setMeasurementPath(candidates, { closed: true });
-    this.showResult("면적·둘레", rows);
+    this.showResult(
+      this.message(
+        "review.runtime.result.area",
+        {},
+        "면적·둘레",
+      ),
+      rows,
+    );
     this.onStatus(
-      `면적 ${measurement.area(area)} · 둘레 ${measurement.length(perimeter)}`,
+      this.message(
+        "review.runtime.status.areaResult",
+        {
+          area: measurement.area(area),
+          perimeter: measurement.length(perimeter),
+        },
+        "면적 {area} · 둘레 {perimeter}",
+      ),
     );
     return true;
   }
@@ -1872,22 +2481,46 @@ export class ReviewTools {
     if (angle === null) {
       this.measurementPoints.pop();
       this.onStatus(
-        "꼭짓점과 다른 위치에 두 번째 방향점을 선택하세요.",
+        this.message(
+          "review.runtime.status.angleDifferentPoint",
+          {},
+          "꼭짓점과 다른 위치에 두 번째 방향점을 선택하세요.",
+        ),
       );
       return false;
     }
     const measurement = this.measurementDisplay();
     const rows = [
-      ["각도", `${measurement.number(angle)}°`],
-      ["첫 변", measurement.length(pointDistance(first, vertex))],
-      ["둘째 변", measurement.length(pointDistance(vertex, last))],
+      [this.fieldLabel("angle", "각도"), `${measurement.number(angle)}°`],
+      [this.fieldLabel("firstSide", "첫 변"), measurement.length(pointDistance(first, vertex))],
+      [this.fieldLabel("secondSide", "둘째 변"), measurement.length(pointDistance(vertex, last))],
     ];
     if (candidates.some((candidate) => candidate.approximated)) {
-      rows.push(["정밀도", "곡선 화면 근사 포함"]);
+      rows.push([
+        this.fieldLabel("precision", "정밀도"),
+        this.message(
+          "review.runtime.value.curveApproximation",
+          {},
+          "곡선 화면 근사 포함",
+        ),
+      ]);
     }
     this.setMeasurementPath(candidates);
-    this.showResult("세 점 각도", rows);
-    this.onStatus(`세 점 각도 ${measurement.number(angle)}°`);
+    this.showResult(
+      this.message(
+        "review.runtime.result.angle",
+        {},
+        "세 점 각도",
+      ),
+      rows,
+    );
+    this.onStatus(
+      this.message(
+        "review.runtime.status.angleResult",
+        { angle: measurement.number(angle) },
+        "세 점 각도 {angle}°",
+      ),
+    );
     return true;
   }
 
@@ -1895,7 +2528,11 @@ export class ReviewTools {
     const curve = candidate.curveMeasurement;
     if (!curve) {
       this.onStatus(
-        "이 객체의 정밀 곡선 정보를 준비하지 못했습니다. 호·원·타원 가까이에서 다시 선택하세요.",
+        this.message(
+          "review.runtime.status.curveUnavailable",
+          {},
+          "이 객체의 정밀 곡선 정보를 준비하지 못했습니다. 호·원·타원 가까이에서 다시 선택하세요.",
+        ),
       );
       return false;
     }
@@ -1913,22 +2550,22 @@ export class ReviewTools {
       Math.max(majorRadius, 1) * 1e-6;
     const rows = circular
       ? [
-          ["반지름", measurement.length(majorRadius)],
-          ["지름", measurement.length(majorRadius * 2)],
+          [this.fieldLabel("radius", "반지름"), measurement.length(majorRadius)],
+          [this.fieldLabel("diameter", "지름"), measurement.length(majorRadius * 2)],
         ]
       : [
-          ["장축 반지름", measurement.length(majorRadius)],
-          ["단축 반지름", measurement.length(minorRadius)],
-          ["장축 지름", measurement.length(majorRadius * 2)],
-          ["단축 지름", measurement.length(minorRadius * 2)],
+          [this.fieldLabel("majorRadius", "장축 반지름"), measurement.length(majorRadius)],
+          [this.fieldLabel("minorRadius", "단축 반지름"), measurement.length(minorRadius)],
+          [this.fieldLabel("majorDiameter", "장축 지름"), measurement.length(majorRadius * 2)],
+          [this.fieldLabel("minorDiameter", "단축 지름"), measurement.length(minorRadius * 2)],
         ];
     rows.push(
       [
-        "중심 X",
+        this.fieldLabel("centerX", "중심 X"),
         measurement.length(curve.measurementCenter[0]),
       ],
       [
-        "중심 Y",
+        this.fieldLabel("centerY", "중심 Y"),
         measurement.length(curve.measurementCenter[1]),
       ],
     );
@@ -1941,11 +2578,35 @@ export class ReviewTools {
       firstKind: "center",
       lastKind: candidate.kind,
     });
-    this.showResult(`${candidate.sourceKindName} 치수`, rows);
+    const kind = this.sourceKindLabel(candidate);
+    this.showResult(
+      this.message(
+        "review.runtime.result.curveDimensions",
+        { kind },
+        "{kind} 치수",
+      ),
+      rows,
+    );
     this.onStatus(
       circular
-        ? `${candidate.sourceKindName} 반지름 ${measurement.length(majorRadius)} · 지름 ${measurement.length(majorRadius * 2)}`
-        : `${candidate.sourceKindName} 장축 ${measurement.length(majorRadius)} · 단축 ${measurement.length(minorRadius)}`,
+        ? this.message(
+            "review.runtime.status.circularDimensions",
+            {
+              kind,
+              radius: measurement.length(majorRadius),
+              diameter: measurement.length(majorRadius * 2),
+            },
+            "{kind} 반지름 {radius} · 지름 {diameter}",
+          )
+        : this.message(
+            "review.runtime.status.ellipticalDimensions",
+            {
+              kind,
+              major: measurement.length(majorRadius),
+              minor: measurement.length(minorRadius),
+            },
+            "{kind} 장축 {major} · 단축 {minor}",
+          ),
     );
     return true;
   }
@@ -1977,7 +2638,7 @@ export class ReviewTools {
   showTextMatch({
     point,
     handle,
-    kind = "문자",
+    kind,
     value = "",
     hidden = false,
   }) {
@@ -1997,14 +2658,39 @@ export class ReviewTools {
       point: Object.freeze([...point]),
       handle: String(handle ?? ""),
     });
-    this.showResult("검색한 문자", [
-      ["문자", String(value || "—").slice(0, 240)],
-      ["종류", String(kind)],
-      ["핸들", handle ? `0x${handle}` : "—"],
-      ...(hidden ? [["상태", "원본에서 숨김"]] : []),
-    ]);
+    const resolvedKind =
+      kind ??
+      this.message("review.runtime.kind.text", {}, "문자");
+    this.showResult(
+      this.message(
+        "review.runtime.result.foundText",
+        {},
+        "검색한 문자",
+      ),
+      [
+        [this.fieldLabel("text", "문자"), String(value || "—").slice(0, 240)],
+        [this.fieldLabel("type", "종류"), String(resolvedKind)],
+        [this.fieldLabel("handle", "핸들"), handle ? `0x${handle}` : "—"],
+        ...(hidden
+          ? [[
+              this.fieldLabel("status", "상태"),
+              this.message(
+                "review.runtime.value.hiddenInSource",
+                {},
+                "원본에서 숨김",
+              ),
+            ]]
+          : []),
+      ],
+    );
     this.onStatus(
-      `검색한 문자 ${value ? `"${String(value).slice(0, 80)}"` : ""} 위치로 이동했습니다.`,
+      this.message(
+        "review.runtime.status.foundText",
+        {
+          value: value ? ` "${String(value).slice(0, 80)}"` : "",
+        },
+        "검색한 문자 {value} 위치로 이동했습니다.",
+      ),
     );
     this.redraw();
     return true;

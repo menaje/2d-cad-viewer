@@ -1589,7 +1589,7 @@ export function makeFixtureCache({
 } = {}) {
   const sections = [
     makeDrawingSection(
-      wipeoutFrame |
+      (wipeoutFrame === null ? 3 : wipeoutFrame) |
         (lineWeightDisplay ? 1 << 2 : 0) |
         (fillMode ? 1 << 3 : 0) |
         (modelSpaceActive ? 1 << 4 : 0),

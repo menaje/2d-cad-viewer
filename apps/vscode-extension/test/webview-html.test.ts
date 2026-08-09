@@ -165,6 +165,14 @@ test("repository Webview CSS keeps host-only controls hidden", async () => {
   );
   assert.match(
     repositoryStyles,
+    /body\[data-host="vscode"\]\s+\.review-toolbar\s*\{[\s\S]*?max-height:\s*calc\(100%\s*-\s*5\.25rem\);/u,
+  );
+  assert.match(
+    repositoryStyles,
+    /@media\s*\(max-height:\s*680px\)\s*\{[\s\S]*?\.review-toolbar\s*\{[\s\S]*?gap:\s*0\.1rem;[\s\S]*?\.review-toolbar button\s*\{[\s\S]*?height:\s*2\.25rem;/u,
+  );
+  assert.match(
+    repositoryStyles,
     /\[data-left-toolbar-labels="hover"\]\s+\.review-toolbar:hover,[\s\S]*?width:\s*13\.5rem;/u,
   );
   assert.match(
@@ -174,6 +182,10 @@ test("repository Webview CSS keeps host-only controls hidden", async () => {
   assert.match(
     repositoryStyles,
     /\[data-top-toolbar-labels="hover"\]\s+header:hover \.toolbar \.viewer-tool-label,[\s\S]*?header\.tools-open \.toolbar \.viewer-tool-label[\s\S]*?visibility:\s*visible;[\s\S]*?opacity:\s*1;/u,
+  );
+  assert.match(
+    repositoryStyles,
+    /header\.tools-open\s*\+\s*\.viewport\s+\.layer-panel,[\s\S]*?header\.tools-open\s*\+\s*\.viewport\s+\.export-panel\s*\{[\s\S]*?top:\s*7\.25rem;[\s\S]*?max-height:\s*calc\(100%\s*-\s*7\.85rem\);/u,
   );
   assert.doesNotMatch(
     repositoryStyles,

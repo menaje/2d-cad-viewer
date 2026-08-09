@@ -62,7 +62,9 @@ This is a deliberately partial conversion milestone:
   wireframe display emits only visible, non-degenerate edges;
 - WIPEOUT retains its image basis, display properties, exact rectangular or
   polygonal clip vertices, definition handles and the drawing-wide frame
-  setting; enabled frames are displayed while masks remain explicitly
+  setting; a missing WIPEOUT variables object leaves only that frame setting
+  unavailable while preserving independent LWDISPLAY, FILLMODE and model-space
+  state; enabled frames are displayed while masks remain explicitly
   deferred until draw-order-aware rendering exists;
 - IMAGE retains the IMAGEDEF path, insertion/U/V basis, source pixel size,
   brightness/contrast/fade, definition handles and exact rectangular or
@@ -183,11 +185,13 @@ diagnoses an adapter, so it adds no work to the normal drawing-open path.
 
 ### Actual DWG viewport override qualification
 
-Use a redistributable synthetic DWG with one `Layout1` paper-space viewport and
-one `TARGET` layer. That viewport must override the layer with RGB `#112233`,
-40% transparency, `DASHED` linetype and 0.50 mm lineweight. The qualification
-runs the product adapter, opens its output with the canonical Scene Cache reader
-and requires all four sparse records to merge into the same viewport/layer row:
+Use a redistributable synthetic DWG with one `Layout1` paper viewport, one model
+viewport and one `TARGET` layer. The model viewport must override the layer with
+RGB `#40c4ff`,
+40% transparency, `DASHED` linetype and 0.50 mm lineweight, with drawing
+lineweight display enabled. The qualification runs the product adapter, opens
+its output with the canonical Scene Cache reader and requires all four sparse
+records to merge into the same viewport/layer row:
 
 ```bash
 pnpm run qualify:viewport-layer-overrides -- \
@@ -204,7 +208,7 @@ The R2004 round-trip qualification used the repository's
 [`generate-viewport-layer-overrides.py`](../../tests/fixtures/generate-viewport-layer-overrides.py)
 definition and a separate write-enabled LibreDWG 0.14 build. The read-only
 product adapter emitted a valid 47-section Scene Cache v1.20, and the canonical
-reader recovered true color `0xc0112233`, transparency `0x27000000`, `DASHED`
+reader recovered true color `0xc040c4ff`, transparency `0x27000000`, `DASHED`
 and lineweight `50` on the original viewport handle. The write-enabled build is
 only a fixture producer; it is not part of the product or release package.
 

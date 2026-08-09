@@ -100,11 +100,12 @@ export function createI18n({
   const fallbackMessages = catalogs[fallbackLocale] ?? {};
   const language = locale.split("-")[0];
 
-  function t(key, values) {
+  function t(key, values, fallbackTemplate) {
     const normalizedKey = normalizedMessageKey(key);
     const template =
       messages[normalizedKey] ??
       fallbackMessages[normalizedKey] ??
+      (typeof fallbackTemplate === "string" ? fallbackTemplate : undefined) ??
       normalizedKey;
     return interpolate(template, values);
   }

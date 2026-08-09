@@ -341,12 +341,31 @@ From the repository root:
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm --filter dwg-viewer-vscode run build:webview
 python3 -m http.server 4173 --bind 127.0.0.1 --directory .
 ```
 
-Open `http://127.0.0.1:4173/packages/webview/` and select a generated `.cache`
-file. The repository root is the static root because the Webview imports the
-shared `packages/dwg-scene-source` package. The file stays local to the browser.
+Open `http://127.0.0.1:4173/apps/vscode-extension/media/webview/` and select a
+generated `.cache` file. This serves the same bundled main module and workers
+that ship in the extension. The repository root remains the static root so a
+same-origin qualification cache can be served without uploading it. The file
+stays local to the browser.
+
+Automated local UI qualification can open a same-origin synthetic cache of at
+most 64 MiB without a native file picker:
+
+```text
+http://127.0.0.1:4173/apps/vscode-extension/media/webview/?qualification-cache=/tmp/fixture.cache
+```
+
+This query is ignored by the VS Code host and rejects cross-origin or non-cache
+paths. It is a development-shell input, not a product DWG loading path.
+
+Append `qualification-shell=vscode` to exercise the immersive extension shell.
+The optional `qualification-top-toolbar-labels` and
+`qualification-left-toolbar-labels` parameters accept `hover` or `icons`, and
+`qualification-locale` accepts a BCP 47 language tag. These parameters are also
+ignored by the VS Code host.
 
 ## Test
 

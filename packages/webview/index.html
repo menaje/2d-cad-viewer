@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title data-i18n="page.title">DWG Scene Cache Viewer</title>
-    <link rel="stylesheet" href="./styles.css?v=1.18.17" />
+    <link rel="stylesheet" href="./styles.css?v=1.18.19" />
   </head>
   <body>
     <main>
@@ -551,14 +551,22 @@
       {
         "imports": {
           "@menaje/dwg-scene-source": "../dwg-scene-source/src/index.mjs",
+          "@menaje/dwg-scene-source/range-source": "../dwg-scene-source/src/range-source.mjs",
+          "@menaje/dwg-scene-source/scene-cache": "../dwg-scene-source/src/scene-cache.mjs",
           "@menaje/viewer-webgl": "./src/public-api.mjs",
           "@menaje/viewer-render-protocol": "../render-protocol/src/index.mjs",
           "@menaje/viewer-core": "../viewer-core/src/index.mjs",
+          "@menaje/viewer-core/batch-cache": "../viewer-core/src/batch-cache.mjs",
+          "@menaje/viewer-core/camera": "../viewer-core/src/camera.mjs",
+          "@menaje/viewer-core/detail-streaming": "../viewer-core/src/detail-streaming-controller.mjs",
+          "@menaje/viewer-core/interaction": "../viewer-core/src/viewport-interaction.mjs",
+          "@menaje/viewer-core/selection": "../viewer-core/src/selection-controller.mjs",
           "@menaje/viewer-ui": "../viewer-ui/src/index.mjs",
-          "#shx-parser": "./node_modules/@mlightcad/shx-parser/dist/index.es.js"
+          "#shx-parser": "./node_modules/@mlightcad/shx-parser/dist/index.es.js",
+          "earcut": "./node_modules/earcut/src/earcut.js"
         }
       }
     </script>
-    <script type="module" src="./src/main.mjs?v=1.20.0"></script>
+    <script type="module" src="./src/main.mjs?v=1.20.4"></script>
   </body>
 </html>

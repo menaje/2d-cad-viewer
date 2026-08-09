@@ -18,7 +18,7 @@ const expectation = Object.freeze({
   layoutName: "배치1",
   layerName: "0",
   linetypeName: "DASHED",
-  color: 0xc0112233,
+  color: 0xc040c4ff,
   transparency: 0x27000000,
   lineWeight: 50,
 });
@@ -49,7 +49,10 @@ function makeOverrideCache(rows = [
     value: expectation.lineWeight,
   },
 ]) {
-  return makeFixtureCache({ viewportLayerOverrides: rows });
+  return makeFixtureCache({
+    lineWeightDisplay: true,
+    viewportLayerOverrides: rows,
+  });
 }
 
 test("qualifies all four viewport layer override properties", async () => {
@@ -62,14 +65,17 @@ test("qualifies all four viewport layer override properties", async () => {
     cacheVersion: "1.20",
     sectionCount: 47,
     overrideRecordCount: 4,
+    lineWeightDisplay: true,
     layoutName: "배치1",
+    viewportCount: 2,
     viewportHandle: "0x7d2",
+    viewportId: 2,
     layerName: "0",
     linetypeName: "DASHED",
     override: {
       layerIndex: 0,
       flags: 15,
-      color: 0xc0112233,
+      color: 0xc040c4ff,
       transparency: 0x27000000,
       linetypeCode: 3,
       lineWeight: 50,
@@ -110,7 +116,7 @@ test("parses reusable fixture expectations", () => {
       "--layout",
       "Sheet A",
       "--color",
-      "0xc0112233",
+      "0xc040c4ff",
       "--lineweight",
       "50",
     ]),
@@ -121,7 +127,7 @@ test("parses reusable fixture expectations", () => {
         layoutName: "Sheet A",
         layerName: "TARGET",
         linetypeName: "DASHED",
-        color: 0xc0112233,
+        color: 0xc040c4ff,
         transparency: 0x27000000,
         lineWeight: 50,
       },

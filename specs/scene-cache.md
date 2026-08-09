@@ -188,7 +188,7 @@ In v1.20, kind 1 contains one 160-byte record:
 | 0 | `u32` | source DWG version code |
 | 4 | `u32` | source maintenance version |
 | 8 | `i32` | insertion units |
-| 12 | `u32` | display bits: WIPEOUT frame 0–1, LWDISPLAY 2, FILLMODE 3, model space active 4; or `0xffffffff` |
+| 12 | `u32` | display bits: WIPEOUT frame 0–1 (`3` unavailable), LWDISPLAY 2, FILLMODE 3, model space active 4; legacy `0xffffffff` means all unavailable |
 | 16 | `u64` | total logical entity count |
 | 24 | `u64` | serialized logical entity count |
 | 32 | `f64[3]` | drawing minimum bounds |

@@ -28,6 +28,10 @@ test("formats catalog messages without interpreting injected values", () => {
     english.t("toolbar.fontsWithIssues", { count: "<3>" }),
     "Fonts (<3>)",
   );
+  assert.equal(
+    english.t("review.runtime.future", { count: 2 }, "Future {count}"),
+    "Future 2",
+  );
   assert.throws(() => english.t("../toolbar.fit"), /key is invalid/u);
 });
 
@@ -70,17 +74,20 @@ test("built-in locale catalogs stay structurally aligned with the template", asy
   }
 });
 
-test("runtime shell message keys exist in every built-in catalog", async () => {
-  const runtime = await readFile(
-    new URL("../src/main.mjs", import.meta.url),
-    "utf8",
-  );
+test("runtime shell and review message keys exist in every built-in catalog", async () => {
+  const runtime = (
+    await Promise.all(
+      ["../src/main.mjs", "../src/review-tools.mjs"].map((path) =>
+        readFile(new URL(path, import.meta.url), "utf8"),
+      ),
+    )
+  ).join("\n");
   const runtimeKeys = new Set(
     [...runtime.matchAll(
-      /["']((?:page|toolbar|status|fonts|empty)\.[a-zA-Z0-9.]+)["']/gu,
+      /\b(?:t|message)\(\s*["']([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)["']/gu,
     )].map((match) => match[1]),
   );
-  assert.ok(runtimeKeys.size >= 20);
+  assert.ok(runtimeKeys.size >= 250);
   for (const key of runtimeKeys) {
     for (const [locale, messages] of Object.entries(
       BUILT_IN_CATALOGS,

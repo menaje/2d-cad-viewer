@@ -1594,6 +1594,7 @@ body[data-host="vscode"] .review-toolbar {
   z-index: 15;
   left: max(0.65rem, env(safe-area-inset-left));
   width: 2.75rem;
+  max-height: calc(100% - 5.25rem);
   opacity: 0.72;
   transition:
     width 150ms ease 220ms,
@@ -1720,6 +1721,22 @@ body[data-host="vscode"] .export-panel {
   max-height: calc(100% - 4.45rem);
 }
 
+body[data-host="vscode"] header:hover + .viewport .layer-panel,
+body[data-host="vscode"] header:hover + .viewport .font-panel,
+body[data-host="vscode"] header:hover + .viewport .xref-panel,
+body[data-host="vscode"] header:hover + .viewport .export-panel,
+body[data-host="vscode"] header:focus-within + .viewport .layer-panel,
+body[data-host="vscode"] header:focus-within + .viewport .font-panel,
+body[data-host="vscode"] header:focus-within + .viewport .xref-panel,
+body[data-host="vscode"] header:focus-within + .viewport .export-panel,
+body[data-host="vscode"] header.tools-open + .viewport .layer-panel,
+body[data-host="vscode"] header.tools-open + .viewport .font-panel,
+body[data-host="vscode"] header.tools-open + .viewport .xref-panel,
+body[data-host="vscode"] header.tools-open + .viewport .export-panel {
+  top: 7.25rem;
+  max-height: calc(100% - 7.85rem);
+}
+
 @media (max-width: 640px) {
   body[data-host="vscode"] header:hover,
   body[data-host="vscode"] header:focus-within,
@@ -1737,6 +1754,20 @@ body[data-host="vscode"] .export-panel {
 
   body[data-host="vscode"] .view-bookmark-panel {
     width: min(23rem, calc(100% - 11.25rem));
+  }
+}
+
+@media (max-height: 680px) {
+  body[data-host="vscode"] .review-toolbar {
+    gap: 0.1rem;
+  }
+
+  body[data-host="vscode"] .review-toolbar button {
+    height: 2.25rem;
+  }
+
+  body[data-host="vscode"] .review-toolbar .review-section-start {
+    height: 2.5rem;
   }
 }
 

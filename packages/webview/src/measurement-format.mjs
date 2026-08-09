@@ -129,13 +129,17 @@ export function normalizeMeasurementPreferences(value = {}) {
   });
 }
 
-export function formatMeasurementNumber(value, precision = null) {
+export function formatMeasurementNumber(
+  value,
+  precision = null,
+  locale = "ko-KR",
+) {
   if (!Number.isFinite(value)) {
     return "—";
   }
   const normalized = Math.abs(value) < 1e-9 ? 0 : value;
   if (Number.isInteger(precision)) {
-    return new Intl.NumberFormat("ko-KR", {
+    return new Intl.NumberFormat(locale, {
       minimumFractionDigits: precision,
       maximumFractionDigits: precision,
       useGrouping: true,
@@ -144,7 +148,7 @@ export function formatMeasurementNumber(value, precision = null) {
   const magnitude = Math.abs(normalized);
   const maximumFractionDigits =
     magnitude >= 10_000 ? 1 : magnitude >= 100 ? 2 : 4;
-  return new Intl.NumberFormat("ko-KR", {
+  return new Intl.NumberFormat(locale, {
     maximumFractionDigits,
     useGrouping: true,
   }).format(normalized);
@@ -184,31 +188,43 @@ export function calibrationFromKnownDistance(
 export function createMeasurementFormat(
   insertionUnits,
   rawPreferences = {},
+  {
+    locale = "ko-KR",
+    drawingUnitLabel = DRAWING_UNIT.label,
+  } = {},
 ) {
   const preferences = normalizeMeasurementPreferences(rawPreferences);
-  const sourceUnit = insertionUnitInfo(insertionUnits);
+  const sourceDefinition = insertionUnitInfo(insertionUnits);
+  const localizedDrawingUnit = Object.freeze({
+    ...DRAWING_UNIT,
+    label: drawingUnitLabel,
+  });
+  const localizedUnit = (unit) =>
+    unit === DRAWING_UNIT ? localizedDrawingUnit : unit;
+  const sourceUnit = localizedUnit(sourceDefinition);
   const calibrated =
-    sourceUnit === DRAWING_UNIT ? preferences.calibration : null;
+    sourceDefinition === DRAWING_UNIT ? preferences.calibration : null;
   const millimetersPerDrawingUnit =
     sourceUnit.millimeters ?? calibrated?.millimetersPerDrawingUnit ?? null;
-  const requested =
+  const requestedDefinition =
     preferences.displayUnit === "auto"
-      ? sourceUnit !== DRAWING_UNIT
-        ? sourceUnit
+      ? sourceDefinition !== DRAWING_UNIT
+        ? sourceDefinition
         : calibrated
           ? UNIT_BY_KEY.get(calibrated.referenceUnit)
           : DRAWING_UNIT
       : measurementUnitInfo(preferences.displayUnit) ?? DRAWING_UNIT;
-  const displayUnit =
-    requested !== DRAWING_UNIT && millimetersPerDrawingUnit === null
+  const displayDefinition =
+    requestedDefinition !== DRAWING_UNIT && millimetersPerDrawingUnit === null
       ? DRAWING_UNIT
-      : requested;
+      : requestedDefinition;
+  const displayUnit = localizedUnit(displayDefinition);
   const lengthScale =
-    displayUnit === DRAWING_UNIT
+    displayDefinition === DRAWING_UNIT
       ? 1
       : millimetersPerDrawingUnit / displayUnit.millimeters;
   const number = (value) =>
-    formatMeasurementNumber(value, preferences.precision);
+    formatMeasurementNumber(value, preferences.precision, locale);
   const lengthValue = (value) => value * lengthScale;
   const areaValue = (value) => value * lengthScale * lengthScale;
   const length = (value) =>

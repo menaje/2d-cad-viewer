@@ -2036,9 +2036,8 @@ export class SceneCacheReader {
           ? rawDisplaySettings & 3
           : rawDisplaySettings;
       if (
-        (rawWipeoutFrame !== 0xffffffff && rawWipeoutFrame > 2) ||
-        (rawDisplaySettings !== 0xffffffff &&
-          (rawDisplaySettings & ~0x1f) !== 0)
+        rawDisplaySettings !== 0xffffffff &&
+        (rawDisplaySettings & ~0x1f) !== 0
       ) {
         throw new Error("drawing contains invalid display settings");
       }
@@ -2090,7 +2089,7 @@ export class SceneCacheReader {
         maintenanceVersion: view.getUint32(4, true),
         insertionUnits: view.getInt32(8, true),
         wipeoutFrame:
-          rawWipeoutFrame !== 0xffffffff ? rawWipeoutFrame : null,
+          rawWipeoutFrame <= 2 ? rawWipeoutFrame : null,
         lineWeightDisplay:
           rawDisplaySettings !== 0xffffffff
             ? (rawDisplaySettings & (1 << 2)) !== 0

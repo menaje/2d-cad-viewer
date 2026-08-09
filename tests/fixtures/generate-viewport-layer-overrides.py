@@ -28,12 +28,18 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> None:
     arguments = parse_arguments()
     document = ezdxf.new("R2004", setup=False)
+    document.header["$LWDISPLAY"] = 1
     document.layers.add(
         "TARGET",
         color=7,
         linetype="Continuous",
         lineweight=25,
     )
+    document.layers.add(
+        "VIEWPORTS",
+        color=7,
+        linetype="Continuous",
+    ).dxf.plot = 0
     document.linetypes.add(
         "DASHED",
         pattern=[0.5, 0.25, -0.25],
@@ -47,6 +53,7 @@ def main() -> None:
     )
 
     layout = document.layout("Layout1")
+    layout.add_new_main_viewport()
     viewport = layout.add_viewport(
         center=(100, 75),
         size=(180, 120),
@@ -55,7 +62,7 @@ def main() -> None:
         dxfattribs={"layer": "0"},
     )
     overrides = document.layers.get("TARGET").get_vp_overrides()
-    overrides.set_rgb(viewport.dxf.handle, RGB(17, 34, 51))
+    overrides.set_rgb(viewport.dxf.handle, RGB(64, 196, 255))
     overrides.set_transparency(viewport.dxf.handle, 0.4)
     overrides.set_linetype(viewport.dxf.handle, "DASHED")
     overrides.set_lineweight(viewport.dxf.handle, 50)

@@ -29,7 +29,7 @@ export const DEFAULT_VIEWPORT_LAYER_OVERRIDE_EXPECTATION = Object.freeze({
   layoutName: "Layout1",
   layerName: "TARGET",
   linetypeName: "DASHED",
-  color: 0xc0112233,
+  color: 0xc040c4ff,
   transparency: 0x27000000,
   lineWeight: 50,
 });
@@ -100,11 +100,17 @@ export async function inspectViewportLayerOverrideCache(
     "fixture must contain exactly four viewport layer override records",
   );
 
-  const [layouts, layers, linetypes] = await Promise.all([
+  const [drawing, layouts, layers, linetypes] = await Promise.all([
+    reader.readDrawing(),
     reader.readLayouts(),
     reader.readLayers(),
     reader.readLinetypes(),
   ]);
+  assert.equal(
+    drawing.lineWeightDisplay,
+    true,
+    "fixture must enable lineweight display",
+  );
   const layerIndex = layers.findIndex(
     (layer) => layer.name === expected.layerName,
   );
@@ -130,7 +136,13 @@ export async function inspectViewportLayerOverrideCache(
     `expected one linetype named ${expected.linetypeName}`,
   );
 
-  const matchingViewports = matchingLayouts[0].viewports.filter(
+  const layout = matchingLayouts[0];
+  assert.equal(
+    layout.viewports.length,
+    2,
+    "fixture layout must contain one paper viewport and one model viewport",
+  );
+  const matchingViewports = layout.viewports.filter(
     (viewport) =>
       viewport.layerOverrides.some(
         (override) => override.layerIndex === layerIndex,
@@ -142,6 +154,23 @@ export async function inspectViewportLayerOverrideCache(
     "expected one viewport with the target layer override",
   );
   const viewport = matchingViewports[0];
+  const paperViewport = layout.viewports.find(
+    (candidate) => candidate.id === 1,
+  );
+  assert.ok(paperViewport, "fixture layout must contain its paper viewport");
+  assert.notEqual(
+    viewport.handle,
+    paperViewport.handle,
+    "layer overrides must belong to a model viewport, not the paper viewport",
+  );
+  assert.ok(
+    viewport.id > 1,
+    "fixture model viewport must have an ID greater than one",
+  );
+  assert.ok(
+    viewport.width > 0 && viewport.height > 0 && viewport.viewHeight > 0,
+    "fixture model viewport must have a visible paper and model extent",
+  );
   assert.equal(
     viewport.layerOverrides.length,
     1,
@@ -165,8 +194,11 @@ export async function inspectViewportLayerOverrideCache(
     cacheVersion: `${reader.header.major}.${reader.header.minor}`,
     sectionCount: reader.sections.size,
     overrideRecordCount: overrideSection.recordCount,
+    lineWeightDisplay: drawing.lineWeightDisplay,
     layoutName: matchingLayouts[0].name,
+    viewportCount: layout.viewports.length,
     viewportHandle: `0x${viewport.handle.toString(16)}`,
+    viewportId: viewport.id,
     layerName: layers[layerIndex].name,
     linetypeName: matchingLinetypes[0].name,
     override: Object.freeze({ ...override }),

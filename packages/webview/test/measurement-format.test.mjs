@@ -44,6 +44,17 @@ test("unitless drawings cannot claim a physical unit before calibration", () => 
   assert.equal(measurement.length(25), "25 도면 단위");
 });
 
+test("measurement output follows the viewer locale and drawing-unit label", () => {
+  const measurement = createMeasurementFormat(
+    0,
+    { precision: 2 },
+    { locale: "en-US", drawingUnitLabel: "drawing units" },
+  );
+
+  assert.equal(measurement.sourceUnit.label, "drawing units");
+  assert.equal(measurement.length(1_234.5), "1,234.50 drawing units");
+});
+
 test("two-point calibration unlocks physical length and area values", () => {
   const calibration = calibrationFromKnownDistance(100, 2, "m");
   assert.deepEqual(calibration, {
