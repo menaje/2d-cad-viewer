@@ -1,6 +1,6 @@
 import {
   TextEntityKind,
-} from "./scene-cache.mjs?v=1.19.0";
+} from "./scene-cache.mjs?v=1.20.0";
 import {
   decodeCadColor,
   decodeCadOpacity,
@@ -25,6 +25,10 @@ import {
   indexDwgRenderDeltaStyles,
   renderDeltaInstanceStyle,
 } from "./render-delta-style.mjs";
+import {
+  viewportLayerColor,
+  viewportStyleRow,
+} from "./viewport-layer-state.mjs";
 import {
   cadMTextParagraphStart,
   DEFAULT_MTEXT_PARAGRAPH,
@@ -818,7 +822,11 @@ function decodeColor(
   byBlock = null,
   palette = DEFAULT_ACI_PALETTE,
 ) {
-  return decodeCadColor(encoded, { layer, byBlock, palette });
+  return decodeCadColor(encoded, {
+    layer: Number.isInteger(layer) ? { color: layer } : layer,
+    byBlock,
+    palette,
+  });
 }
 
 function instancesForText(record, ownerBlockIndex, instanceGraph) {
@@ -1945,6 +1953,12 @@ export class CanvasTextOverlay {
           style?.opacity ??
           instances.opacities?.[instanceIndex] ??
           1;
+        const layerColor = viewportLayerColor(
+          this.instanceGraph,
+          viewportStyleRow(instances, instanceIndex),
+          layerIndex,
+          this.layers[layerIndex]?.color ?? 0,
+        );
         const instanceMatrix = renderDeltaInstanceMatrix(
           this.renderDeltaTransformIndex,
           instances,
@@ -2061,7 +2075,7 @@ export class CanvasTextOverlay {
           width,
           height,
           metrics,
-          layerIndex,
+          layerColor,
           byBlockColor,
           byBlockOpacity,
           renderDiffStyle,
@@ -2096,7 +2110,7 @@ export class CanvasTextOverlay {
               width,
               height,
               orderMetrics,
-              layerIndex,
+              layerColor,
               byBlockColor,
               byBlockOpacity,
               renderDiffStyle,
@@ -2445,12 +2459,13 @@ export class CanvasTextOverlay {
     width,
     height,
     metrics,
-    layerIndex,
+    layerColor,
     byBlockColor,
     left,
     right,
     top,
     bottom,
+    opacity,
     renderDiffStyle,
   ) {
     const flags = Number.isInteger(record.backgroundFlags)
@@ -2514,15 +2529,17 @@ export class CanvasTextOverlay {
         diffColor ??
         decodeColor(
           record.backgroundColor,
-          this.layers[layerIndex],
+          layerColor,
           byBlockColor,
           this.palette,
         );
       color =
         `rgba(${red}, ${green}, ${blue}, ` +
-        `${renderDiffStyle.opacity})`;
+        "1)";
     }
     const context = this.context;
+    context.save();
+    context.globalAlpha = Math.max(0, Math.min(1, opacity));
     context.fillStyle = color;
     context.beginPath();
     context.moveTo(points[0][0], points[0][1]);
@@ -2531,6 +2548,7 @@ export class CanvasTextOverlay {
     }
     context.closePath();
     context.fill();
+    context.restore();
     metrics.backgroundFills += 1;
   }
 
@@ -2543,7 +2561,7 @@ export class CanvasTextOverlay {
     width,
     height,
     metrics,
-    layerIndex,
+    layerColor,
     byBlockColor,
     byBlockOpacity,
     renderDiffStyle,
@@ -2552,7 +2570,7 @@ export class CanvasTextOverlay {
     const opacity =
       decodeCadOpacity(record.color, {
         layer: decodeCadOpacity(
-          this.layers[layerIndex]?.color ?? 0,
+          layerColor,
         ),
         byBlock: byBlockOpacity,
       }) * renderDiffStyle.opacity;
@@ -2568,7 +2586,7 @@ export class CanvasTextOverlay {
         diffColor ??
         decodeColor(
           encoded,
-          this.layers[layerIndex],
+          layerColor,
           byBlockColor,
           this.palette,
         );
@@ -2947,12 +2965,13 @@ export class CanvasTextOverlay {
         width,
         height,
         metrics,
-        layerIndex,
+        layerColor,
         byBlockColor,
         blockLeft,
         blockLeft + blockWidth,
         verticalOffset + 1,
         verticalOffset + 1 - blockHeight,
+        opacity,
         renderDiffStyle,
       );
     }

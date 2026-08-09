@@ -1,9 +1,9 @@
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.19.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.20.0";
 import {
   multiplyMat4,
   transformPoint,
 } from "./math.mjs";
-import { createClipNode } from "./instance-graph.mjs?v=1.19.0";
+import { createClipNode } from "./instance-graph.mjs?v=1.20.0";
 
 const MATRIX_VALUES = 16;
 const MODEL_BLOCK_INDEX = -1;
@@ -287,6 +287,12 @@ export function composeExternalInstanceGraph(
           parentInstanceGraph.linetypeScalesByVisibilityRow,
         annotationScalesByVisibilityRow:
           parentInstanceGraph.annotationScalesByVisibilityRow,
+        layerColorsByVisibilityRow:
+          parentInstanceGraph.layerColorsByVisibilityRow,
+        layerLineWeightsByVisibilityRow:
+          parentInstanceGraph.layerLineWeightsByVisibilityRow,
+        layerLinetypesByVisibilityRow:
+          parentInstanceGraph.layerLinetypesByVisibilityRow,
         instanceCount: 0,
         maskBucketScale,
       }),
@@ -434,6 +440,12 @@ export function composeExternalInstanceGraph(
         parentInstanceGraph.linetypeScalesByVisibilityRow,
       annotationScalesByVisibilityRow:
         parentInstanceGraph.annotationScalesByVisibilityRow,
+      layerColorsByVisibilityRow:
+        parentInstanceGraph.layerColorsByVisibilityRow,
+      layerLineWeightsByVisibilityRow:
+        parentInstanceGraph.layerLineWeightsByVisibilityRow,
+      layerLinetypesByVisibilityRow:
+        parentInstanceGraph.layerLinetypesByVisibilityRow,
       instanceCount,
       maskBucketScale,
       diagnostics: childInstanceGraph.diagnostics,

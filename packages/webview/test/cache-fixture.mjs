@@ -41,6 +41,7 @@ import {
   TEXT_STYLE_RECORD_SIZE,
   VIEWPORT_FROZEN_LAYER_RECORD_SIZE,
   VIEWPORT_CLIP_VERTEX_RECORD_SIZE,
+  VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
   VIEWPORT_RECORD_SIZE,
   WIPEOUT_CLIP_VERTEX_RECORD_SIZE,
   WIPEOUT_ENTITY_RECORD_SIZE,
@@ -1469,6 +1470,27 @@ function makeViewportClipVertexSection() {
   };
 }
 
+function makeViewportLayerOverrideSection(rows = []) {
+  const buffer = new ArrayBuffer(
+    VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE * rows.length,
+  );
+  const view = new DataView(buffer);
+  rows.forEach((row, index) => {
+    const offset = index * VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE;
+    writeU64(view, offset, row.viewportHandle);
+    view.setUint32(offset + 8, row.layerIndex, true);
+    view.setUint16(offset + 12, row.property, true);
+    view.setUint32(offset + 16, row.value, true);
+  });
+  return {
+    kind: SectionKind.ViewportLayerOverrides,
+    recordSize: VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
+    recordCount: rows.length,
+    flags: 0,
+    buffer,
+  };
+}
+
 function makeDrawOrderTableSection() {
   const buffer = new ArrayBuffer(DRAW_ORDER_TABLE_RECORD_SIZE * 2);
   const view = new DataView(buffer);
@@ -1563,6 +1585,7 @@ export function makeFixtureCache({
   savedModelView = null,
   wipeoutRecordCount = WIPEOUT_ROWS.length,
   includeReviewCurves = false,
+  viewportLayerOverrides = [],
 } = {}) {
   const sections = [
     makeDrawingSection(
@@ -1633,6 +1656,7 @@ export function makeFixtureCache({
     makeImageClipVertexSection(),
     makeTextAnnotationContextSection(),
     makeTextAnnotationColumnHeightSection(),
+    makeViewportLayerOverrideSection(viewportLayerOverrides),
   ];
   const directoryOffset = HEADER_SIZE;
   const directoryLength = sections.length * DIRECTORY_ENTRY_SIZE;

@@ -1,6 +1,6 @@
 export const EN_MESSAGES = Object.freeze({
   "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.19",
+  "page.eyebrow": "DWG Viewer · Scene Cache v1.20",
   "page.heading": "Large drawing first-frame verifier",
   "page.hostHeading": "DWG drawing viewer",
   "toolbar.more.open": "Open drawing tools",

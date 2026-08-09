@@ -71,7 +71,7 @@ function fixtureCache(rows: readonly TextFixtureRow[]): Buffer {
   const cache = Buffer.alloc(fileSize);
   cache.set([68, 87, 71, 83, 67, 78, 49, 0], 0);
   cache.writeUInt16LE(1, 8);
-  cache.writeUInt16LE(19, 10);
+  cache.writeUInt16LE(20, 10);
   cache.writeUInt32LE(HEADER_SIZE, 12);
   cache.writeUInt32LE(1, 16);
   cache.writeUInt32LE(DIRECTORY_ENTRY_SIZE, 20);
@@ -376,7 +376,7 @@ test("rejects a text index from an unsupported cache revision or header flag", a
     );
 
     const flaggedPath = path.join(directory, "flagged.cache");
-    cache.writeUInt16LE(19, 10);
+    cache.writeUInt16LE(20, 10);
     cache.writeUInt32LE(2, 24);
     await writeFile(flaggedPath, cache);
     await assert.rejects(

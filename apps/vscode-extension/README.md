@@ -81,7 +81,8 @@ of starting a separate task.
 ### Layouts and export
 
 - Switch between model space and paper-space layouts.
-- Preserve layout paper size, rotation, viewports, and frozen layers.
+- Preserve layout paper size, rotation, viewports, frozen layers, and each
+  viewport's layer colors, transparency, linetypes, and lineweights.
 - Export the current screen, current tab, or all layouts to PNG or PDF.
 - Optionally apply a referenced CTB to a layout for plot colors and
   lineweights.
@@ -144,7 +145,8 @@ tool targets.
 - Solid, gradient, and patterned HATCH content
 - POINT, SOLID, 3DFACE, and WIPEOUT content
 - CAD text, attributes, Korean SHX/BigFont glyphs, and common MTEXT formatting
-- Model space, multiple layouts, viewports, and per-viewport layer freezing
+- Model space, multiple layouts, viewports, and per-viewport layer display
+  overrides
 - JPG/PNG IMAGE references and XCLIP boundaries
 - Linetypes, colors, transparency, lineweights, and optional layout CTB styles
 

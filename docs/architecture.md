@@ -227,7 +227,7 @@ exercises intended-versus-reopened-observed receipt validation. The rejected
 WASM MEMFS candidate remains outside settings and the VSIX.
 
 The product writer, preview writer, benchmark validator and Webview reader now
-accept only Scene Cache v1.19. Lower version numbers in the milestone evidence
+accept only Scene Cache v1.20. Lower version numbers in the milestone evidence
 below are historical development records, not supported runtime formats.
 
 LibreDWG passes the conversion time and memory targets and matches the
@@ -268,12 +268,13 @@ v1.18 adds IMAGE/IMAGEDEF paths, placement bases and clip vertices without
 adding raster bytes to the cache or first-frame read. The host resolves only
 visible JPG/PNG references and transfers deduplicated, bounded content; the
 Webview applies image/XREF clipping and keeps decoded bitmaps in a 64 MiB RGBA
-LRU below the transparent WebGL drawing plane. Scene Cache v1.19 adds bounded
+LRU below the transparent WebGL drawing plane. Scene Cache v1.19 added bounded
 MTEXT annotation contexts and exact viewport annotation scales, so layout
 viewports select stored representations instead of multiplying text by a
-geometric viewport ratio. Remaining exact
-CAD text layout and draw-order work are product-completeness gates on this
-selected engine, not an open parser choice.
+geometric viewport ratio. Scene Cache v1.20 adds viewport-specific layer color,
+transparency, linetype and lineweight across WebGL and Canvas overlays.
+Remaining exact CAD text layout and draw-order work are product-completeness
+gates on this selected engine, not an open parser choice.
 
 The complete mlightcad/LibreDWG WASM object-model pipeline is intentionally not
 used for large drawings because the full JavaScript model, structured cloning,

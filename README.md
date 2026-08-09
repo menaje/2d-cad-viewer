@@ -125,7 +125,7 @@ Marketplace에 연결할 수 없다면 GPL 동반 VSIX를 먼저 설치합니다
 - HATCH 솔리드·그라데이션·패턴
 - POINT, SOLID, 3DFACE와 WIPEOUT
 - TEXT, MTEXT, 속성 문자와 인라인 문자 서식
-- 모델 공간, 다중 배치, 뷰포트와 레이어 동결 상태
+- 모델 공간, 다중 배치, 뷰포트별 레이어 동결·색상·투명도·선종류·선굵기
 - JPG/PNG IMAGE 참조와 XCLIP
 - 선종류, 색상, 투명도, 선굵기와 선택적 CTB 출력 스타일
 

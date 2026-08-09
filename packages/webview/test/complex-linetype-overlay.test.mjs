@@ -115,6 +115,19 @@ test("resolves ByLayer complex patterns and enforces the source cap", () => {
     maximumSegments: 1,
   });
   assert.equal(byLayer.sourceSegments, 1);
+
+  const viewportOverride = collectComplexLinetypeSegments({
+    vertices: vertices(0),
+    batches: [batch],
+    linetypes: [
+      complex,
+      { code: 2, flags: 0, name: "Continuous", dashes: [] },
+    ],
+    layers: [{ linetype: "Continuous" }],
+    layerLinetypeRows: [new Uint16Array([3])],
+    maximumSegments: 1,
+  });
+  assert.equal(viewportOverride.sourceSegments, 1);
 });
 
 test("uses the viewport paper-space scale for complex linetypes", () => {

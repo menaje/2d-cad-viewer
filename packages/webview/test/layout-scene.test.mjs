@@ -7,6 +7,7 @@ import {
   viewportModelToPaperMatrix,
 } from "../src/layout-scene.mjs";
 import { transformPoint } from "../src/math.mjs";
+import { ViewportLayerOverrideFlags } from "../src/scene-cache.mjs";
 
 const blocks = [
   {
@@ -158,6 +159,60 @@ test("normalizes paper-space linetypes by each viewport scale", () => {
   assert.deepEqual([...graph.paperToModelScalesByVisibilityRow], [1, 5]);
   assert.deepEqual([...graph.linetypeScalesByVisibilityRow], [1, 5]);
   assert.deepEqual([...graph.annotationScalesByVisibilityRow], [0, 50]);
+});
+
+test("builds viewport-specific layer color, opacity, linetype and weight rows", () => {
+  const styledLayout = {
+    ...layout,
+    viewports: [
+      layout.viewports[0],
+      {
+        ...viewport,
+        layerOverrides: [
+          {
+            layerIndex: 0,
+            flags:
+              ViewportLayerOverrideFlags.Color |
+              ViewportLayerOverrideFlags.Transparency |
+              ViewportLayerOverrideFlags.Linetype |
+              ViewportLayerOverrideFlags.LineWeight,
+            color: (3 << 30) | 0x112233,
+            transparency: 39 << 24,
+            linetypeCode: 4,
+            lineWeight: 70,
+          },
+        ],
+      },
+    ],
+  };
+  const layers = [
+    { name: "0", color: (2 << 30) | 1, lineWeight: 13 },
+    { name: "VP-FROZEN", color: (2 << 30) | 2, lineWeight: 25 },
+  ];
+  const graph = buildLayoutInstanceGraph(
+    blocks,
+    [],
+    layers,
+    styledLayout,
+    { layerLinetypeCodes: new Uint16Array([2, 3]) },
+  );
+
+  assert.deepEqual(
+    [...graph.layerColorsByVisibilityRow[0]],
+    [((2 << 30) | 1) >>> 0, ((2 << 30) | 2) >>> 0],
+  );
+  assert.equal(
+    graph.layerColorsByVisibilityRow[1][0],
+    (((3 << 30) | 0x112233 | (39 << 24)) >>> 0),
+  );
+  assert.deepEqual(
+    [...graph.layerLineWeightsByVisibilityRow[1]],
+    [70, 25],
+  );
+  assert.deepEqual(
+    [...graph.layerLinetypesByVisibilityRow[1]],
+    [4, 3],
+  );
 });
 
 test("keeps a 1:1 model viewport distinct from the paper-space row", () => {

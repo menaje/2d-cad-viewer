@@ -1,7 +1,7 @@
 // Canonical Scene Cache reader shared by DwgSceneCacheSource and legacy Webview imports.
 export const CACHE_MAGIC = new Uint8Array([68, 87, 71, 83, 67, 78, 49, 0]);
 export const CACHE_VERSION_MAJOR = 1;
-export const CACHE_VERSION_MINOR = 19;
+export const CACHE_VERSION_MINOR = 20;
 export const HEADER_SIZE = 64;
 export const DIRECTORY_ENTRY_SIZE = 40;
 export const CACHE_HEADER_FLAG_PREVIEW = 1;
@@ -45,6 +45,7 @@ export const IMAGE_ENTITY_RECORD_SIZE = 176;
 export const IMAGE_CLIP_VERTEX_RECORD_SIZE = 16;
 export const TEXT_ANNOTATION_CONTEXT_RECORD_SIZE = 160;
 export const TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8;
+export const VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE = 24;
 export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_RECORDS = 10_000;
 export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_BYTES = 8 * 1024 * 1024;
 
@@ -95,6 +96,7 @@ export const SectionKind = Object.freeze({
   ImageClipVertices: 55,
   TextAnnotationContexts: 56,
   TextAnnotationColumnHeights: 57,
+  ViewportLayerOverrides: 58,
 });
 const CURRENT_SECTION_KINDS = Object.freeze(Object.values(SectionKind));
 
@@ -151,6 +153,10 @@ const FIXED_RECORD_SIZES = new Map([
     SectionKind.TextAnnotationColumnHeights,
     TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
   ],
+  [
+    SectionKind.ViewportLayerOverrides,
+    VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
+  ],
 ]);
 const MAX_METADATA_SECTION_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_STRING_BYTES = 1024 * 1024;
@@ -180,6 +186,7 @@ const MAX_VIEWPORTS = 65_536;
 const MAX_VIEWPORT_FROZEN_LAYERS = 1_048_576;
 const MAX_VIEWPORT_CLIP_VERTICES = 1_048_576;
 const MAX_VIEWPORT_CLIP_VERTICES_PER_BOUNDARY = 4_096;
+const MAX_VIEWPORT_LAYER_OVERRIDES = 1_048_576;
 const MAX_IMAGE_SOURCE_RECORDS = 65_536;
 const MAX_IMAGE_CLIP_VERTICES = 1_048_576;
 const MAX_TEXT_ANNOTATION_CONTEXTS = 262_144;
@@ -199,6 +206,20 @@ export const TextEntityKind = Object.freeze({
 export const InsertClipFlags = Object.freeze({
   Rectangular: 1,
   Inverted: 1 << 1,
+});
+
+export const ViewportLayerOverrideProperty = Object.freeze({
+  Color: 1,
+  Transparency: 2,
+  Linetype: 3,
+  LineWeight: 4,
+});
+
+export const ViewportLayerOverrideFlags = Object.freeze({
+  Color: 1,
+  Transparency: 1 << 1,
+  Linetype: 1 << 2,
+  LineWeight: 1 << 3,
 });
 
 export const HatchFlags = Object.freeze({
@@ -1703,7 +1724,7 @@ export class SceneCacheReader {
     }
     for (const kind of CURRENT_SECTION_KINDS) {
       if (!sections.has(kind)) {
-        throw new Error(`Scene Cache v1.19 is missing required section ${kind}`);
+        throw new Error(`Scene Cache v1.20 is missing required section ${kind}`);
       }
     }
 
@@ -1733,7 +1754,7 @@ export class SceneCacheReader {
         !annotationContexts ||
         !annotationColumnHeights
       ) {
-        throw new Error("Scene Cache v1.19 is missing required text sections");
+        throw new Error("Scene Cache v1.20 is missing required text sections");
       }
       validateStringTableDirectoryEntry(textStyles, TEXT_STYLE_RECORD_SIZE);
       validateStringTableDirectoryEntry(textEntities, TEXT_ENTITY_RECORD_SIZE);
@@ -1771,7 +1792,7 @@ export class SceneCacheReader {
         !hatchGradientColors ||
         !hatchSeedPoints
       ) {
-        throw new Error("Scene Cache v1.19 is missing required HATCH sections");
+        throw new Error("Scene Cache v1.20 is missing required HATCH sections");
       }
       validateStringTableDirectoryEntry(
         hatchEntities,
@@ -1797,7 +1818,7 @@ export class SceneCacheReader {
       );
       if (!hatchPatternLines || !hatchPatternDashes) {
         throw new Error(
-          "Scene Cache v1.19 is missing required HATCH pattern sections",
+          "Scene Cache v1.20 is missing required HATCH pattern sections",
         );
       }
       validateRecordSection(
@@ -1814,7 +1835,7 @@ export class SceneCacheReader {
       const solidEntities = sections.get(SectionKind.SolidEntities);
       if (!pointEntities || !solidEntities) {
         throw new Error(
-          "Scene Cache v1.19 is missing required POINT or SOLID sections",
+          "Scene Cache v1.20 is missing required POINT or SOLID sections",
         );
       }
       validateRecordSection(pointEntities, POINT_ENTITY_RECORD_SIZE);
@@ -1824,7 +1845,7 @@ export class SceneCacheReader {
       const faceEntities = sections.get(SectionKind.FaceEntities);
       if (!faceEntities) {
         throw new Error(
-          "Scene Cache v1.19 is missing the required 3DFACE section",
+          "Scene Cache v1.20 is missing the required 3DFACE section",
         );
       }
       validateRecordSection(faceEntities, FACE_ENTITY_RECORD_SIZE);
@@ -1836,7 +1857,7 @@ export class SceneCacheReader {
       );
       if (!wipeoutEntities || !wipeoutClipVertices) {
         throw new Error(
-          "Scene Cache v1.19 is missing required WIPEOUT sections",
+          "Scene Cache v1.20 is missing required WIPEOUT sections",
         );
       }
       validateRecordSection(wipeoutEntities, WIPEOUT_ENTITY_RECORD_SIZE);
@@ -1850,7 +1871,7 @@ export class SceneCacheReader {
       const drawOrderEntries = sections.get(SectionKind.DrawOrderEntries);
       if (!drawOrderTables || !drawOrderEntries) {
         throw new Error(
-          "Scene Cache v1.19 is missing required draw-order sections",
+          "Scene Cache v1.20 is missing required draw-order sections",
         );
       }
       validateRecordSection(
@@ -1869,7 +1890,7 @@ export class SceneCacheReader {
       );
       if (!insertClips || !insertClipVertices) {
         throw new Error(
-          "Scene Cache v1.19 is missing required INSERT XCLIP sections",
+          "Scene Cache v1.20 is missing required INSERT XCLIP sections",
         );
       }
       validateRecordSection(insertClips, INSERT_CLIP_RECORD_SIZE);
@@ -1883,7 +1904,7 @@ export class SceneCacheReader {
       const linetypeDashes = sections.get(SectionKind.LinetypeDashes);
       if (!linetypes || !linetypeDashes) {
         throw new Error(
-          "Scene Cache v1.19 is missing required linetype sections",
+          "Scene Cache v1.20 is missing required linetype sections",
         );
       }
       validateStringTableDirectoryEntry(linetypes, LINETYPE_RECORD_SIZE);
@@ -1907,9 +1928,18 @@ export class SceneCacheReader {
       const clipVertices = sections.get(
         SectionKind.ViewportClipVertices,
       );
-      if (!layouts || !viewports || !frozenLayers || !clipVertices) {
+      const layerOverrides = sections.get(
+        SectionKind.ViewportLayerOverrides,
+      );
+      if (
+        !layouts ||
+        !viewports ||
+        !frozenLayers ||
+        !clipVertices ||
+        !layerOverrides
+      ) {
         throw new Error(
-          "Scene Cache v1.19 is missing required layout sections",
+          "Scene Cache v1.20 is missing required layout sections",
         );
       }
       validateStringTableDirectoryEntry(layouts, LAYOUT_RECORD_SIZE);
@@ -1922,11 +1952,16 @@ export class SceneCacheReader {
         clipVertices,
         VIEWPORT_CLIP_VERTEX_RECORD_SIZE,
       );
+      validateRecordSection(
+        layerOverrides,
+        VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
+      );
       if (
         layouts.recordCount > MAX_LAYOUTS ||
         viewports.recordCount > MAX_VIEWPORTS ||
         frozenLayers.recordCount > MAX_VIEWPORT_FROZEN_LAYERS ||
-        clipVertices.recordCount > MAX_VIEWPORT_CLIP_VERTICES
+        clipVertices.recordCount > MAX_VIEWPORT_CLIP_VERTICES ||
+        layerOverrides.recordCount > MAX_VIEWPORT_LAYER_OVERRIDES
       ) {
         throw new Error("Scene Cache layout metadata exceeds its limits");
       }
@@ -1938,7 +1973,7 @@ export class SceneCacheReader {
       );
       if (!imageEntities || !imageClipVertices) {
         throw new Error(
-          "Scene Cache v1.19 is missing required IMAGE sections",
+          "Scene Cache v1.20 is missing required IMAGE sections",
         );
       }
       validateStringTableDirectoryEntry(
@@ -2262,11 +2297,15 @@ export class SceneCacheReader {
       const clipSection = this.getSection(
         SectionKind.ViewportClipVertices,
       );
+      const layerOverrideSection = this.getSection(
+        SectionKind.ViewportLayerOverrides,
+      );
       const [
         layoutRows,
         viewportRows,
         frozenBuffer,
         clipBuffer,
+        layerOverrideBuffer,
         blocks,
         layers,
       ] =
@@ -2414,6 +2453,7 @@ export class SceneCacheReader {
           ),
           this.readWholeMetadataSection(frozenSection),
           this.readWholeMetadataSection(clipSection),
+          this.readWholeMetadataSection(layerOverrideSection),
           this.readBlocks(),
           this.readLayers(),
         ]);
@@ -2436,6 +2476,106 @@ export class SceneCacheReader {
         }
         frozenLayers[index] = layerIndex;
       }
+
+      const viewportHandles = new Set(
+        viewportRows.map((viewport) => viewport.handle),
+      );
+      const mutableOverridesByViewport = new Map();
+      const layerOverrideView = new DataView(layerOverrideBuffer);
+      for (
+        let index = 0;
+        index < layerOverrideSection.recordCount;
+        index += 1
+      ) {
+        const offset = index * VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE;
+        const viewportHandle = layerOverrideView.getBigUint64(
+          offset,
+          true,
+        );
+        const layerIndex = layerOverrideView.getUint32(offset + 8, true);
+        const property = layerOverrideView.getUint16(offset + 12, true);
+        const value = layerOverrideView.getUint32(offset + 16, true);
+        let flag = 0;
+        let field = "";
+        let validValue = false;
+        if (property === ViewportLayerOverrideProperty.Color) {
+          const kind = value >>> 30;
+          const aci = value & 255;
+          flag = ViewportLayerOverrideFlags.Color;
+          field = "color";
+          validValue =
+            (value & 0x3f000000) === 0 &&
+            (kind === 3 ||
+              (kind === 2 &&
+                aci > 0 &&
+                (value & 0x00ffff00) === 0));
+        } else if (
+          property === ViewportLayerOverrideProperty.Transparency
+        ) {
+          const opacityCode = (value >>> 24) & 63;
+          flag = ViewportLayerOverrideFlags.Transparency;
+          field = "transparency";
+          validValue =
+            ((value & 0xc0ffffff) >>> 0) === 0 &&
+            opacityCode >= 3 &&
+            opacityCode <= 63;
+        } else if (
+          property === ViewportLayerOverrideProperty.Linetype
+        ) {
+          flag = ViewportLayerOverrideFlags.Linetype;
+          field = "linetypeCode";
+          validValue = value >= 2 && value <= 2047;
+        } else if (
+          property === ViewportLayerOverrideProperty.LineWeight
+        ) {
+          flag = ViewportLayerOverrideFlags.LineWeight;
+          field = "lineWeight";
+          validValue = value <= 211;
+        }
+        if (
+          viewportHandle === 0n ||
+          !viewportHandles.has(viewportHandle) ||
+          layerIndex >= layers.length ||
+          layerOverrideView.getUint16(offset + 14, true) !== 0 ||
+          layerOverrideView.getUint32(offset + 20, true) !== 0 ||
+          !validValue
+        ) {
+          throw new Error(
+            `viewport layer override ${index} contains invalid metadata`,
+          );
+        }
+        let overridesByLayer = mutableOverridesByViewport.get(
+          viewportHandle,
+        );
+        if (!overridesByLayer) {
+          overridesByLayer = new Map();
+          mutableOverridesByViewport.set(viewportHandle, overridesByLayer);
+        }
+        let layerOverride = overridesByLayer.get(layerIndex);
+        if (!layerOverride) {
+          layerOverride = { layerIndex, flags: 0 };
+          overridesByLayer.set(layerIndex, layerOverride);
+        }
+        if ((layerOverride.flags & flag) !== 0) {
+          throw new Error(
+            `viewport layer override ${index} duplicates a property`,
+          );
+        }
+        layerOverride.flags |= flag;
+        layerOverride[field] = value;
+      }
+      const layerOverridesByViewport = new Map(
+        [...mutableOverridesByViewport].map(
+          ([viewportHandle, overridesByLayer]) => [
+            viewportHandle,
+            Object.freeze(
+              [...overridesByLayer.values()]
+                .sort((left, right) => left.layerIndex - right.layerIndex)
+                .map((override) => Object.freeze(override)),
+            ),
+          ],
+        ),
+      );
 
       const clipView = new DataView(clipBuffer);
       let expectedFirstFrozenLayer = 0;
@@ -2526,6 +2666,8 @@ export class SceneCacheReader {
           clipBoundaryVertices: Object.freeze(
             clipBoundaryVertices,
           ),
+          layerOverrides:
+            layerOverridesByViewport.get(viewport.handle) ?? EMPTY_ARRAY,
         });
       });
       if (expectedFirstFrozenLayer !== frozenLayers.length) {

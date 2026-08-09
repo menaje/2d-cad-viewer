@@ -204,7 +204,11 @@ const CAD_OPACITY_FRAGMENT_SOURCE = `
 float layerOpacity(uint layerIndex) {
   if (layerIndex >= uint(u_layerCount)) return 1.0;
   float packed =
-    texelFetch(u_layerColors, ivec2(int(layerIndex), 0), 0).a * 255.0;
+    texelFetch(
+      u_layerColors,
+      ivec2(int(layerIndex), v_visibilityRow),
+      0
+    ).a * 255.0;
   if (packed <= 0.5) return 0.0;
   return clamp((packed - 1.0) / 254.0, 0.0, 1.0);
 }
@@ -371,7 +375,7 @@ uint resolvedPlotStyleIndex() {
   return layerIndex < uint(u_layerCount)
     ? texelFetch(
         u_layerPlotStyleIndices,
-        ivec2(int(layerIndex), 0),
+        ivec2(int(layerIndex), v_visibilityRow),
         0
       ).r
     : 0u;
@@ -395,7 +399,7 @@ int resolvedLineWeight() {
     if (layerIndex < uint(u_layerCount)) {
       value = texelFetch(
         u_layerLineWeights,
-        ivec2(int(layerIndex), 0),
+        ivec2(int(layerIndex), v_visibilityRow),
         0
       ).r;
     }
@@ -410,7 +414,11 @@ uint resolvedLinetypeCode() {
   if (code == 0u) {
     uint layerIndex = resolvedLayerIndex();
     return layerIndex < uint(u_layerCount)
-      ? texelFetch(u_layerLinetypes, ivec2(int(layerIndex), 0), 0).r
+      ? texelFetch(
+          u_layerLinetypes,
+          ivec2(int(layerIndex), v_visibilityRow),
+          0
+        ).r
       : 2u;
   }
   if (code == 1u) return max(v_instanceLinetype, 2u);
@@ -466,7 +474,11 @@ vec4 resolveColor() {
     uint layerIndex = resolvedLayerIndex();
     if (layerIndex >= uint(u_layerCount)) return vec4(1.0);
     return vec4(
-      texelFetch(u_layerColors, ivec2(int(layerIndex), 0), 0).rgb,
+      texelFetch(
+        u_layerColors,
+        ivec2(int(layerIndex), v_visibilityRow),
+        0
+      ).rgb,
       1.0
     );
   }
@@ -505,7 +517,7 @@ void main() {
     resolvedLayerIndex() < uint(u_layerCount) &&
     texelFetch(
       u_layerColors,
-      ivec2(int(resolvedLayerIndex()), 0),
+      ivec2(int(resolvedLayerIndex()), v_visibilityRow),
       0
     ).a <= 0.0
   ) discard;
@@ -639,7 +651,11 @@ vec4 resolveColor(uint encodedColor) {
     uint layerIndex = resolvedLayerIndex();
     if (layerIndex >= uint(u_layerCount)) return vec4(1.0);
     return vec4(
-      texelFetch(u_layerColors, ivec2(int(layerIndex), 0), 0).rgb,
+      texelFetch(
+        u_layerColors,
+        ivec2(int(layerIndex), v_visibilityRow),
+        0
+      ).rgb,
       1.0
     );
   }
@@ -748,7 +764,7 @@ void main() {
     resolvedLayerIndex() < uint(u_layerCount) &&
     texelFetch(
       u_layerColors,
-      ivec2(int(resolvedLayerIndex()), 0),
+      ivec2(int(resolvedLayerIndex()), v_visibilityRow),
       0
     ).a <= 0.0
   ) discard;
@@ -896,7 +912,11 @@ vec4 resolveColor() {
     uint layerIndex = resolvedLayerIndex();
     if (layerIndex >= uint(u_layerCount)) return vec4(1.0);
     return vec4(
-      texelFetch(u_layerColors, ivec2(int(layerIndex), 0), 0).rgb,
+      texelFetch(
+        u_layerColors,
+        ivec2(int(layerIndex), v_visibilityRow),
+        0
+      ).rgb,
       1.0
     );
   }
@@ -932,7 +952,7 @@ void main() {
     resolvedLayerIndex() < uint(u_layerCount) &&
     texelFetch(
       u_layerColors,
-      ivec2(int(resolvedLayerIndex()), 0),
+      ivec2(int(resolvedLayerIndex()), v_visibilityRow),
       0
     ).a <= 0.0
   ) discard;
@@ -1073,24 +1093,37 @@ function makeLayerPixels(
   layers,
   visibility,
   palette = DEFAULT_ACI_PALETTE,
+  colorRows = null,
 ) {
-  const pixels = new Uint8Array(Math.max(layers.length, 1) * 4);
+  const rows =
+    Array.isArray(colorRows) && colorRows.length > 0
+      ? colorRows
+      : [Uint32Array.from(layers, (layer) => layer.color >>> 0)];
+  const width = Math.max(layers.length, 1);
+  const pixels = new Uint8Array(width * rows.length * 4);
   if (layers.length === 0) {
-    pixels.set([235, 235, 235, 255]);
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      pixels.set([235, 235, 235, 255], rowIndex * 4);
+    }
     return pixels;
   }
-  for (let index = 0; index < layers.length; index += 1) {
-    const [red, green, blue] = decodeCadColor(layers[index].color, {
-      palette,
-    });
-    const opacity = decodeCadOpacity(layers[index].color);
-    const packedOpacity = visibility[index]
-      ? 1 + Math.round(opacity * 254)
-      : 0;
-    pixels.set(
-      [red, green, blue, packedOpacity],
-      index * 4,
-    );
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (!(row instanceof Uint32Array) || row.length !== layers.length) {
+      throw new TypeError(`viewport layer color row ${rowIndex} is invalid`);
+    }
+    for (let index = 0; index < layers.length; index += 1) {
+      const encoded = row[index];
+      const [red, green, blue] = decodeCadColor(encoded, { palette });
+      const opacity = decodeCadOpacity(encoded);
+      const packedOpacity = visibility[index]
+        ? 1 + Math.round(opacity * 254)
+        : 0;
+      pixels.set(
+        [red, green, blue, packedOpacity],
+        (rowIndex * width + index) * 4,
+      );
+    }
   }
   return pixels;
 }
@@ -3014,9 +3047,12 @@ export class WebGlLineRenderer {
     this.layerPlotStyleIndices = new Uint8Array([0]);
     this.plotStylesEnabled = false;
     this.layerLinetypeCodes = new Uint16Array([2]);
+    this.layerLinetypeTextureBytes = this.layerLinetypeCodes.byteLength;
     this.linetypeTextureData = makeLinetypeTextureData([]);
     this.globalLinetypeScale = 1;
+    this.viewportInstanceGraph = null;
     this.viewportLayerVisibilityRows = 1;
+    this.layerTextureBytes = 4;
     this.aciPalette = new Uint8Array(DEFAULT_ACI_PALETTE);
     this.uploadAciTexture();
     this.uploadPlotStyleTextures();
@@ -3047,6 +3083,7 @@ export class WebGlLineRenderer {
   }
 
   setLayers(layers) {
+    this.viewportInstanceGraph = null;
     this.layers = layers;
     this.layerZeroIndex = layers.findIndex(
       (layer) =>
@@ -3058,14 +3095,33 @@ export class WebGlLineRenderer {
     this.uploadLayerPlotStyleIndexTexture();
   }
 
-  uploadLayerTexture() {
+  uploadLayerTexture(instanceGraph = this.viewportInstanceGraph) {
     const gl = this.gl;
+    const sourceRows = instanceGraph?.layerColorsByVisibilityRow;
+    const baseRow = Uint32Array.from(
+      this.layers,
+      (layer) => layer.color >>> 0,
+    );
+    const rows =
+      Array.isArray(sourceRows) && sourceRows.length > 0
+        ? sourceRows
+        : Array.from(
+            { length: this.viewportLayerVisibilityRows },
+            () => baseRow,
+          );
+    if (rows.length !== this.viewportLayerVisibilityRows) {
+      throw new TypeError(
+        "viewport layer colors must match the visibility rows",
+      );
+    }
     const pixels = makeLayerPixels(
       this.layers,
       this.layerVisibility,
       this.aciPalette,
+      rows,
     );
     this.layerCount = this.layers.length;
+    const height = rows.length;
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -3077,15 +3133,17 @@ export class WebGlLineRenderer {
       0,
       gl.RGBA,
       Math.max(this.layers.length, 1),
-      1,
+      height,
       0,
       gl.RGBA,
       gl.UNSIGNED_BYTE,
       pixels,
     );
+    this.layerTextureBytes = pixels.byteLength;
   }
 
   setViewportLayerVisibility(instanceGraph) {
+    this.viewportInstanceGraph = instanceGraph ?? null;
     const sourceRows = instanceGraph?.layerVisibilityRows;
     const rows =
       Array.isArray(sourceRows) && sourceRows.length > 0
@@ -3142,6 +3200,10 @@ export class WebGlLineRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
     this.viewportLayerVisibilityRows = rows.length;
     this.viewportLayerVisibilityTextureBytes = data.byteLength;
+    this.uploadLayerTexture(this.viewportInstanceGraph);
+    this.uploadLineWeightTexture(this.viewportInstanceGraph);
+    this.uploadLayerPlotStyleIndexTexture(this.viewportInstanceGraph);
+    this.uploadLinetypeTextures(this.viewportInstanceGraph);
   }
 
   bindViewportLayerVisibility(location) {
@@ -3178,16 +3240,40 @@ export class WebGlLineRenderer {
     gl.activeTexture(gl.TEXTURE0);
   }
 
-  uploadLineWeightTexture() {
+  uploadLineWeightTexture(instanceGraph = this.viewportInstanceGraph) {
     const gl = this.gl;
-    this.layerLineWeights = new Int16Array(Math.max(this.layers.length, 1));
+    const sourceRows = instanceGraph?.layerLineWeightsByVisibilityRow;
+    const baseRow = Int16Array.from(this.layers, (layer) => {
+      const value = layer.lineWeight;
+      return Number.isInteger(value) && value >= -3 && value <= 211
+        ? value
+        : -3;
+    });
+    const rows =
+      Array.isArray(sourceRows) && sourceRows.length > 0
+        ? sourceRows
+        : Array.from(
+            { length: this.viewportLayerVisibilityRows },
+            () => baseRow,
+          );
+    if (rows.length !== this.viewportLayerVisibilityRows) {
+      throw new TypeError(
+        "viewport layer lineweights must match the visibility rows",
+      );
+    }
+    const width = Math.max(this.layers.length, 1);
+    this.layerLineWeights = new Int16Array(width * rows.length);
     this.layerLineWeights.fill(-3);
-    for (let index = 0; index < this.layers.length; index += 1) {
-      const value = this.layers[index].lineWeight;
-      this.layerLineWeights[index] =
-        Number.isInteger(value) && value >= -3 && value <= 211
-          ? value
-          : -3;
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
+      if (!(row instanceof Int16Array) || row.length !== this.layers.length) {
+        throw new TypeError(
+          `viewport layer lineweight row ${rowIndex} is invalid`,
+        );
+      }
+      if (this.layers.length > 0) {
+        this.layerLineWeights.set(row, rowIndex * width);
+      }
     }
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.lineWeightTexture);
@@ -3199,8 +3285,8 @@ export class WebGlLineRenderer {
       gl.TEXTURE_2D,
       0,
       gl.R16I,
-      this.layerLineWeights.length,
-      1,
+      width,
+      rows.length,
       0,
       gl.RED_INTEGER,
       gl.SHORT,
@@ -3210,12 +3296,41 @@ export class WebGlLineRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
   }
 
-  uploadLayerPlotStyleIndexTexture() {
+  uploadLayerPlotStyleIndexTexture(
+    instanceGraph = this.viewportInstanceGraph,
+  ) {
     const gl = this.gl;
-    this.layerPlotStyleIndices = Uint8Array.from(
-      this.layers.length > 0 ? this.layers : [{}],
-      (layer) => cadColorAci(layer.color ?? 0),
+    const sourceRows = instanceGraph?.layerColorsByVisibilityRow;
+    const baseRow = Uint32Array.from(
+      this.layers,
+      (layer) => layer.color >>> 0,
     );
+    const rows =
+      Array.isArray(sourceRows) && sourceRows.length > 0
+        ? sourceRows
+        : Array.from(
+            { length: this.viewportLayerVisibilityRows },
+            () => baseRow,
+          );
+    if (rows.length !== this.viewportLayerVisibilityRows) {
+      throw new TypeError(
+        "viewport layer plot styles must match the visibility rows",
+      );
+    }
+    const width = Math.max(this.layers.length, 1);
+    this.layerPlotStyleIndices = new Uint8Array(width * rows.length);
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
+      if (!(row instanceof Uint32Array) || row.length !== this.layers.length) {
+        throw new TypeError(
+          `viewport layer plot-style row ${rowIndex} is invalid`,
+        );
+      }
+      for (let layerIndex = 0; layerIndex < row.length; layerIndex += 1) {
+        this.layerPlotStyleIndices[rowIndex * width + layerIndex] =
+          cadColorAci(row[layerIndex]);
+      }
+    }
     gl.activeTexture(gl.TEXTURE0 + 9);
     gl.bindTexture(gl.TEXTURE_2D, this.layerPlotStyleIndexTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -3229,8 +3344,8 @@ export class WebGlLineRenderer {
         gl.TEXTURE_2D,
         0,
         gl.R8UI,
-        this.layerPlotStyleIndices.length,
-        1,
+        width,
+        rows.length,
         0,
         gl.RED_INTEGER,
         gl.UNSIGNED_BYTE,
@@ -3282,12 +3397,42 @@ export class WebGlLineRenderer {
     this.uploadLinetypeTextures();
   }
 
-  uploadLinetypeTextures() {
+  uploadLinetypeTextures(instanceGraph = this.viewportInstanceGraph) {
     const gl = this.gl;
-    const layerCodes =
-      this.layerLinetypeCodes.length > 0
-        ? this.layerLinetypeCodes
-        : new Uint16Array([2]);
+    const sourceRows = instanceGraph?.layerLinetypesByVisibilityRow;
+    const baseRow = Uint16Array.from(this.layers, (_, index) => {
+      const value = this.layerLinetypeCodes[index];
+      return Number.isInteger(value) && value >= 0 && value <= 2047
+        ? value
+        : 2;
+    });
+    const rows =
+      Array.isArray(sourceRows) && sourceRows.length > 0
+        ? sourceRows
+        : Array.from(
+            { length: this.viewportLayerVisibilityRows },
+            () => baseRow,
+          );
+    if (rows.length !== this.viewportLayerVisibilityRows) {
+      throw new TypeError(
+        "viewport layer linetypes must match the visibility rows",
+      );
+    }
+    const width = Math.max(this.layers.length, 1);
+    const layerCodes = new Uint16Array(width * rows.length);
+    layerCodes.fill(2);
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
+      if (!(row instanceof Uint16Array) || row.length !== this.layers.length) {
+        throw new TypeError(
+          `viewport layer linetype row ${rowIndex} is invalid`,
+        );
+      }
+      if (this.layers.length > 0) {
+        layerCodes.set(row, rowIndex * width);
+      }
+    }
+    this.layerLinetypeTextureBytes = layerCodes.byteLength;
     const { headers, dashes } = this.linetypeTextureData;
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D, this.layerLinetypeTexture);
@@ -3299,8 +3444,8 @@ export class WebGlLineRenderer {
       gl.TEXTURE_2D,
       0,
       gl.R16UI,
-      layerCodes.length,
-      1,
+      width,
+      rows.length,
       0,
       gl.RED_INTEGER,
       gl.UNSIGNED_SHORT,
@@ -8522,13 +8667,13 @@ export class WebGlLineRenderer {
     metrics.instanceScratchBytes = this.instanceScratch.byteLength;
     metrics.instanceBufferBytes = this.instanceBufferBytes;
     metrics.peakInstanceBufferBytes = this.peakInstanceBufferBytes;
-    metrics.layerTextureBytes = Math.max(this.layerCount, 1) * 4;
+    metrics.layerTextureBytes = this.layerTextureBytes;
     metrics.lineWeightTextureBytes = this.layerLineWeights.byteLength;
     metrics.plotStyleTextureBytes =
       this.plotStyleLineWeights.byteLength +
       this.layerPlotStyleIndices.byteLength;
     metrics.layerLinetypeTextureBytes =
-      this.layerLinetypeCodes.byteLength;
+      this.layerLinetypeTextureBytes;
     metrics.linetypeTextureBytes =
       this.linetypeTextureData.headers.byteLength +
       this.linetypeTextureData.dashes.byteLength;
@@ -8730,6 +8875,9 @@ export class WebGlLineRenderer {
     this.instanceBufferBytes = 0;
     this.clipTextureBytes = 0;
     this.viewportLayerVisibilityTextureBytes = 0;
+    this.layerTextureBytes = 0;
+    this.layerLinetypeTextureBytes = 0;
+    this.viewportInstanceGraph = null;
     this.boundClipGraph = null;
     this.boundClipPayload = null;
     this.boundClipOriginX = undefined;

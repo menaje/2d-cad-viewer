@@ -2,6 +2,7 @@ import {
   buildInstanceGraph,
   CoordinateSpaceKind,
 } from "./instance-graph.mjs";
+import { ViewportLayerOverrideFlags } from "./scene-cache.mjs?v=1.20.0";
 import {
   arbitraryAxisMat4,
   identityMat4,
@@ -94,7 +95,109 @@ function visibilityKey(
   const frozenLayers = [...new Set(viewport.frozenLayerIndices ?? [])]
     .sort((left, right) => left - right)
     .join(",");
-  return `${frozenLayers}|${paperToModelScale}|${linetypeScale}|${annotationScale}`;
+  const layerOverrides = [...(viewport.layerOverrides ?? [])]
+    .sort((left, right) => left.layerIndex - right.layerIndex)
+    .map(
+      (override) =>
+        `${override.layerIndex}:${override.flags}:` +
+        `${override.color ?? ""}:${override.transparency ?? ""}:` +
+        `${override.linetypeCode ?? ""}:${override.lineWeight ?? ""}`,
+    )
+    .join(",");
+  return (
+    `${frozenLayers}|${layerOverrides}|${paperToModelScale}|` +
+    `${linetypeScale}|${annotationScale}`
+  );
+}
+
+function baseLayerStyleRows(layers, layerLinetypeCodes) {
+  const colors = Uint32Array.from(
+    layers,
+    (layer) => layer.color >>> 0,
+  );
+  const lineWeights = Int16Array.from(layers, (layer) => {
+    const value = layer.lineWeight;
+    return Number.isInteger(value) && value >= -3 && value <= 211
+      ? value
+      : -3;
+  });
+  const linetypes = Uint16Array.from(layers, (_, index) => {
+    const value = layerLinetypeCodes?.[index];
+    return Number.isInteger(value) && value >= 0 && value <= 2047
+      ? value
+      : 2;
+  });
+  return { colors, lineWeights, linetypes };
+}
+
+function applyViewportLayerOverrides(
+  viewport,
+  colors,
+  lineWeights,
+  linetypes,
+) {
+  const supportedFlags =
+    ViewportLayerOverrideFlags.Color |
+    ViewportLayerOverrideFlags.Transparency |
+    ViewportLayerOverrideFlags.Linetype |
+    ViewportLayerOverrideFlags.LineWeight;
+  for (const override of viewport.layerOverrides ?? []) {
+    const { layerIndex, flags } = override;
+    if (
+      !Number.isInteger(layerIndex) ||
+      layerIndex < 0 ||
+      layerIndex >= colors.length ||
+      !Number.isInteger(flags) ||
+      flags <= 0 ||
+      (flags & ~supportedFlags) !== 0
+    ) {
+      throw new TypeError("viewport contains an invalid layer override");
+    }
+    let color = colors[layerIndex];
+    if (flags & ViewportLayerOverrideFlags.Color) {
+      if (!Number.isInteger(override.color)) {
+        throw new TypeError("viewport layer color override is invalid");
+      }
+      color =
+        ((color & 0x3f000000) |
+          (override.color & 0xc0ffffff)) >>>
+        0;
+    }
+    if (flags & ViewportLayerOverrideFlags.Transparency) {
+      if (!Number.isInteger(override.transparency)) {
+        throw new TypeError(
+          "viewport layer transparency override is invalid",
+        );
+      }
+      color =
+        ((color & 0xc0ffffff) |
+          (override.transparency & 0x3f000000)) >>>
+        0;
+    }
+    colors[layerIndex] = color;
+    if (flags & ViewportLayerOverrideFlags.Linetype) {
+      if (
+        !Number.isInteger(override.linetypeCode) ||
+        override.linetypeCode < 2 ||
+        override.linetypeCode > 2047
+      ) {
+        throw new TypeError("viewport layer linetype override is invalid");
+      }
+      linetypes[layerIndex] = override.linetypeCode;
+    }
+    if (flags & ViewportLayerOverrideFlags.LineWeight) {
+      if (
+        !Number.isInteger(override.lineWeight) ||
+        override.lineWeight < 0 ||
+        override.lineWeight > 211
+      ) {
+        throw new TypeError(
+          "viewport layer lineweight override is invalid",
+        );
+      }
+      lineWeights[layerIndex] = override.lineWeight;
+    }
+  }
 }
 
 function viewportPaperToModelScale(viewport) {
@@ -112,7 +215,10 @@ export function buildLayoutRootPlan(
   blocks,
   layers,
   layout,
-  { paperSpaceLinetypeScale = false } = {},
+  {
+    paperSpaceLinetypeScale = false,
+    layerLinetypeCodes = null,
+  } = {},
 ) {
   if (
     !layout ||
@@ -129,6 +235,10 @@ export function buildLayoutRootPlan(
   const paperToModelScalesByVisibilityRow = [1];
   const linetypeScalesByVisibilityRow = [1];
   const annotationScalesByVisibilityRow = [0];
+  const baseStyles = baseLayerStyleRows(layers, layerLinetypeCodes);
+  const layerColorsByVisibilityRow = [baseStyles.colors];
+  const layerLineWeightsByVisibilityRow = [baseStyles.lineWeights];
+  const layerLinetypesByVisibilityRow = [baseStyles.linetypes];
   const visibilityRowByKey = new Map();
   const rootContexts = [
     Object.freeze({
@@ -188,6 +298,18 @@ export function buildLayoutRootPlan(
       paperToModelScalesByVisibilityRow.push(paperToModelScale);
       linetypeScalesByVisibilityRow.push(linetypeScale);
       annotationScalesByVisibilityRow.push(annotationScale);
+      const colors = new Uint32Array(baseStyles.colors);
+      const lineWeights = new Int16Array(baseStyles.lineWeights);
+      const linetypes = new Uint16Array(baseStyles.linetypes);
+      applyViewportLayerOverrides(
+        viewport,
+        colors,
+        lineWeights,
+        linetypes,
+      );
+      layerColorsByVisibilityRow.push(colors);
+      layerLineWeightsByVisibilityRow.push(lineWeights);
+      layerLinetypesByVisibilityRow.push(linetypes);
     }
     const matrix = viewportModelToPaperMatrix(viewport);
     const clipPoints =
@@ -222,6 +344,15 @@ export function buildLayoutRootPlan(
     annotationScalesByVisibilityRow: Object.freeze(
       annotationScalesByVisibilityRow,
     ),
+    layerColorsByVisibilityRow: Object.freeze(
+      layerColorsByVisibilityRow,
+    ),
+    layerLineWeightsByVisibilityRow: Object.freeze(
+      layerLineWeightsByVisibilityRow,
+    ),
+    layerLinetypesByVisibilityRow: Object.freeze(
+      layerLinetypesByVisibilityRow,
+    ),
     paperViewport,
     modelViewports: Object.freeze(modelViewports),
   });
@@ -246,5 +377,10 @@ export function buildLayoutInstanceGraph(
       plan.linetypeScalesByVisibilityRow,
     annotationScalesByVisibilityRow:
       plan.annotationScalesByVisibilityRow,
+    layerColorsByVisibilityRow: plan.layerColorsByVisibilityRow,
+    layerLineWeightsByVisibilityRow:
+      plan.layerLineWeightsByVisibilityRow,
+    layerLinetypesByVisibilityRow:
+      plan.layerLinetypesByVisibilityRow,
   });
 }

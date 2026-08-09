@@ -628,14 +628,154 @@ test("uploads odd-width viewport visibility rows without WebGL padding", () => {
   const integerByteUploads = calls.texImage2D.filter(
     (arguments_) => arguments_[2] === gl.R8UI,
   );
-  assert.equal(integerByteUploads.length, 2);
-  assert.equal(integerByteUploads[1][3], 70);
-  assert.equal(integerByteUploads[1][4], 2);
-  assert.equal(integerByteUploads[1][8].byteLength, 140);
+  const visibilityUpload = integerByteUploads.find(
+    (arguments_) =>
+      arguments_[4] === 2 &&
+      arguments_[8][0] === 1 &&
+      arguments_[8].at(-1) === 0,
+  );
+  assert.ok(visibilityUpload);
+  assert.equal(visibilityUpload[3], 70);
+  assert.equal(visibilityUpload[4], 2);
+  assert.equal(visibilityUpload[8].byteLength, 140);
+  const layerColorUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.RGBA && arguments_[3] === 70,
+    )
+    .at(-1);
+  const layerLineWeightUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R16I && arguments_[3] === 70,
+    )
+    .at(-1);
+  const layerLinetypeUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R16UI && arguments_[3] === 70,
+    )
+    .at(-1);
+  const layerPlotStyleUpload = integerByteUploads.at(-1);
+  for (const upload of [
+    layerColorUpload,
+    layerLineWeightUpload,
+    layerLinetypeUpload,
+    layerPlotStyleUpload,
+  ]) {
+    assert.equal(upload[4], 2);
+  }
+  assert.equal(layerColorUpload[8].byteLength, 560);
+  assert.equal(layerLineWeightUpload[8].byteLength, 280);
+  assert.equal(layerLinetypeUpload[8].byteLength, 280);
+  assert.equal(layerPlotStyleUpload[8].byteLength, 140);
   assert.deepEqual(
     calls.pixelStorei.map(({ value }) => value),
-    [1, 4, 1, 4],
+    [1, 4, 1, 4, 1, 4],
   );
+  renderer.dispose();
+});
+
+test("uploads viewport-specific layer style rows", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const baseColors = new Uint32Array([
+    (2 << 30) | 1,
+    (2 << 30) | 2,
+  ]);
+  const overrideColors = new Uint32Array([
+    ((3 << 30) | 0x11_22_33) >>> 0,
+    (2 << 30) | 3,
+  ]);
+
+  const rendered = renderer.renderOverview({
+    batches: [
+      batch({
+        id: 0,
+        kind: GpuLineBatchKind.ModelOverview,
+        lodLevel: 0,
+        firstVertex: 0,
+      }),
+    ],
+    layers: [
+      { color: baseColors[0], flags: 0, lineWeight: 13 },
+      { color: baseColors[1], flags: 0, lineWeight: 25 },
+    ],
+    instanceGraph: {
+      instancesByBlock: new Map(),
+      layerVisibilityRows: [
+        new Uint8Array([1, 1]),
+        new Uint8Array([1, 1]),
+      ],
+      layerColorsByVisibilityRow: [baseColors, overrideColors],
+      layerLineWeightsByVisibilityRow: [
+        new Int16Array([13, 25]),
+        new Int16Array([50, 100]),
+      ],
+      layerLinetypesByVisibilityRow: [
+        new Uint16Array([2, 2]),
+        new Uint16Array([3, 4]),
+      ],
+    },
+    layerLinetypeCodes: new Uint16Array([2, 2]),
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+  });
+
+  const layerColorUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.RGBA &&
+        arguments_[3] === 2 &&
+        arguments_[4] === 2,
+    )
+    .at(-1);
+  const layerLineWeightUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R16I &&
+        arguments_[3] === 2 &&
+        arguments_[4] === 2,
+    )
+    .at(-1);
+  const layerLinetypeUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R16UI &&
+        arguments_[3] === 2 &&
+        arguments_[4] === 2,
+    )
+    .at(-1);
+  const layerPlotStyleUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R8UI &&
+        arguments_[3] === 2 &&
+        arguments_[4] === 2,
+    )
+    .at(-1);
+
+  assert.deepEqual([...layerColorUpload[8].slice(8, 16)], [
+    17, 34, 51, 255, 0, 255, 0, 255,
+  ]);
+  assert.deepEqual([...layerLineWeightUpload[8]], [13, 25, 50, 100]);
+  assert.deepEqual([...layerLinetypeUpload[8]], [2, 2, 3, 4]);
+  assert.deepEqual([...layerPlotStyleUpload[8]], [1, 2, 0, 3]);
+  assert.equal(rendered.layerTextureBytes, 16);
+  assert.equal(rendered.lineWeightTextureBytes, 8);
+  assert.equal(rendered.layerLinetypeTextureBytes, 8);
   renderer.dispose();
 });
 

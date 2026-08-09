@@ -18,6 +18,8 @@ import {
   SPLINE_HEADER_RECORD_SIZE,
   SPLINE_POINT_RECORD_SIZE,
   SPLINE_SCALAR_RECORD_SIZE,
+  ViewportLayerOverrideFlags,
+  ViewportLayerOverrideProperty,
 } from "../src/scene-cache.mjs";
 import { makeFixtureCache } from "./cache-fixture.mjs";
 
@@ -27,13 +29,13 @@ test("opens the header and directory without reading the full cache", async () =
   const reader = await SceneCacheReader.open(source);
 
   assert.equal(reader.header.major, 1);
-  assert.equal(reader.header.minor, 19);
+  assert.equal(reader.header.minor, 20);
   assert.equal(reader.header.fileSize, buffer.byteLength);
   assert.equal(reader.header.preview, false);
-  assert.equal(reader.sections.size, 46);
+  assert.equal(reader.sections.size, 47);
   assert.deepEqual(source.requests, [
     { offset: 0, length: 64 },
-    { offset: 64, length: 46 * 40 },
+    { offset: 64, length: 47 * 40 },
   ]);
   assert.ok(source.bytesRead < buffer.byteLength / 2);
 });
@@ -151,7 +153,7 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
   );
   const reader = new SceneCacheReader(
     source,
-    { minor: 19 },
+    { minor: 20 },
     sections,
   );
   const curves = await reader.readCurveRefinementSource();
@@ -202,7 +204,7 @@ test("reads deferred polyline source in independently bounded chunks", async () 
       },
     ],
   ]);
-  const reader = new SceneCacheReader(source, { minor: 19 }, sections);
+  const reader = new SceneCacheReader(source, { minor: 20 }, sections);
   const polylines = await reader.readPolylineSource();
 
   assert.equal(polylines.polylines.length, headerCount);
@@ -251,9 +253,9 @@ test("does not read curve source sections while loading first-frame data", async
 test("rejects a newer unsupported Scene Cache minor version", async () => {
   await assert.rejects(
     SceneCacheReader.open(
-      new MemoryRangeSource(makeFixtureCache({ minorVersion: 20 })),
+      new MemoryRangeSource(makeFixtureCache({ minorVersion: 21 })),
     ),
-    /unsupported scene-cache version 1\.20/,
+    /unsupported scene-cache version 1\.21/,
   );
 });
 
@@ -261,7 +263,7 @@ test("reads current drawing display settings", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 19,
+        minorVersion: 20,
         wipeoutFrame: 2,
         lineWeightDisplay: true,
         fillMode: false,
@@ -281,7 +283,7 @@ test("reads current linetype definitions and scale", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 19,
+        minorVersion: 20,
         globalLinetypeScale: 300,
       }),
     ),
@@ -331,6 +333,103 @@ test("reads current layouts, viewports and frozen layers", async () => {
   );
 });
 
+test("reads sparse viewport layer property overrides", async () => {
+  const reader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        viewportLayerOverrides: [
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.Color,
+            value: (3 << 30) | 0x112233,
+          },
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.Transparency,
+            value: 39 << 24,
+          },
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.Linetype,
+            value: 3,
+          },
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.LineWeight,
+            value: 50,
+          },
+        ],
+      }),
+    ),
+  );
+
+  const layouts = await reader.readLayouts();
+  assert.deepEqual(layouts[1].viewports[1].layerOverrides, [
+    {
+      layerIndex: 0,
+      flags:
+        ViewportLayerOverrideFlags.Color |
+        ViewportLayerOverrideFlags.Transparency |
+        ViewportLayerOverrideFlags.Linetype |
+        ViewportLayerOverrideFlags.LineWeight,
+      color: ((3 << 30) | 0x112233) >>> 0,
+      transparency: 39 << 24,
+      linetypeCode: 3,
+      lineWeight: 50,
+    },
+  ]);
+});
+
+test("rejects duplicate and orphan viewport layer overrides", async () => {
+  const duplicateReader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        viewportLayerOverrides: [
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.LineWeight,
+            value: 50,
+          },
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.LineWeight,
+            value: 70,
+          },
+        ],
+      }),
+    ),
+  );
+  await assert.rejects(
+    duplicateReader.readLayouts(),
+    /duplicates a property/u,
+  );
+
+  const orphanReader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        viewportLayerOverrides: [
+          {
+            viewportHandle: 9999,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.Color,
+            value: (3 << 30) | 0x112233,
+          },
+        ],
+      }),
+    ),
+  );
+  await assert.rejects(
+    orphanReader.readLayouts(),
+    /contains invalid metadata/u,
+  );
+});
+
 test("rejects a negative viewport annotation scale", async () => {
   const buffer = makeFixtureCache();
   const view = new DataView(buffer);
@@ -361,7 +460,7 @@ test("reads the current saved model view", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 19,
+        minorVersion: 20,
         savedModelView,
       }),
     ),
@@ -371,7 +470,7 @@ test("reads the current saved model view", async () => {
   assert.deepEqual(metadata.drawing.savedModelView, savedModelView);
 });
 
-test("reads bounded Scene Cache v1.19 raster image references", async () => {
+test("reads bounded Scene Cache v1.20 raster image references", async () => {
   const source = new TrackedRangeSource(
     new MemoryRangeSource(makeFixtureCache()),
   );
@@ -430,7 +529,7 @@ test("accepts the current HATCH-boundary sections", async () => {
   );
 
   assert.equal(reader.header.major, 1);
-  assert.equal(reader.header.minor, 19);
+  assert.equal(reader.header.minor, 20);
 });
 
 test("reads bounded HATCH source pools lazily", async () => {
@@ -441,7 +540,7 @@ test("reads bounded HATCH source pools lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const hatches = await reader.readHatchSource();
 
-  assert.equal(reader.header.minor, 19);
+  assert.equal(reader.header.minor, 20);
   assert.equal(hatches.length, 1);
   assert.equal(hatches.loopCount, 2);
   assert.equal(hatches.vertexCount, 8);
@@ -516,7 +615,7 @@ test("reads bounded POINT and SOLID source lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const primitives = await reader.readPrimitiveSource();
 
-  assert.equal(reader.header.minor, 19);
+  assert.equal(reader.header.minor, 20);
   assert.equal(primitives.points.length, 1);
   assert.equal(primitives.solids.length, 2);
   assert.equal(primitives.faces.length, 5);
@@ -539,7 +638,7 @@ test("reads bounded 3DFACE source lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const primitives = await reader.readPrimitiveSource();
 
-  assert.equal(reader.header.minor, 19);
+  assert.equal(reader.header.minor, 20);
   assert.equal(primitives.faces.length, 5);
   assert.deepEqual(
     [0, 1, 2, 3, 4].map(
@@ -624,7 +723,7 @@ test("rejects a WIPEOUT source table above its record cap", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 19,
+        minorVersion: 20,
         wipeoutRecordCount: 65_537,
       }),
     ),
@@ -764,7 +863,7 @@ test("rejects a 3DFACE source table above its record cap", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 19,
+        minorVersion: 20,
         faceRecordCount: 131_073,
       }),
     ),
@@ -829,7 +928,7 @@ test("preserves Korean source text, style fonts and MTEXT columns", async () => 
   const styles = await reader.readTextStyles();
   const texts = await reader.readTextEntities();
 
-  assert.equal(reader.header.minor, 19);
+  assert.equal(reader.header.minor, 20);
   assert.equal(styles[0].fontFile, "txt.shx");
   assert.equal(styles[0].bigFontFile, "hztxt.shx");
   assert.equal(texts.length, 2);

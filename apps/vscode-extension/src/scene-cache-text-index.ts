@@ -2,7 +2,7 @@ import { open } from "node:fs/promises";
 
 const CACHE_MAGIC = Buffer.from([68, 87, 71, 83, 67, 78, 49, 0]);
 const CACHE_VERSION_MAJOR = 1;
-const CACHE_VERSION_MINOR = 19;
+const CACHE_VERSION_MINOR = 20;
 const CACHE_HEADER_SIZE = 64;
 const CACHE_HEADER_FLAG_PREVIEW = 1;
 const DIRECTORY_ENTRY_SIZE = 40;

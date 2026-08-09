@@ -12,6 +12,11 @@ import {
   drawOrderSurfaceFor,
   resizeDrawOrderSurface,
 } from "./draw-order-overlay.mjs";
+import {
+  viewportLayerColor,
+  viewportLayerLinetype,
+  viewportStyleRow,
+} from "./viewport-layer-state.mjs";
 
 const VERTEX_STRIDE = 36;
 const NO_LAYER_OVERRIDE = 0xffffffff;
@@ -57,9 +62,15 @@ function canResolveComplex(
   layerIndex,
   definitions,
   layerCodes,
+  layerLinetypeRows,
 ) {
   if (code === 0) {
-    return definitions.has(layerCodes[layerIndex]);
+    return (
+      definitions.has(layerCodes[layerIndex]) ||
+      layerLinetypeRows?.some((row) =>
+        definitions.has(row?.[layerIndex]),
+      )
+    );
   }
   return code === 1 || definitions.has(code);
 }
@@ -69,6 +80,7 @@ export function collectComplexLinetypeSegments({
   batches,
   linetypes,
   layers,
+  layerLinetypeRows = null,
   maximumSegments = DEFAULT_MAXIMUM_SOURCE_SEGMENTS,
 }) {
   if (
@@ -124,7 +136,13 @@ export function collectComplexLinetypeSegments({
         startStyle !== endStyle ||
         (startStyle & (1 << 16)) !== 0 ||
         layerIndex >= layers.length ||
-        !canResolveComplex(code, layerIndex, definitions, layerCodes)
+        !canResolveComplex(
+          code,
+          layerIndex,
+          definitions,
+          layerCodes,
+          layerLinetypeRows,
+        )
       ) {
         continue;
       }
@@ -510,6 +528,8 @@ export class ComplexLinetypeOverlay {
       batches,
       linetypes,
       layers,
+      layerLinetypeRows:
+        instanceGraph.layerLinetypesByVisibilityRow,
       maximumSegments: maximumSourceSegments,
     });
     const discoveredLayerZero = layers.findIndex(
@@ -597,8 +617,10 @@ export class ComplexLinetypeOverlay {
             instanceIndex,
             this.layerZeroIndex,
           );
-          const visibilityRow =
-            instances.visibilityRows?.[instanceIndex] ?? 0;
+          const visibilityRow = viewportStyleRow(
+            instances,
+            instanceIndex,
+          );
           if (
             layerIndex >= this.layers.length ||
             layerVisibility?.[layerIndex] === false ||
@@ -620,7 +642,12 @@ export class ComplexLinetypeOverlay {
               : 1);
           const code =
             segment.linetypeCode === 0
-              ? this.layerCodes[layerIndex] ?? 2
+              ? viewportLayerLinetype(
+                  this.instanceGraph,
+                  visibilityRow,
+                  layerIndex,
+                  this.layerCodes[layerIndex] ?? 2,
+                )
               : segment.linetypeCode === 1
                 ? instances.linetypeCodes?.[instanceIndex] ?? 2
                 : segment.linetypeCode;
@@ -664,25 +691,34 @@ export class ComplexLinetypeOverlay {
           const pixelsPerPatternUnit = screenLength / patternSpan;
           const period =
             definition.patternLength * effectiveLinetypeScale;
+          const layerColor = viewportLayerColor(
+            this.instanceGraph,
+            visibilityRow,
+            layerIndex,
+            this.layers[layerIndex]?.color ?? 0,
+          );
+          const instanceLayerIndex =
+            instances.layerIndices?.[instanceIndex] ?? layerIndex;
+          const instanceLayerColor = viewportLayerColor(
+            this.instanceGraph,
+            visibilityRow,
+            instanceLayerIndex,
+            this.layers[instanceLayerIndex]?.color ?? layerColor,
+          );
           const byBlockColor = decodeCadColor(
             instances.colors?.[instanceIndex] ?? ((2 << 30) | 7),
             {
-              layer:
-                this.layers[
-                  instances.layerIndices?.[instanceIndex] ?? layerIndex
-                ],
+              layer: { color: instanceLayerColor },
               palette: this.palette,
             },
           );
           const color = decodeCadColor(segment.color, {
-            layer: this.layers[layerIndex],
+            layer: { color: layerColor },
             byBlock: byBlockColor,
             palette: this.palette,
           });
           const opacity = decodeCadOpacity(segment.color, {
-            layer: decodeCadOpacity(
-              this.layers[layerIndex]?.color ?? 0,
-            ),
+            layer: decodeCadOpacity(layerColor),
             byBlock: instances.opacities?.[instanceIndex] ?? 1,
           });
           context.strokeStyle = rgba(color, opacity);

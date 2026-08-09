@@ -4,7 +4,7 @@ This process-isolated adapter implements the `dwg-engine-adapter/1` inspection
 and conversion contract. It traverses LibreDWG's object model directly instead
 of creating a full JSON dump.
 
-The `convert` path writes Scene Cache v1.19 without a whole-drawing intermediate
+The `convert` path writes Scene Cache v1.20 without a whole-drawing intermediate
 model. It repeatedly traverses LibreDWG objects and streams sections and
 bounded GPU batches directly to a new cache file. For large drawings, it
 spills fixed-size detail records into private unnamed temporary files, sorts
@@ -73,6 +73,8 @@ This is a deliberately partial conversion milestone:
   including bounded complex-linetype text/shape metadata;
 - named paper-space layouts retain their paper settings, active viewport and
   bounded VIEWPORT records so every saved layout can be selected independently;
+- LAYER extension dictionaries retain sparse per-viewport color, transparency,
+  linetype and lineweight overrides, capped at 1,048,576 property records;
 - XLINE, MULTILEADER and classic LEADER geometry is displayed with bounded
   approximations, including LEADER arrows and hook lines;
 - OLE2FRAME uses the embedded four-corner placement when available and falls
@@ -110,10 +112,11 @@ range-read limit.
 ## Progressive first frame
 
 When the VS Code host supplies both private preview paths, the same conversion
-process emits a Scene Cache v1.19 first-frame sidecar immediately after parsing
+process emits a Scene Cache v1.20 first-frame sidecar immediately after parsing
 and overview planning, before the disk-backed full-detail sort. The sidecar
-contains drawing/layer/block/INSERT metadata and overview-only GPU line data;
-all other required sections are schema-valid and empty. Header flag bit 0
+contains drawing/layer/block/INSERT and layout/viewport metadata, including
+viewport layer overrides, plus overview-only GPU line data; remaining required
+sections are schema-valid and empty. Header flag bit 0
 prevents it from being mistaken for a canonical cache.
 
 The adapter closes the preview before creating its ready marker. It then

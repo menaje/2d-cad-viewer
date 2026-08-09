@@ -5,7 +5,8 @@ import {
   includePoint,
   transformPoint,
 } from "./math.mjs";
-import { effectiveClipBounds } from "./instance-graph.mjs?v=1.19.0";
+import { effectiveClipBounds } from "./instance-graph.mjs?v=1.20.0";
+import { decodeCadOpacity } from "./cad-color.mjs";
 import {
   indexDwgRenderDeltaStyles,
   renderDeltaInstanceStyle,
@@ -25,6 +26,10 @@ import {
   encodedDrawOrderColor,
   resizeDrawOrderSurface,
 } from "./draw-order-overlay.mjs";
+import {
+  viewportLayerColor,
+  viewportStyleRow,
+} from "./viewport-layer-state.mjs";
 
 const NO_LAYER = 0xffffffff;
 const DEFAULT_MAXIMUM_SOURCE_IMAGES = 65_536;
@@ -1422,13 +1427,26 @@ export class CanvasRasterImageOverlay {
           height,
           metrics,
         );
+        const occurrenceOpacity =
+          style?.opacity ??
+          instances.opacities?.[instanceIndex] ??
+          1;
         const opacity = Math.max(
           0,
           Math.min(
             1,
-            (style?.opacity ??
-              instances.opacities?.[instanceIndex] ??
-              1) *
+            decodeCadOpacity(record.color, {
+              layer: decodeCadOpacity(
+                viewportLayerColor(
+                  this.instanceGraph,
+                  viewportStyleRow(instances, instanceIndex),
+                  layerIndex,
+                  this.layers?.[layerIndex]?.color ?? 0,
+                ),
+              ),
+              byBlock: 1,
+            }) *
+              occurrenceOpacity *
               (1 - record.fade / 100),
           ),
         );

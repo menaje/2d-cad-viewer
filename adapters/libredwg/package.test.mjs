@@ -243,6 +243,46 @@ test("uses native Windows isolation and a path-safe piped input contract", async
   assert.match(hostSource, /createReadStream\(inputPath\)/u);
 });
 
+test("serializes sparse viewport layer overrides in Scene Cache v1.20", async () => {
+  const [sceneCacheSource, sceneCacheHeader] = await Promise.all([
+    readFile(
+      path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+      "utf8",
+    ),
+    readFile(
+      path.join(import.meta.dirname, "libredwg_scene_cache.h"),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(
+    sceneCacheHeader,
+    /LIBREDWG_SCENE_CACHE_VERSION_MINOR 20u/u,
+  );
+  assert.match(
+    sceneCacheHeader,
+    /LIBREDWG_SCENE_SECTION_COUNT 47/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /SECTION_VIEWPORT_LAYER_OVERRIDES = 58/u,
+  );
+  for (const key of [
+    "ADSK_XREC_LAYER_COLOR_OVR",
+    "ADSK_XREC_LAYER_ALPHA_OVR",
+    "ADSK_XREC_LAYER_LINETYPE_OVR",
+    "ADSK_XREC_LAYER_LINEWT_OVR",
+  ]) {
+    assert.match(sceneCacheSource, new RegExp(key, "u"));
+  }
+  assert.match(sceneCacheSource, /item->type == 335/u);
+  assert.match(sceneCacheSource, /"viewport_layer_overrides"/u);
+  assert.match(
+    sceneCacheSource,
+    /write_viewport_layer_override_section \(\s*&writer, dwg, tables, &sections\[46\]\)/u,
+  );
+});
+
 test("keeps Windows in the reproducible attested release set", async () => {
   const [releaseWorkflow, distributionGuide] = await Promise.all([
     readFile(

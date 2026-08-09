@@ -16,10 +16,10 @@ pub const DEFAULT_WARMUP_RUNS: usize = 1;
 
 const CACHE_MAGIC: [u8; 8] = *b"DWGSCN1\0";
 const CACHE_VERSION_MAJOR: u16 = 1;
-const CACHE_VERSION_MINOR: u16 = 19;
+const CACHE_VERSION_MINOR: u16 = 20;
 const CACHE_HEADER_SIZE: usize = 64;
 const CACHE_DIRECTORY_ENTRY_SIZE: usize = 40;
-const CACHE_SECTION_COUNT: usize = 46;
+const CACHE_SECTION_COUNT: usize = 47;
 const MAX_MEASURED_RUNS: usize = 20;
 const MAX_WARMUP_RUNS: usize = 10;
 const MAX_IDENTITY_BYTES: usize = 128;
@@ -502,8 +502,8 @@ fn run_adapter(
         if !cache_metadata.is_file() {
             anyhow::bail!("convert adapter output is not a regular cache file");
         }
-        validate_scene_cache_v119(path, input_size)
-            .context("convert adapter created an invalid Scene Cache v1.19")?;
+        validate_scene_cache_v120(path, input_size)
+            .context("convert adapter created an invalid Scene Cache v1.20")?;
         Some(cache_metadata.len())
     } else {
         None
@@ -591,7 +591,7 @@ fn parse_observation(
                 .and_then(Value::as_u64)
                 != Some(u64::from(CACHE_VERSION_MINOR))
         {
-            anyhow::bail!("adapter report must identify Scene Cache v1.19");
+            anyhow::bail!("adapter report must identify Scene Cache v1.20");
         }
     }
 
@@ -791,7 +791,7 @@ fn evaluate_gate(observed: Option<MetricSummary>, target: u64, hard_limit: u64) 
     }
 }
 
-fn validate_scene_cache_v119(path: &Path, expected_source_size: u64) -> Result<()> {
+fn validate_scene_cache_v120(path: &Path, expected_source_size: u64) -> Result<()> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("cannot read cache metadata: {}", path.display()))?;
     if !metadata.is_file() {
@@ -821,7 +821,7 @@ fn validate_scene_cache_v119(path: &Path, expected_source_size: u64) -> Result<(
         .context("Scene Cache section count exceeds usize")?;
     if section_count != CACHE_SECTION_COUNT {
         anyhow::bail!(
-            "Scene Cache v1.19 must contain {CACHE_SECTION_COUNT} sections, found {section_count}"
+            "Scene Cache v1.20 must contain {CACHE_SECTION_COUNT} sections, found {section_count}"
         );
     }
     if read_u32(&header, 20) != CACHE_DIRECTORY_ENTRY_SIZE as u32 {
@@ -919,7 +919,7 @@ fn validate_scene_cache_v119(path: &Path, expected_source_size: u64) -> Result<(
 }
 
 fn is_current_section_kind(kind: u32) -> bool {
-    matches!(kind, 1..=4 | 10..=23 | 30..=57)
+    matches!(kind, 1..=4 | 10..=23 | 30..=58)
 }
 
 fn align_up_8(value: u64) -> Option<u64> {
@@ -1093,7 +1093,7 @@ mod tests {
 
         let kinds = (1_u32..=4)
             .chain(10..=23)
-            .chain(30..=57)
+            .chain(30..=58)
             .collect::<Vec<_>>();
         assert_eq!(kinds.len(), CACHE_SECTION_COUNT);
         for (index, kind) in kinds.into_iter().enumerate() {
@@ -1106,18 +1106,18 @@ mod tests {
     }
 
     #[test]
-    fn structural_validation_accepts_only_scene_cache_v119() {
+    fn structural_validation_accepts_only_scene_cache_v120() {
         let workspace = BenchmarkWorkspace::create().unwrap();
         let current = workspace.path.join("current.cache");
         write_test_scene_cache(&current, 3, CACHE_VERSION_MINOR);
-        validate_scene_cache_v119(&current, 3).unwrap();
+        validate_scene_cache_v120(&current, 3).unwrap();
 
         let legacy = workspace.path.join("legacy.cache");
         write_test_scene_cache(&legacy, 3, 14);
-        assert!(validate_scene_cache_v119(&legacy, 3)
+        assert!(validate_scene_cache_v120(&legacy, 3)
             .unwrap_err()
             .to_string()
-            .contains("expected 1.19"));
+            .contains("expected 1.20"));
     }
 
     #[cfg(unix)]
@@ -1141,7 +1141,7 @@ fi
 if [ "$1" = "convert" ]; then
   cp "$2.fixture.cache" "$3"
   cache_size=$(wc -c < "$3" | tr -d ' ')
-  printf '%s\n' '{"schema":"dwg-scene-cache/1","status":"ok","input":{"size_bytes":3},"cache":{"format_major":1,"format_minor":19,"size_bytes":'"$cache_size"',"validated":true},"coverage":{},"gpu_lines":{},"hatch_fills":{},"performance":{"parse_ms":1,"write_ms":2,"total_ms":3,"peak_rss_bytes":100},"diagnostics":0}'
+  printf '%s\n' '{"schema":"dwg-scene-cache/1","status":"ok","input":{"size_bytes":3},"cache":{"format_major":1,"format_minor":20,"size_bytes":'"$cache_size"',"validated":true},"coverage":{},"gpu_lines":{},"hatch_fills":{},"performance":{"parse_ms":1,"write_ms":2,"total_ms":3,"peak_rss_bytes":100},"diagnostics":0}'
   exit 0
 fi
 exit 2

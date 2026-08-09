@@ -1,5 +1,5 @@
 import { transformedBounds2D, transformPoint } from "./math.mjs";
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.19.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.20.0";
 import { CAD_LINE_WEIGHTS } from "./cad-line-style.mjs";
 
 const MATRIX_VALUES = 16;

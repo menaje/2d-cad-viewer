@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MPL-2.0
  *
- * A bounded-memory Scene Cache v1.19 writer for GNU LibreDWG. Geometry and
+ * A bounded-memory Scene Cache v1.20 writer for GNU LibreDWG. Geometry and
  * source text are traversed repeatedly and written directly to the
  * destination; the writer never creates a JSON or whole-drawing in-memory
  * representation. Large detail passes use private temporary files for an
@@ -130,6 +130,7 @@ _Static_assert (
 #define MAX_INSERT_CLIP_VERTICES_PER_BOUNDARY 256u
 #define MAX_VIEWPORT_CLIP_VERTICES 1048576u
 #define MAX_VIEWPORT_CLIP_VERTICES_PER_BOUNDARY 4096u
+#define MAX_VIEWPORT_LAYER_OVERRIDES 1048576u
 #define VIEWPORT_CLIP_CURVE_SEGMENTS 64u
 #define MAX_TEXT_ANNOTATION_CONTEXTS 262144u
 #define MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS 1048576u
@@ -151,6 +152,10 @@ _Static_assert (
 #define VERTEX_FLAG_CURVE_FIT_EXTRA (1u << 0)
 #define VERTEX_FLAG_SPLINE_FIT_EXTRA (1u << 3)
 #define VERTEX_FLAG_SPLINE_FRAME_CONTROL (1u << 4)
+#define VIEWPORT_LAYER_OVERRIDE_COLOR 1u
+#define VIEWPORT_LAYER_OVERRIDE_TRANSPARENCY 2u
+#define VIEWPORT_LAYER_OVERRIDE_LINETYPE 3u
+#define VIEWPORT_LAYER_OVERRIDE_LINEWEIGHT 4u
 
 enum
 {
@@ -199,7 +204,8 @@ enum
   SECTION_IMAGE_ENTITIES = 54,
   SECTION_IMAGE_CLIP_VERTICES = 55,
   SECTION_TEXT_ANNOTATION_CONTEXTS = 56,
-  SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS = 57
+  SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS = 57,
+  SECTION_VIEWPORT_LAYER_OVERRIDES = 58
 };
 
 enum
@@ -246,7 +252,8 @@ enum
   IMAGE_ENTITY_RECORD_SIZE = 176,
   IMAGE_CLIP_VERTEX_RECORD_SIZE = 16,
   TEXT_ANNOTATION_CONTEXT_RECORD_SIZE = 160,
-  TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8
+  TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8,
+  VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE = 24
 };
 
 typedef struct
@@ -672,7 +679,8 @@ static const uint32_t SECTION_KINDS[LIBREDWG_SCENE_SECTION_COUNT]
         SECTION_IMAGE_ENTITIES,
         SECTION_IMAGE_CLIP_VERTICES,
         SECTION_TEXT_ANNOTATION_CONTEXTS,
-        SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS };
+        SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS,
+        SECTION_VIEWPORT_LAYER_OVERRIDES };
 
 static const uint32_t SECTION_RECORD_SIZES[LIBREDWG_SCENE_SECTION_COUNT]
     = { DRAWING_RECORD_SIZE,
@@ -720,7 +728,8 @@ static const uint32_t SECTION_RECORD_SIZES[LIBREDWG_SCENE_SECTION_COUNT]
         IMAGE_ENTITY_RECORD_SIZE,
         IMAGE_CLIP_VERTEX_RECORD_SIZE,
         TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
-        TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE };
+        TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+        VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE };
 
 static const char *const SECTION_NAMES[LIBREDWG_SCENE_SECTION_COUNT]
     = { "drawing",
@@ -768,7 +777,8 @@ static const char *const SECTION_NAMES[LIBREDWG_SCENE_SECTION_COUNT]
         "image_entities",
         "image_clip_vertices",
         "text_annotation_contexts",
-        "text_annotation_column_heights" };
+        "text_annotation_column_heights",
+        "viewport_layer_overrides" };
 
 static void
 set_error (CacheWriter *writer, const char *message)
@@ -3979,6 +3989,158 @@ write_viewport_frozen_layer_section (
       writer, entry, SECTION_VIEWPORT_FROZEN_LAYERS,
       VIEWPORT_FROZEN_LAYER_RECORD_SIZE,
       "viewport_frozen_layers", offset, count);
+}
+
+static int
+viewport_layer_override_value (
+    const CacheTables *tables, uint16_t property,
+    const Dwg_Resbuf *item, uint32_t *value)
+{
+  uint32_t raw;
+  if (!tables || !item || !value)
+    return 0;
+  if (property == VIEWPORT_LAYER_OVERRIDE_COLOR)
+    {
+      uint32_t method;
+      raw = (uint32_t)item->value.i32;
+      method = raw >> 24;
+      if (method == 0xc2u)
+        *value = (3u << 30) | (raw & 0x00ffffffu);
+      else if (method == 0xc3u && (raw & 0xffu) > 0u)
+        *value = (2u << 30) | (raw & 0xffu);
+      else
+        return 0;
+      return 1;
+    }
+  if (property == VIEWPORT_LAYER_OVERRIDE_TRANSPARENCY)
+    {
+      uint32_t alpha;
+      uint32_t code;
+      raw = (uint32_t)item->value.i32;
+      if ((raw >> 24) != 2u)
+        return 0;
+      alpha = raw & 0xffu;
+      code = 3u + (alpha * 60u + 127u) / 255u;
+      *value = code << 24;
+      return 1;
+    }
+  if (property == VIEWPORT_LAYER_OVERRIDE_LINETYPE)
+    {
+      uint32_t code = find_handle_index (
+          tables->linetype_codes, tables->linetype_count,
+          (uint64_t)item->value.absref);
+      if (code == UINT32_MAX || code > 2047u)
+        return 0;
+      *value = code;
+      return 1;
+    }
+  if (property == VIEWPORT_LAYER_OVERRIDE_LINEWEIGHT)
+    {
+      int32_t lineweight = item->value.i32;
+      if (lineweight < 0 || lineweight > 211)
+        return 0;
+      *value = (uint32_t)lineweight;
+      return 1;
+    }
+  return 0;
+}
+
+static int
+write_viewport_layer_override_section (
+    CacheWriter *writer, const Dwg_Data *dwg,
+    const CacheTables *tables, SectionEntry *entry)
+{
+  static const struct
+  {
+    const char *key;
+    short value_type;
+    uint16_t property;
+  } definitions[] = {
+    { "ADSK_XREC_LAYER_COLOR_OVR", 420,
+      VIEWPORT_LAYER_OVERRIDE_COLOR },
+    { "ADSK_XREC_LAYER_ALPHA_OVR", 440,
+      VIEWPORT_LAYER_OVERRIDE_TRANSPARENCY },
+    { "ADSK_XREC_LAYER_LINETYPE_OVR", 343,
+      VIEWPORT_LAYER_OVERRIDE_LINETYPE },
+    { "ADSK_XREC_LAYER_LINEWT_OVR", 91,
+      VIEWPORT_LAYER_OVERRIDE_LINEWEIGHT },
+  };
+  uint64_t offset;
+  uint64_t count = 0;
+  size_t layer_index;
+  if (!align_writer (writer, &offset))
+    return 0;
+  for (layer_index = 0; layer_index < tables->layer_count; layer_index++)
+    {
+      Dwg_Object *layer_object = tables->layers[layer_index].object;
+      Dwg_Object *xdic;
+      size_t definition_index;
+      if (!layer_object || !layer_object->tio.object
+          || !layer_object->tio.object->xdicobjhandle)
+        continue;
+      xdic = reference_object (
+          dwg, layer_object->tio.object->xdicobjhandle);
+      for (definition_index = 0;
+           definition_index
+               < sizeof (definitions) / sizeof (definitions[0]);
+           definition_index++)
+        {
+          Dwg_Object *xrecord_object = dictionary_item_named (
+              dwg, xdic, definitions[definition_index].key);
+          Dwg_Object_XRECORD *xrecord;
+          Dwg_Resbuf *item;
+          uint64_t viewport_handle = 0;
+          if (!xrecord_object
+              || xrecord_object->fixedtype != DWG_TYPE_XRECORD
+              || !xrecord_object->tio.object
+              || !(xrecord
+                       = xrecord_object->tio.object->tio.XRECORD))
+            continue;
+          for (item = xrecord->xdata; item; item = item->nextrb)
+            {
+              uint32_t value;
+              Dwg_Object *viewport_object;
+              if (item->type == 335)
+                {
+                  viewport_handle = (uint64_t)item->value.absref;
+                  continue;
+                }
+              if (item->type != definitions[definition_index].value_type
+                  || !viewport_handle)
+                continue;
+              viewport_object = dwg_resolve_handle_silent (
+                  dwg, viewport_handle);
+              if (is_viewport_entity (viewport_object)
+                  && viewport_layer_override_value (
+                      tables, definitions[definition_index].property,
+                      item, &value))
+                {
+                  if (count >= MAX_VIEWPORT_LAYER_OVERRIDES)
+                    {
+                      set_error (
+                          writer,
+                          "viewport layer overrides exceed their limits");
+                      return 0;
+                    }
+                  if (!write_u64 (writer, viewport_handle)
+                      || !write_u32 (writer, (uint32_t)layer_index)
+                      || !write_u16 (
+                          writer,
+                          definitions[definition_index].property)
+                      || !write_u16 (writer, 0)
+                      || !write_u32 (writer, value)
+                      || !write_u32 (writer, 0))
+                    return 0;
+                  count++;
+                }
+              viewport_handle = 0;
+            }
+        }
+    }
+  return finish_fixed_section (
+      writer, entry, SECTION_VIEWPORT_LAYER_OVERRIDES,
+      VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
+      "viewport_layer_overrides", offset, count);
 }
 
 static int
@@ -11502,7 +11664,9 @@ write_scene_preview (
       || !write_empty_string_section (&writer, &sections[42], 42)
       || !write_empty_fixed_section (&writer, &sections[43], 43)
       || !write_empty_fixed_section (&writer, &sections[44], 44)
-      || !write_empty_fixed_section (&writer, &sections[45], 45))
+      || !write_empty_fixed_section (&writer, &sections[45], 45)
+      || !write_viewport_layer_override_section (
+          &writer, dwg, tables, &sections[46]))
     goto done;
   if (!position (&writer, &file_size)
       || !write_header (
@@ -11750,6 +11914,8 @@ libredwg_write_scene_cache (
           &writer, dwg, &sections[44])
       || !write_text_annotation_column_height_section (
           &writer, dwg, &sections[45])
+      || !write_viewport_layer_override_section (
+          &writer, dwg, &tables, &sections[46])
       || !position (&writer, &file_size)
       || !write_header (
           &writer, file_size, source_size, source_version,

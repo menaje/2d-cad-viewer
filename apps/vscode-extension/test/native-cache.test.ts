@@ -118,7 +118,7 @@ test("doctor report requires the adapter, cache, engine, and license contract", 
       license: "GPL-3.0-or-later",
       linkage: "static",
     },
-    cache: { schema: "dwg-scene-cache/1.19" },
+    cache: { schema: "dwg-scene-cache/1.20" },
     target: { platform: "darwin", architecture: "arm64" },
   };
   assert.deepEqual(
@@ -189,7 +189,7 @@ if (process.env.DWG_DOCTOR_TEST_MODE === "slow") {
       license: "GPL-3.0-or-later",
       linkage: "static"
     },
-    cache: { schema: "dwg-scene-cache/1.19" },
+    cache: { schema: "dwg-scene-cache/1.20" },
     target: { platform: "test", architecture: "test" }
   }) + "\\n");
 }
