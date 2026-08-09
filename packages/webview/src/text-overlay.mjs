@@ -1,6 +1,6 @@
 import {
   TextEntityKind,
-} from "./scene-cache.mjs?v=1.18.8";
+} from "./scene-cache.mjs?v=1.19.0";
 import {
   decodeCadColor,
   decodeCadOpacity,
@@ -544,23 +544,71 @@ export function cadTextEntityMatrix(record, style) {
   ].reduce(multiplyMat4);
 }
 
-export function annotativeTextMatrixForInstance(
-  localMatrix,
+function annotationScalesMatch(left, right) {
+  return (
+    Number.isFinite(left) &&
+    Number.isFinite(right) &&
+    Math.abs(left - right) <= Math.max(1, Math.abs(left), Math.abs(right)) * 1e-9
+  );
+}
+
+export function annotativeTextRecordForInstance(
   record,
   instanceGraph,
   instances,
   instanceIndex,
 ) {
-  if ((record.flags & TEXT_FLAG_ANNOTATIVE) === 0) {
-    return localMatrix;
+  const contexts = record.annotationContexts;
+  if (
+    (record.flags & TEXT_FLAG_ANNOTATIVE) === 0 ||
+    !Array.isArray(contexts) ||
+    contexts.length === 0
+  ) {
+    return record;
   }
   const visibilityRow = instances.visibilityRows?.[instanceIndex] ?? 0;
-  const scale =
-    instanceGraph.paperToModelScalesByVisibilityRow?.[visibilityRow] ?? 1;
-  if (!Number.isFinite(scale) || scale <= 0 || scale === 1) {
-    return localMatrix;
+  const viewportScale =
+    instanceGraph.annotationScalesByVisibilityRow?.[visibilityRow] ?? 0;
+  if (!Number.isFinite(viewportScale) || viewportScale <= 0) {
+    return record;
   }
-  return multiplyMat4(localMatrix, scalingMat4(scale, scale, scale));
+  const targetContext = contexts.find((context) =>
+    annotationScalesMatch(context.scale, viewportScale),
+  );
+  const defaultContext = contexts.find((context) => context.isDefault);
+  if (!targetContext || !defaultContext || targetContext === defaultContext) {
+    return record;
+  }
+  const heightScale = targetContext.scale / defaultContext.scale;
+  if (!Number.isFinite(heightScale) || heightScale <= 0) {
+    return record;
+  }
+  const columnHeightCount = targetContext.columnHeights.length;
+  return Object.freeze({
+    ...record,
+    insertionPoint: targetContext.insertionPoint,
+    xAxisDirection: targetContext.xAxisDirection,
+    height: baseTextHeight(record) * heightScale,
+    attachment: targetContext.attachment,
+    rectangleHeight: targetContext.rectangleHeight,
+    rectangleWidth: targetContext.rectangleWidth,
+    extentsWidth: targetContext.extentsWidth,
+    extentsHeight: targetContext.extentsHeight,
+    columnType: targetContext.columnType,
+    columnCount:
+      columnHeightCount > 0 ? columnHeightCount : record.columnCount,
+    columnFlags:
+      (record.columnFlags & ~0x3) |
+      (targetContext.autoHeight ? 1 : 0) |
+      (targetContext.flowReversed ? 2 : 0),
+    columnWidth: targetContext.columnWidth,
+    columnGutter: targetContext.columnGutter,
+    firstColumnHeight: 0,
+    columnHeightCount,
+    columnHeightPool: null,
+    columnHeights: targetContext.columnHeights,
+    annotationDisplayScale: targetContext.scale,
+  });
 }
 
 function isMTextRecord(record) {
@@ -1484,7 +1532,6 @@ export class CanvasTextOverlay {
       if (instances.count === 0) {
         return null;
       }
-      const localMatrix = cadTextEntityMatrix(record, record.style);
       for (
         let instanceIndex = 0;
         instanceIndex < instances.count;
@@ -1516,12 +1563,15 @@ export class CanvasTextOverlay {
           instances,
           instanceIndex,
         );
-        const displayLocalMatrix = annotativeTextMatrixForInstance(
-          localMatrix,
+        const displayRecord = annotativeTextRecordForInstance(
           record,
           this.instanceGraph,
           instances,
           instanceIndex,
+        );
+        const displayLocalMatrix = cadTextEntityMatrix(
+          displayRecord,
+          displayRecord.style,
         );
         const worldMatrix = multiplyMat4(
           instanceMatrix,
@@ -1554,7 +1604,7 @@ export class CanvasTextOverlay {
         return Object.freeze({
           point: Object.freeze(point),
           worldHeight,
-          kind: record.kind,
+          kind: displayRecord.kind,
         });
       }
       return null;
@@ -1606,7 +1656,7 @@ export class CanvasTextOverlay {
       if (best && distancePixels >= best.distancePixels) {
         continue;
       }
-      const fullRecord =
+      const sourceRecord =
         typeof this.textEntities.get === "function"
           ? this.textEntities.get(occurrence.textIndex)
           : Object.freeze({
@@ -1618,6 +1668,10 @@ export class CanvasTextOverlay {
               tag: "",
               prompt: "",
             });
+      const fullRecord = Object.freeze({
+        ...sourceRecord,
+        ...occurrence.record,
+      });
       const names = ["TEXT", "MTEXT", "ATTDEF", "ATTRIB"];
       best = Object.freeze({
         kind: enabled.has("entity") ? "entity" : "insertion",
@@ -1824,7 +1878,6 @@ export class CanvasTextOverlay {
       if (!record.insertionPoint.every(Number.isFinite)) {
         continue;
       }
-      const localMatrix = cadTextEntityMatrix(record, record.style);
       const ownerBlockIndex = this.blockIndexByHandle.get(record.ownerHandle);
       const instances = instancesForText(
         record,
@@ -1897,12 +1950,15 @@ export class CanvasTextOverlay {
           instances,
           instanceIndex,
         );
-        const displayLocalMatrix = annotativeTextMatrixForInstance(
-          localMatrix,
+        const displayRecord = annotativeTextRecordForInstance(
           record,
           this.instanceGraph,
           instances,
           instanceIndex,
+        );
+        const displayLocalMatrix = cadTextEntityMatrix(
+          displayRecord,
+          displayRecord.style,
         );
         const worldMatrix = multiplyMat4(
           instanceMatrix,
@@ -1924,7 +1980,7 @@ export class CanvasTextOverlay {
           continue;
         }
         const conservativeCharacters = Math.min(
-          record.valueByteLength ?? record.value?.length ?? 0,
+          displayRecord.valueByteLength ?? displayRecord.value?.length ?? 0,
           MAXIMUM_CODE_POINTS_PER_ENTITY * 4,
         );
         const conservativeRadius =
@@ -1944,10 +2000,10 @@ export class CanvasTextOverlay {
           typeof this.textEntities.readValue === "function"
             ? this.textEntities.readValue(textIndex)
             : record.value;
-        const isMText = isMTextRecord(record);
+        const isMText = isMTextRecord(displayRecord);
         const richLines = isMText
           ? parseCadMTextRuns(value, {
-              baseHeight: baseTextHeight(record),
+              baseHeight: baseTextHeight(displayRecord),
               maximumCodePoints: MAXIMUM_CODE_POINTS_PER_ENTITY,
             })
           : unformattedRichLines(plainCadTextLines(value, false));
@@ -1997,7 +2053,7 @@ export class CanvasTextOverlay {
         );
         const orderMetrics = this.orderSurface ? { ...metrics } : null;
         const localBounds = this.#drawOccurrence(
-          record,
+          displayRecord,
           richLines,
           worldMatrix,
           screen,
@@ -2032,7 +2088,7 @@ export class CanvasTextOverlay {
               orderMetrics,
             );
             this.#drawOccurrence(
-              record,
+              displayRecord,
               richLines,
               worldMatrix,
               screen,
@@ -2098,9 +2154,27 @@ export class CanvasTextOverlay {
                   color: record.color,
                   lineWeight: record.lineWeight,
                   linetypeCode: record.linetypeCode,
-                  height: record.height,
-                  rotation: record.rotation,
-                  style: record.style,
+                  height: displayRecord.height,
+                  rotation: displayRecord.rotation,
+                  style: displayRecord.style,
+                  insertionPoint: Object.freeze([
+                    ...displayRecord.insertionPoint,
+                  ]),
+                  xAxisDirection: Object.freeze([
+                    ...displayRecord.xAxisDirection,
+                  ]),
+                  attachment: displayRecord.attachment,
+                  rectangleWidth: displayRecord.rectangleWidth,
+                  rectangleHeight: displayRecord.rectangleHeight,
+                  extentsWidth: displayRecord.extentsWidth,
+                  extentsHeight: displayRecord.extentsHeight,
+                  columnType: displayRecord.columnType,
+                  columnCount: displayRecord.columnCount,
+                  columnFlags: displayRecord.columnFlags,
+                  columnWidth: displayRecord.columnWidth,
+                  columnGutter: displayRecord.columnGutter,
+                  annotationDisplayScale:
+                    displayRecord.annotationDisplayScale ?? null,
                 }),
                 displayPoint: Object.freeze([
                   worldMatrix[12],

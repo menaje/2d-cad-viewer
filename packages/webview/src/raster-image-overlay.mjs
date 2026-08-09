@@ -5,7 +5,7 @@ import {
   includePoint,
   transformPoint,
 } from "./math.mjs";
-import { effectiveClipBounds } from "./instance-graph.mjs?v=1.18.8";
+import { effectiveClipBounds } from "./instance-graph.mjs?v=1.19.0";
 import {
   indexDwgRenderDeltaStyles,
   renderDeltaInstanceStyle,

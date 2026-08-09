@@ -27,13 +27,13 @@ test("opens the header and directory without reading the full cache", async () =
   const reader = await SceneCacheReader.open(source);
 
   assert.equal(reader.header.major, 1);
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 19);
   assert.equal(reader.header.fileSize, buffer.byteLength);
   assert.equal(reader.header.preview, false);
-  assert.equal(reader.sections.size, 44);
+  assert.equal(reader.sections.size, 46);
   assert.deepEqual(source.requests, [
     { offset: 0, length: 64 },
-    { offset: 64, length: 44 * 40 },
+    { offset: 64, length: 46 * 40 },
   ]);
   assert.ok(source.bytesRead < buffer.byteLength / 2);
 });
@@ -151,7 +151,7 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
   );
   const reader = new SceneCacheReader(
     source,
-    { minor: 18 },
+    { minor: 19 },
     sections,
   );
   const curves = await reader.readCurveRefinementSource();
@@ -202,7 +202,7 @@ test("reads deferred polyline source in independently bounded chunks", async () 
       },
     ],
   ]);
-  const reader = new SceneCacheReader(source, { minor: 18 }, sections);
+  const reader = new SceneCacheReader(source, { minor: 19 }, sections);
   const polylines = await reader.readPolylineSource();
 
   assert.equal(polylines.polylines.length, headerCount);
@@ -251,9 +251,9 @@ test("does not read curve source sections while loading first-frame data", async
 test("rejects a newer unsupported Scene Cache minor version", async () => {
   await assert.rejects(
     SceneCacheReader.open(
-      new MemoryRangeSource(makeFixtureCache({ minorVersion: 19 })),
+      new MemoryRangeSource(makeFixtureCache({ minorVersion: 20 })),
     ),
-    /unsupported scene-cache version 1\.19/,
+    /unsupported scene-cache version 1\.20/,
   );
 });
 
@@ -261,7 +261,7 @@ test("reads current drawing display settings", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 19,
         wipeoutFrame: 2,
         lineWeightDisplay: true,
         fillMode: false,
@@ -281,7 +281,7 @@ test("reads current linetype definitions and scale", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 19,
         globalLinetypeScale: 300,
       }),
     ),
@@ -315,6 +315,7 @@ test("reads current layouts, viewports and frozen layers", async () => {
   );
   assert.equal(metadata.layouts[1].viewports.length, 2);
   assert.equal(metadata.layouts[1].viewports[1].id, 2);
+  assert.equal(metadata.layouts[1].viewports[1].annotationScale, 100);
   assert.deepEqual(
     metadata.layouts[1].viewports[1].frozenLayerIndices,
     [0],
@@ -330,6 +331,26 @@ test("reads current layouts, viewports and frozen layers", async () => {
   );
 });
 
+test("rejects a negative viewport annotation scale", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let viewportOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.Viewports) {
+      viewportOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(viewportOffset, undefined);
+  view.setFloat64(viewportOffset + 16 + 264, -1, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(reader.readLayouts(), /viewport 0 contains invalid metadata/);
+});
+
 test("reads the current saved model view", async () => {
   const savedModelView = {
     center: [1_903_111.951778639, -372_937.2779705549, 0],
@@ -340,7 +361,7 @@ test("reads the current saved model view", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 19,
         savedModelView,
       }),
     ),
@@ -350,7 +371,7 @@ test("reads the current saved model view", async () => {
   assert.deepEqual(metadata.drawing.savedModelView, savedModelView);
 });
 
-test("reads bounded Scene Cache v1.18 raster image references", async () => {
+test("reads bounded Scene Cache v1.19 raster image references", async () => {
   const source = new TrackedRangeSource(
     new MemoryRangeSource(makeFixtureCache()),
   );
@@ -409,7 +430,7 @@ test("accepts the current HATCH-boundary sections", async () => {
   );
 
   assert.equal(reader.header.major, 1);
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 19);
 });
 
 test("reads bounded HATCH source pools lazily", async () => {
@@ -420,7 +441,7 @@ test("reads bounded HATCH source pools lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const hatches = await reader.readHatchSource();
 
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 19);
   assert.equal(hatches.length, 1);
   assert.equal(hatches.loopCount, 2);
   assert.equal(hatches.vertexCount, 8);
@@ -495,7 +516,7 @@ test("reads bounded POINT and SOLID source lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const primitives = await reader.readPrimitiveSource();
 
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 19);
   assert.equal(primitives.points.length, 1);
   assert.equal(primitives.solids.length, 2);
   assert.equal(primitives.faces.length, 5);
@@ -518,7 +539,7 @@ test("reads bounded 3DFACE source lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const primitives = await reader.readPrimitiveSource();
 
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 19);
   assert.equal(primitives.faces.length, 5);
   assert.deepEqual(
     [0, 1, 2, 3, 4].map(
@@ -603,7 +624,7 @@ test("rejects a WIPEOUT source table above its record cap", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 19,
         wipeoutRecordCount: 65_537,
       }),
     ),
@@ -743,7 +764,7 @@ test("rejects a 3DFACE source table above its record cap", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 19,
         faceRecordCount: 131_073,
       }),
     ),
@@ -808,7 +829,7 @@ test("preserves Korean source text, style fonts and MTEXT columns", async () => 
   const styles = await reader.readTextStyles();
   const texts = await reader.readTextEntities();
 
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 19);
   assert.equal(styles[0].fontFile, "txt.shx");
   assert.equal(styles[0].bigFontFile, "hztxt.shx");
   assert.equal(texts.length, 2);
@@ -845,6 +866,47 @@ test("preserves Korean source text, style fonts and MTEXT columns", async () => 
       ),
     ],
     [10, 11],
+  );
+  assert.equal(displayRecord.annotationContexts.length, 2);
+  assert.equal(displayRecord.annotationContexts[0].scale, 50);
+  assert.equal(displayRecord.annotationContexts[0].isDefault, true);
+  assert.deepEqual(
+    [...displayRecord.annotationContexts[0].columnHeights],
+    [10, 11],
+  );
+  assert.equal(displayRecord.annotationContexts[1].scale, 100);
+  assert.equal(displayRecord.annotationContexts[1].flowReversed, true);
+  assert.deepEqual(displayRecord.annotationContexts[1].insertionPoint, [
+    206,
+    402,
+    0,
+  ]);
+  assert.deepEqual(
+    [...displayRecord.annotationContexts[1].columnHeights],
+    [20, 22],
+  );
+});
+
+test("rejects an annotation context owned by non-MTEXT text", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let contextOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.TextAnnotationContexts) {
+      contextOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(contextOffset, undefined);
+  view.setBigUint64(contextOffset, 300n, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(
+    reader.readTextEntities(),
+    /annotation context 0 contains invalid metadata/,
   );
 });
 

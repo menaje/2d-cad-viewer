@@ -1,7 +1,7 @@
 // Canonical Scene Cache reader shared by DwgSceneCacheSource and legacy Webview imports.
 export const CACHE_MAGIC = new Uint8Array([68, 87, 71, 83, 67, 78, 49, 0]);
 export const CACHE_VERSION_MAJOR = 1;
-export const CACHE_VERSION_MINOR = 18;
+export const CACHE_VERSION_MINOR = 19;
 export const HEADER_SIZE = 64;
 export const DIRECTORY_ENTRY_SIZE = 40;
 export const CACHE_HEADER_FLAG_PREVIEW = 1;
@@ -43,6 +43,8 @@ export const VIEWPORT_FROZEN_LAYER_RECORD_SIZE = 8;
 export const VIEWPORT_CLIP_VERTEX_RECORD_SIZE = 16;
 export const IMAGE_ENTITY_RECORD_SIZE = 176;
 export const IMAGE_CLIP_VERTEX_RECORD_SIZE = 16;
+export const TEXT_ANNOTATION_CONTEXT_RECORD_SIZE = 160;
+export const TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8;
 export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_RECORDS = 10_000;
 export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_BYTES = 8 * 1024 * 1024;
 
@@ -91,6 +93,8 @@ export const SectionKind = Object.freeze({
   ViewportClipVertices: 53,
   ImageEntities: 54,
   ImageClipVertices: 55,
+  TextAnnotationContexts: 56,
+  TextAnnotationColumnHeights: 57,
 });
 const CURRENT_SECTION_KINDS = Object.freeze(Object.values(SectionKind));
 
@@ -139,6 +143,14 @@ const FIXED_RECORD_SIZES = new Map([
     VIEWPORT_CLIP_VERTEX_RECORD_SIZE,
   ],
   [SectionKind.ImageClipVertices, IMAGE_CLIP_VERTEX_RECORD_SIZE],
+  [
+    SectionKind.TextAnnotationContexts,
+    TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
+  ],
+  [
+    SectionKind.TextAnnotationColumnHeights,
+    TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+  ],
 ]);
 const MAX_METADATA_SECTION_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_STRING_BYTES = 1024 * 1024;
@@ -170,8 +182,12 @@ const MAX_VIEWPORT_CLIP_VERTICES = 1_048_576;
 const MAX_VIEWPORT_CLIP_VERTICES_PER_BOUNDARY = 4_096;
 const MAX_IMAGE_SOURCE_RECORDS = 65_536;
 const MAX_IMAGE_CLIP_VERTICES = 1_048_576;
+const MAX_TEXT_ANNOTATION_CONTEXTS = 262_144;
+const MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS = 1_048_576;
+const MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT = 64;
 const STRING_TABLE_HEADER_SIZE = 16;
 const STRING_TABLE_FLAG = 1;
+const EMPTY_ARRAY = Object.freeze([]);
 
 export const TextEntityKind = Object.freeze({
   Text: 0,
@@ -297,13 +313,21 @@ function validateStringTableDirectoryEntry(entry, expectedRecordSize) {
 }
 
 export class TextEntityTable {
-  constructor(buffer, stringOffset, recordCount, styles, columnHeights) {
+  constructor(
+    buffer,
+    stringOffset,
+    recordCount,
+    styles,
+    columnHeights,
+    annotationContextsByHandle,
+  ) {
     this.buffer = buffer;
     this.view = new DataView(buffer);
     this.stringOffset = stringOffset;
     this.recordCount = recordCount;
     this.styles = styles;
     this.columnHeights = columnHeights;
+    this.annotationContextsByHandle = annotationContextsByHandle;
     this.decoder = new TextDecoder("utf-8", { fatal: true });
   }
 
@@ -401,6 +425,9 @@ export class TextEntityTable {
       "text display column-height count",
     );
     target.columnHeightPool = this.columnHeights;
+    target.columnHeights = null;
+    target.annotationContexts =
+      this.annotationContextsByHandle.get(target.handle) ?? EMPTY_ARRAY;
     return target;
   }
 
@@ -471,6 +498,10 @@ export class TextEntityTable {
         firstColumnHeight,
         firstColumnHeight + columnHeightCount,
       ),
+      annotationContexts:
+        this.annotationContextsByHandle.get(
+          this.view.getBigUint64(offset, true),
+        ) ?? EMPTY_ARRAY,
     });
   }
 
@@ -1672,7 +1703,7 @@ export class SceneCacheReader {
     }
     for (const kind of CURRENT_SECTION_KINDS) {
       if (!sections.has(kind)) {
-        throw new Error(`Scene Cache v1.18 is missing required section ${kind}`);
+        throw new Error(`Scene Cache v1.19 is missing required section ${kind}`);
       }
     }
 
@@ -1689,12 +1720,41 @@ export class SceneCacheReader {
       const textStyles = sections.get(SectionKind.TextStyles);
       const textEntities = sections.get(SectionKind.TextEntities);
       const columnHeights = sections.get(SectionKind.TextColumnHeights);
-      if (!textStyles || !textEntities || !columnHeights) {
-        throw new Error("Scene Cache v1.18 is missing required text sections");
+      const annotationContexts = sections.get(
+        SectionKind.TextAnnotationContexts,
+      );
+      const annotationColumnHeights = sections.get(
+        SectionKind.TextAnnotationColumnHeights,
+      );
+      if (
+        !textStyles ||
+        !textEntities ||
+        !columnHeights ||
+        !annotationContexts ||
+        !annotationColumnHeights
+      ) {
+        throw new Error("Scene Cache v1.19 is missing required text sections");
       }
       validateStringTableDirectoryEntry(textStyles, TEXT_STYLE_RECORD_SIZE);
       validateStringTableDirectoryEntry(textEntities, TEXT_ENTITY_RECORD_SIZE);
       validateRecordSection(columnHeights, TEXT_COLUMN_HEIGHT_RECORD_SIZE);
+      validateRecordSection(
+        annotationContexts,
+        TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
+      );
+      validateRecordSection(
+        annotationColumnHeights,
+        TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+      );
+      if (
+        annotationContexts.recordCount > MAX_TEXT_ANNOTATION_CONTEXTS ||
+        annotationColumnHeights.recordCount >
+          MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS
+      ) {
+        throw new Error(
+          "Scene Cache text annotation metadata exceeds its limits",
+        );
+      }
     }
     {
       const hatchEntities = sections.get(SectionKind.HatchEntities);
@@ -1711,7 +1771,7 @@ export class SceneCacheReader {
         !hatchGradientColors ||
         !hatchSeedPoints
       ) {
-        throw new Error("Scene Cache v1.18 is missing required HATCH sections");
+        throw new Error("Scene Cache v1.19 is missing required HATCH sections");
       }
       validateStringTableDirectoryEntry(
         hatchEntities,
@@ -1737,7 +1797,7 @@ export class SceneCacheReader {
       );
       if (!hatchPatternLines || !hatchPatternDashes) {
         throw new Error(
-          "Scene Cache v1.18 is missing required HATCH pattern sections",
+          "Scene Cache v1.19 is missing required HATCH pattern sections",
         );
       }
       validateRecordSection(
@@ -1754,7 +1814,7 @@ export class SceneCacheReader {
       const solidEntities = sections.get(SectionKind.SolidEntities);
       if (!pointEntities || !solidEntities) {
         throw new Error(
-          "Scene Cache v1.18 is missing required POINT or SOLID sections",
+          "Scene Cache v1.19 is missing required POINT or SOLID sections",
         );
       }
       validateRecordSection(pointEntities, POINT_ENTITY_RECORD_SIZE);
@@ -1764,7 +1824,7 @@ export class SceneCacheReader {
       const faceEntities = sections.get(SectionKind.FaceEntities);
       if (!faceEntities) {
         throw new Error(
-          "Scene Cache v1.18 is missing the required 3DFACE section",
+          "Scene Cache v1.19 is missing the required 3DFACE section",
         );
       }
       validateRecordSection(faceEntities, FACE_ENTITY_RECORD_SIZE);
@@ -1776,7 +1836,7 @@ export class SceneCacheReader {
       );
       if (!wipeoutEntities || !wipeoutClipVertices) {
         throw new Error(
-          "Scene Cache v1.18 is missing required WIPEOUT sections",
+          "Scene Cache v1.19 is missing required WIPEOUT sections",
         );
       }
       validateRecordSection(wipeoutEntities, WIPEOUT_ENTITY_RECORD_SIZE);
@@ -1790,7 +1850,7 @@ export class SceneCacheReader {
       const drawOrderEntries = sections.get(SectionKind.DrawOrderEntries);
       if (!drawOrderTables || !drawOrderEntries) {
         throw new Error(
-          "Scene Cache v1.18 is missing required draw-order sections",
+          "Scene Cache v1.19 is missing required draw-order sections",
         );
       }
       validateRecordSection(
@@ -1809,7 +1869,7 @@ export class SceneCacheReader {
       );
       if (!insertClips || !insertClipVertices) {
         throw new Error(
-          "Scene Cache v1.18 is missing required INSERT XCLIP sections",
+          "Scene Cache v1.19 is missing required INSERT XCLIP sections",
         );
       }
       validateRecordSection(insertClips, INSERT_CLIP_RECORD_SIZE);
@@ -1823,7 +1883,7 @@ export class SceneCacheReader {
       const linetypeDashes = sections.get(SectionKind.LinetypeDashes);
       if (!linetypes || !linetypeDashes) {
         throw new Error(
-          "Scene Cache v1.18 is missing required linetype sections",
+          "Scene Cache v1.19 is missing required linetype sections",
         );
       }
       validateStringTableDirectoryEntry(linetypes, LINETYPE_RECORD_SIZE);
@@ -1849,7 +1909,7 @@ export class SceneCacheReader {
       );
       if (!layouts || !viewports || !frozenLayers || !clipVertices) {
         throw new Error(
-          "Scene Cache v1.18 is missing required layout sections",
+          "Scene Cache v1.19 is missing required layout sections",
         );
       }
       validateStringTableDirectoryEntry(layouts, LAYOUT_RECORD_SIZE);
@@ -1878,7 +1938,7 @@ export class SceneCacheReader {
       );
       if (!imageEntities || !imageClipVertices) {
         throw new Error(
-          "Scene Cache v1.18 is missing required IMAGE sections",
+          "Scene Cache v1.19 is missing required IMAGE sections",
         );
       }
       validateStringTableDirectoryEntry(
@@ -2349,7 +2409,7 @@ export class SceneCacheReader {
                 ),
                 clipVertexCount: view.getUint32(offset + 256, true),
                 clipFlags: view.getUint32(offset + 260, true),
-                reserved: view.getBigUint64(offset + 264, true),
+                annotationScale: view.getFloat64(offset + 264, true),
               }),
           ),
           this.readWholeMetadataSection(frozenSection),
@@ -2404,7 +2464,6 @@ export class SceneCacheReader {
             viewport.clipBoundaryHandle === 0n) ||
           viewport.flags & ~0xf ||
           viewport.clipFlags !== 0 ||
-          viewport.reserved !== 0n ||
           ![
             ...viewport.center,
             viewport.width,
@@ -2419,10 +2478,12 @@ export class SceneCacheReader {
             viewport.backClip,
             viewport.brightness,
             viewport.contrast,
+            viewport.annotationScale,
           ].every(Number.isFinite) ||
           viewport.width < 0 ||
           viewport.height < 0 ||
-          viewport.viewHeight < 0
+          viewport.viewHeight < 0 ||
+          viewport.annotationScale < 0
         ) {
           throw new Error(
             `viewport ${index} contains invalid metadata`,
@@ -2582,11 +2643,25 @@ export class SceneCacheReader {
   async readTextEntities() {
     return this.memoize("text-entities", async () => {
       const section = this.getSection(SectionKind.TextEntities);
+      const annotationContextSection = this.getSection(
+        SectionKind.TextAnnotationContexts,
+      );
+      const annotationColumnHeightSection = this.getSection(
+        SectionKind.TextAnnotationColumnHeights,
+      );
       validateStringTableDirectoryEntry(section, TEXT_ENTITY_RECORD_SIZE);
-      const [styles, columnHeights, buffer] = await Promise.all([
+      const [
+        styles,
+        columnHeights,
+        buffer,
+        annotationContextBuffer,
+        annotationColumnHeightBuffer,
+      ] = await Promise.all([
         this.readTextStyles(),
         this.readTextColumnHeights(),
         this.readWholeMetadataSection(section),
+        this.readWholeMetadataSection(annotationContextSection),
+        this.readWholeMetadataSection(annotationColumnHeightSection),
       ]);
       const view = new DataView(buffer);
       const recordCount = view.getUint32(0, true);
@@ -2611,8 +2686,10 @@ export class SceneCacheReader {
       }
 
       const decoder = new TextDecoder("utf-8", { fatal: true });
+      const textKindsByHandle = new Map();
       for (let index = 0; index < section.recordCount; index += 1) {
         const offset = STRING_TABLE_HEADER_SIZE + index * section.recordSize;
+        const handle = view.getBigUint64(offset, true);
         const kind = view.getUint16(offset + 32, true);
         const styleIndex = view.getUint32(offset + 36, true);
         if (kind > TextEntityKind.Attribute) {
@@ -2621,6 +2698,10 @@ export class SceneCacheReader {
         if (styleIndex !== 0xffffffff && styleIndex >= styles.length) {
           throw new Error(`text entity ${index} has an invalid style reference`);
         }
+        if (handle === 0n || textKindsByHandle.has(handle)) {
+          throw new Error(`text entity ${index} has an invalid handle`);
+        }
+        textKindsByHandle.set(handle, kind);
         for (const referenceOffset of [40, 48, 56]) {
           const relativeOffset = view.getUint32(offset + referenceOffset, true);
           const byteLength = view.getUint32(offset + referenceOffset + 4, true);
@@ -2658,12 +2739,157 @@ export class SceneCacheReader {
           throw new Error(`text entity ${index} has an invalid column-height range`);
         }
       }
+
+      const annotationHeightView = new DataView(
+        annotationColumnHeightBuffer,
+      );
+      const annotationColumnHeights = new Float64Array(
+        annotationColumnHeightSection.recordCount,
+      );
+      for (
+        let index = 0;
+        index < annotationColumnHeights.length;
+        index += 1
+      ) {
+        const value = annotationHeightView.getFloat64(
+          index * TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+          true,
+        );
+        if (!Number.isFinite(value)) {
+          throw new Error(
+            `text annotation column height ${index} is invalid`,
+          );
+        }
+        annotationColumnHeights[index] = value;
+      }
+
+      const annotationContextsByHandle = new Map();
+      const annotationView = new DataView(annotationContextBuffer);
+      let expectedFirstColumnHeight = 0;
+      for (
+        let index = 0;
+        index < annotationContextSection.recordCount;
+        index += 1
+      ) {
+        const offset = index * TEXT_ANNOTATION_CONTEXT_RECORD_SIZE;
+        const handle = annotationView.getBigUint64(offset, true);
+        const scale = annotationView.getFloat64(offset + 8, true);
+        const flags = annotationView.getUint32(offset + 16, true);
+        const attachment = annotationView.getInt32(offset + 20, true);
+        const insertionPoint = readVec3F64(annotationView, offset + 24);
+        const xAxisDirection = readVec3F64(annotationView, offset + 48);
+        const rectangleHeight = annotationView.getFloat64(
+          offset + 72,
+          true,
+        );
+        const rectangleWidth = annotationView.getFloat64(
+          offset + 80,
+          true,
+        );
+        const extentsWidth = annotationView.getFloat64(offset + 88, true);
+        const extentsHeight = annotationView.getFloat64(offset + 96, true);
+        const columnType = annotationView.getInt32(offset + 104, true);
+        const columnWidth = annotationView.getFloat64(offset + 112, true);
+        const columnGutter = annotationView.getFloat64(offset + 120, true);
+        const firstColumnHeight = readSafeU64(
+          annotationView,
+          offset + 128,
+          `text annotation context ${index} column-height offset`,
+        );
+        const columnHeightCount = readSafeU64(
+          annotationView,
+          offset + 136,
+          `text annotation context ${index} column-height count`,
+        );
+        const columnHeightEnd = checkedAdd(
+          firstColumnHeight,
+          columnHeightCount,
+          `text annotation context ${index} column-height range`,
+        );
+        if (
+          textKindsByHandle.get(handle) !== TextEntityKind.MText ||
+          !Number.isFinite(scale) ||
+          scale <= 0 ||
+          flags & ~0x7 ||
+          attachment < 1 ||
+          attachment > 9 ||
+          !insertionPoint.every(Number.isFinite) ||
+          !xAxisDirection.every(Number.isFinite) ||
+          Math.hypot(...xAxisDirection) <= Number.EPSILON ||
+          ![
+            rectangleHeight,
+            rectangleWidth,
+            extentsWidth,
+            extentsHeight,
+            columnWidth,
+            columnGutter,
+          ].every((value) => Number.isFinite(value) && value >= 0) ||
+          columnType < 0 ||
+          columnType > 2 ||
+          annotationView.getUint32(offset + 108, true) !== 0 ||
+          firstColumnHeight !== expectedFirstColumnHeight ||
+          columnHeightCount >
+            MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT ||
+          columnHeightEnd > annotationColumnHeights.length ||
+          annotationView.getBigUint64(offset + 144, true) !== 0n ||
+          annotationView.getBigUint64(offset + 152, true) !== 0n
+        ) {
+          throw new Error(
+            `text annotation context ${index} contains invalid metadata`,
+          );
+        }
+        const context = Object.freeze({
+          scale,
+          isDefault: Boolean(flags & 1),
+          autoHeight: Boolean(flags & 2),
+          flowReversed: Boolean(flags & 4),
+          attachment,
+          insertionPoint: Object.freeze(insertionPoint),
+          xAxisDirection: Object.freeze(xAxisDirection),
+          rectangleHeight,
+          rectangleWidth,
+          extentsWidth,
+          extentsHeight,
+          columnType,
+          columnWidth,
+          columnGutter,
+          columnHeights: annotationColumnHeights.subarray(
+            firstColumnHeight,
+            columnHeightEnd,
+          ),
+        });
+        const contexts = annotationContextsByHandle.get(handle);
+        if (contexts) {
+          contexts.push(context);
+        } else {
+          annotationContextsByHandle.set(handle, [context]);
+        }
+        expectedFirstColumnHeight = columnHeightEnd;
+      }
+      if (expectedFirstColumnHeight !== annotationColumnHeights.length) {
+        throw new Error(
+          "text annotation column-height pool contains unreferenced records",
+        );
+      }
+      for (const [handle, contexts] of annotationContextsByHandle) {
+        const defaultCount = contexts.reduce(
+          (count, context) => count + Number(context.isDefault),
+          0,
+        );
+        if (defaultCount > 1) {
+          throw new Error(
+            `text entity ${handle} has multiple default annotation contexts`,
+          );
+        }
+        annotationContextsByHandle.set(handle, Object.freeze(contexts));
+      }
       return new TextEntityTable(
         buffer,
         stringOffset,
         section.recordCount,
         styles,
         columnHeights,
+        annotationContextsByHandle,
       );
     });
   }

@@ -12,7 +12,7 @@ import {
 import { MemoryRangeSource } from "../src/range-source.mjs";
 import { SceneCacheReader } from "../src/scene-cache.mjs";
 import {
-  annotativeTextMatrixForInstance,
+  annotativeTextRecordForInstance,
   cadMTextFlowsVertically,
   cadTextAlignmentOffsets,
   cadTextAlignmentWidth,
@@ -294,6 +294,25 @@ test("finds a text occurrence by handle for workspace search navigation", async 
 
   overlay.setRenderDeltaSuppressions([]);
   assert.notEqual(overlay.findTextOccurrence("12C"), null);
+});
+
+test("uses the viewport MTEXT annotation context for navigation geometry", async () => {
+  const scene = await textScene();
+  const overlay = new CanvasTextOverlay(fakeCanvas(), {
+    textEntities: scene.textEntities,
+    blocks: scene.metadata.blocks,
+    layers: scene.metadata.layers,
+    instanceGraph: Object.freeze({
+      ...scene.instanceGraph,
+      annotationScalesByVisibilityRow: new Float64Array([100]),
+    }),
+    glyphCache: { getGlyph: () => undefined },
+  });
+
+  const occurrence = overlay.findTextOccurrence("12D");
+
+  assert.deepEqual(occurrence.point, [206, 402, 0]);
+  assert.equal(occurrence.worldHeight, 1);
 });
 
 test("replaces and rolls back a native Canvas text record", async () => {
@@ -1383,44 +1402,82 @@ test("maps TEXT insertion points from their stored OCS plane", () => {
   assert.deepEqual(transformPoint(matrix, [0, 0, 0]), [4, 2, 3]);
 });
 
-test("keeps annotative text at paper height across layout viewport scales", () => {
-  const matrix = cadTextEntityMatrix(
-    {
-      kind: 0,
-      insertionPoint: [10, 20, 0],
-      normal: [0, 0, 1],
-      height: 2,
-      widthFactor: 1,
-      rotation: 0,
-      obliqueAngle: 0,
-      generationFlags: 0,
-    },
-    { flags: 0, widthFactor: 1 },
-  );
-  const instanceGraph = {
-    paperToModelScalesByVisibilityRow: new Float64Array([1, 100]),
+test("selects exact MTEXT annotation representations without blanket scaling", () => {
+  const base = {
+    kind: 1,
+    flags: 1 << 2,
+    insertionPoint: [10, 20, 0],
+    xAxisDirection: [1, 0, 0],
+    height: 100,
+    columnCount: 2,
+    columnFlags: 1,
+    annotationContexts: [
+      {
+        scale: 50,
+        isDefault: true,
+        autoHeight: true,
+        flowReversed: false,
+        attachment: 1,
+        insertionPoint: [10, 20, 0],
+        xAxisDirection: [1, 0, 0],
+        rectangleHeight: 500,
+        rectangleWidth: 1_000,
+        extentsWidth: 900,
+        extentsHeight: 450,
+        columnType: 2,
+        columnWidth: 450,
+        columnGutter: 100,
+        columnHeights: new Float64Array([500, 550]),
+      },
+      {
+        scale: 100,
+        isDefault: false,
+        autoHeight: false,
+        flowReversed: true,
+        attachment: 3,
+        insertionPoint: [30, 40, 0],
+        xAxisDirection: [0, 1, 0],
+        rectangleHeight: 1_000,
+        rectangleWidth: 2_000,
+        extentsWidth: 1_800,
+        extentsHeight: 900,
+        columnType: 2,
+        columnWidth: 900,
+        columnGutter: 200,
+        columnHeights: new Float64Array([1_000, 1_100]),
+      },
+    ],
   };
   const instances = { visibilityRows: new Uint32Array([1]) };
-  const scaled = annotativeTextMatrixForInstance(
-    matrix,
-    { flags: 1 << 2 },
-    instanceGraph,
+  const defaultDisplay = annotativeTextRecordForInstance(
+    base,
+    { annotationScalesByVisibilityRow: new Float64Array([0, 50]) },
+    instances,
+    0,
+  );
+  const alternateDisplay = annotativeTextRecordForInstance(
+    base,
+    { annotationScalesByVisibilityRow: new Float64Array([0, 100]) },
+    instances,
+    0,
+  );
+  const unmatchedDisplay = annotativeTextRecordForInstance(
+    base,
+    { annotationScalesByVisibilityRow: new Float64Array([0, 25]) },
     instances,
     0,
   );
 
-  assert.deepEqual(transformPoint(scaled, [0, 0, 0]), [10, 20, 0]);
-  assert.equal(Math.hypot(scaled[4], scaled[5], scaled[6]), 200);
-  assert.strictEqual(
-    annotativeTextMatrixForInstance(
-      matrix,
-      { flags: 0 },
-      instanceGraph,
-      instances,
-      0,
-    ),
-    matrix,
-  );
+  assert.strictEqual(defaultDisplay, base);
+  assert.strictEqual(unmatchedDisplay, base);
+  assert.equal(alternateDisplay.height, 200);
+  assert.deepEqual(alternateDisplay.insertionPoint, [30, 40, 0]);
+  assert.deepEqual(alternateDisplay.xAxisDirection, [0, 1, 0]);
+  assert.equal(alternateDisplay.attachment, 3);
+  assert.equal(alternateDisplay.rectangleWidth, 2_000);
+  assert.equal(alternateDisplay.columnFlags & 1, 0);
+  assert.equal(alternateDisplay.columnFlags & 2, 2);
+  assert.deepEqual([...alternateDisplay.columnHeights], [1_000, 1_100]);
 });
 
 test("uses the alignment point for justified TEXT and attribute entities", () => {

@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MPL-2.0
  *
- * A bounded-memory Scene Cache v1.18 writer for GNU LibreDWG. Geometry and
+ * A bounded-memory Scene Cache v1.19 writer for GNU LibreDWG. Geometry and
  * source text are traversed repeatedly and written directly to the
  * destination; the writer never creates a JSON or whole-drawing in-memory
  * representation. Large detail passes use private temporary files for an
@@ -131,6 +131,9 @@ _Static_assert (
 #define MAX_VIEWPORT_CLIP_VERTICES 1048576u
 #define MAX_VIEWPORT_CLIP_VERTICES_PER_BOUNDARY 4096u
 #define VIEWPORT_CLIP_CURVE_SEGMENTS 64u
+#define MAX_TEXT_ANNOTATION_CONTEXTS 262144u
+#define MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS 1048576u
+#define MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT 64u
 #define MAX_MULTILEADER_NODES 65536u
 #define MAX_MULTILEADER_LINES_PER_NODE 65536u
 #define MAX_MULTILEADER_POINTS_PER_LINE 65536u
@@ -194,7 +197,9 @@ enum
   SECTION_VIEWPORT_FROZEN_LAYERS = 52,
   SECTION_VIEWPORT_CLIP_VERTICES = 53,
   SECTION_IMAGE_ENTITIES = 54,
-  SECTION_IMAGE_CLIP_VERTICES = 55
+  SECTION_IMAGE_CLIP_VERTICES = 55,
+  SECTION_TEXT_ANNOTATION_CONTEXTS = 56,
+  SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS = 57
 };
 
 enum
@@ -239,7 +244,9 @@ enum
   VIEWPORT_FROZEN_LAYER_RECORD_SIZE = 8,
   VIEWPORT_CLIP_VERTEX_RECORD_SIZE = 16,
   IMAGE_ENTITY_RECORD_SIZE = 176,
-  IMAGE_CLIP_VERTEX_RECORD_SIZE = 16
+  IMAGE_CLIP_VERTEX_RECORD_SIZE = 16,
+  TEXT_ANNOTATION_CONTEXT_RECORD_SIZE = 160,
+  TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8
 };
 
 typedef struct
@@ -663,7 +670,9 @@ static const uint32_t SECTION_KINDS[LIBREDWG_SCENE_SECTION_COUNT]
         SECTION_VIEWPORT_FROZEN_LAYERS,
         SECTION_VIEWPORT_CLIP_VERTICES,
         SECTION_IMAGE_ENTITIES,
-        SECTION_IMAGE_CLIP_VERTICES };
+        SECTION_IMAGE_CLIP_VERTICES,
+        SECTION_TEXT_ANNOTATION_CONTEXTS,
+        SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS };
 
 static const uint32_t SECTION_RECORD_SIZES[LIBREDWG_SCENE_SECTION_COUNT]
     = { DRAWING_RECORD_SIZE,
@@ -709,7 +718,9 @@ static const uint32_t SECTION_RECORD_SIZES[LIBREDWG_SCENE_SECTION_COUNT]
         VIEWPORT_FROZEN_LAYER_RECORD_SIZE,
         VIEWPORT_CLIP_VERTEX_RECORD_SIZE,
         IMAGE_ENTITY_RECORD_SIZE,
-        IMAGE_CLIP_VERTEX_RECORD_SIZE };
+        IMAGE_CLIP_VERTEX_RECORD_SIZE,
+        TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
+        TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE };
 
 static const char *const SECTION_NAMES[LIBREDWG_SCENE_SECTION_COUNT]
     = { "drawing",
@@ -755,7 +766,9 @@ static const char *const SECTION_NAMES[LIBREDWG_SCENE_SECTION_COUNT]
         "viewport_frozen_layers",
         "viewport_clip_vertices",
         "image_entities",
-        "image_clip_vertices" };
+        "image_clip_vertices",
+        "text_annotation_contexts",
+        "text_annotation_column_heights" };
 
 static void
 set_error (CacheWriter *writer, const char *message)
@@ -1115,6 +1128,196 @@ copy_versioned_text (BITCODE_RS codepage, Dwg_Version_Type version,
   copy = copy_valid_utf8 (converted);
   free (converted);
   return copy;
+}
+
+static Dwg_Object *
+dictionary_item_named (const Dwg_Data *dwg, Dwg_Object *object,
+                       const char *name)
+{
+  Dwg_Object_DICTIONARY *dictionary;
+  uint32_t index;
+  if (!dwg || !object || !name
+      || object->fixedtype != DWG_TYPE_DICTIONARY
+      || !object->tio.object
+      || !(dictionary = object->tio.object->tio.DICTIONARY)
+      || dictionary->numitems <= 0 || !dictionary->texts
+      || !dictionary->itemhandles)
+    return NULL;
+  for (index = 0; index < (uint32_t)dictionary->numitems; index++)
+    {
+      char *key = copy_versioned_text (
+          dwg->header.codepage, dwg->header.version,
+          dictionary->texts[index]);
+      int matches = key && strcmp (key, name) == 0;
+      free (key);
+      if (matches)
+        return reference_object (dwg, dictionary->itemhandles[index]);
+    }
+  return NULL;
+}
+
+static double
+annotation_scale_factor_for_object (const Dwg_Object *object)
+{
+  const Dwg_Object_SCALE *scale;
+  if (!object || object->fixedtype != DWG_TYPE_SCALE
+      || !object->tio.object
+      || !(scale = object->tio.object->tio.SCALE)
+      || !isfinite (scale->paper_units)
+      || !isfinite (scale->drawing_units)
+      || scale->paper_units <= DBL_EPSILON
+      || scale->drawing_units <= DBL_EPSILON)
+    return 0.0;
+  return scale->drawing_units / scale->paper_units;
+}
+
+static double
+annotation_scale_factor (const Dwg_Data *dwg,
+                         Dwg_Object_Ref *reference)
+{
+  return annotation_scale_factor_for_object (
+      reference_object (dwg, reference));
+}
+
+static double
+viewport_annotation_scale (const Dwg_Data *dwg,
+                           const Dwg_Object *object)
+{
+  Dwg_Object *xdic;
+  Dwg_Object *xrecord_object;
+  Dwg_Object_XRECORD *xrecord;
+  Dwg_Resbuf *item;
+  if (!dwg || !object || !object->tio.entity
+      || !object->tio.entity->xdicobjhandle)
+    return 0.0;
+  xdic = reference_object (dwg, object->tio.entity->xdicobjhandle);
+  xrecord_object = dictionary_item_named (
+      dwg, xdic, "ASDK_XREC_ANNOTATION_SCALE_INFO");
+  if (!xrecord_object || xrecord_object->fixedtype != DWG_TYPE_XRECORD
+      || !xrecord_object->tio.object
+      || !(xrecord = xrecord_object->tio.object->tio.XRECORD))
+    return 0.0;
+  for (item = xrecord->xdata; item; item = item->nextrb)
+    if (item->type == 340 && item->value.absref)
+      {
+        double scale = annotation_scale_factor_for_object (
+            dwg_resolve_handle_silent (dwg, item->value.absref));
+        if (scale > 0.0)
+          return scale;
+      }
+  return 0.0;
+}
+
+static Dwg_Object_DICTIONARY *
+text_annotation_context_dictionary (const Dwg_Data *dwg,
+                                    const Dwg_Object *object)
+{
+  Dwg_Object *xdic;
+  Dwg_Object *manager;
+  Dwg_Object *scales;
+  if (!dwg || !object || !object->tio.entity
+      || !object->tio.entity->xdicobjhandle)
+    return NULL;
+  xdic = reference_object (dwg, object->tio.entity->xdicobjhandle);
+  manager = dictionary_item_named (
+      dwg, xdic, "AcDbContextDataManager");
+  scales = dictionary_item_named (
+      dwg, manager, "ACDB_ANNOTATIONSCALES");
+  if (!scales || scales->fixedtype != DWG_TYPE_DICTIONARY
+      || !scales->tio.object)
+    return NULL;
+  return scales->tio.object->tio.DICTIONARY;
+}
+
+static int
+valid_mtext_annotation_context (
+    const Dwg_Data *dwg, Dwg_Object *object,
+    const Dwg_Object_MTEXTOBJECTCONTEXTDATA **result,
+    double *scale_factor)
+{
+  const Dwg_Object_MTEXTOBJECTCONTEXTDATA *context;
+  double scale;
+  uint32_t index;
+  if (!object
+      || object->fixedtype != DWG_TYPE_MTEXTOBJECTCONTEXTDATA
+      || !object->tio.object
+      || !(context = object->tio.object->tio.MTEXTOBJECTCONTEXTDATA))
+    return 0;
+  scale = annotation_scale_factor (dwg, context->scale);
+  if (!isfinite (scale) || scale <= DBL_EPSILON
+      || context->class_version < 3 || context->class_version > 4
+      || context->attachment < 1 || context->attachment > 9
+      || !isfinite (context->ins_pt.x)
+      || !isfinite (context->ins_pt.y)
+      || !isfinite (context->ins_pt.z)
+      || !isfinite (context->x_axis_dir.x)
+      || !isfinite (context->x_axis_dir.y)
+      || !isfinite (context->x_axis_dir.z)
+      || hypot (hypot (context->x_axis_dir.x, context->x_axis_dir.y),
+                context->x_axis_dir.z)
+             <= DBL_EPSILON
+      || !isfinite (context->rect_height)
+      || !isfinite (context->rect_width)
+      || !isfinite (context->extents_width)
+      || !isfinite (context->extents_height)
+      || context->rect_height < 0.0 || context->rect_width < 0.0
+      || context->extents_width < 0.0
+      || context->extents_height < 0.0
+      || context->column_type > 2
+      || !isfinite (context->column_width)
+      || !isfinite (context->gutter)
+      || context->column_width < 0.0 || context->gutter < 0.0
+      || context->num_column_heights
+             > MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT
+      || (context->num_column_heights > 0
+          && !context->column_heights))
+    return 0;
+  for (index = 0; index < (uint32_t)context->num_column_heights;
+       index++)
+    if (!isfinite (context->column_heights[index]))
+      return 0;
+  if (result)
+    *result = context;
+  if (scale_factor)
+    *scale_factor = scale;
+  return 1;
+}
+
+static uint32_t
+mtext_annotation_context_count (const Dwg_Data *dwg,
+                                const Dwg_Object *object,
+                                uint64_t *column_height_count)
+{
+  Dwg_Object_DICTIONARY *dictionary
+      = text_annotation_context_dictionary (dwg, object);
+  uint32_t count = 0;
+  uint32_t index;
+  if (column_height_count)
+    *column_height_count = 0;
+  if (!dictionary || dictionary->numitems <= 0
+      || !dictionary->itemhandles)
+    return 0;
+  for (index = 0; index < (uint32_t)dictionary->numitems; index++)
+    {
+      const Dwg_Object_MTEXTOBJECTCONTEXTDATA *context;
+      if (!valid_mtext_annotation_context (
+              dwg,
+              reference_object (dwg, dictionary->itemhandles[index]),
+              &context, NULL))
+        continue;
+      if (count == MAX_TEXT_ANNOTATION_CONTEXTS)
+        return count;
+      count++;
+      if (column_height_count)
+        {
+          if (*column_height_count
+              > MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS
+                    - context->num_column_heights)
+            return count;
+          *column_height_count += context->num_column_heights;
+        }
+    }
+  return count;
 }
 
 static char *
@@ -2674,7 +2877,7 @@ read_text_source (const Dwg_Data *dwg, const Dwg_Object *object,
         source->rectangle_width = text->rect_width;
         source->rectangle_height = text->rect_height;
         source->flags |= TEXT_FLAG_HAS_RECTANGLE_HEIGHT;
-        if (!text->is_not_annotative)
+        if (mtext_annotation_context_count (dwg, object, NULL) > 0)
           source->flags |= TEXT_FLAG_ANNOTATIVE;
         source->extents_width = text->extents_width;
         source->extents_height = text->extents_height;
@@ -3697,7 +3900,8 @@ write_viewport_section (CacheWriter *writer, const Dwg_Data *dwg,
               || !write_u64 (writer, first_clip_vertex)
               || !write_u32 (writer, clip_vertex_count)
               || !write_u32 (writer, 0)
-              || !write_u64 (writer, 0))
+              || !write_f64 (
+                  writer, viewport_annotation_scale (dwg, object)))
             goto done;
           first_frozen_layer += frozen_count;
           first_clip_vertex += clip_vertex_count;
@@ -4013,6 +4217,143 @@ write_text_column_height_section (CacheWriter *writer, const Dwg_Data *dwg,
   return finish_fixed_section (
       writer, entry, SECTION_TEXT_COLUMN_HEIGHTS,
       TEXT_COLUMN_HEIGHT_RECORD_SIZE, "text_column_heights", offset, count);
+}
+
+static int
+write_text_annotation_context_section (CacheWriter *writer,
+                                       const Dwg_Data *dwg,
+                                       SectionEntry *entry)
+{
+  uint64_t offset;
+  uint64_t context_count = 0;
+  uint64_t first_column_height = 0;
+  size_t object_index;
+  if (!align_writer (writer, &offset))
+    return 0;
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      Dwg_Object *text_object = &dwg->object[object_index];
+      Dwg_Object_DICTIONARY *dictionary;
+      uint32_t context_index;
+      if (text_object->fixedtype != DWG_TYPE_MTEXT)
+        continue;
+      dictionary = text_annotation_context_dictionary (dwg, text_object);
+      if (!dictionary || dictionary->numitems <= 0
+          || !dictionary->itemhandles)
+        continue;
+      for (context_index = 0;
+           context_index < (uint32_t)dictionary->numitems;
+           context_index++)
+        {
+          const Dwg_Object_MTEXTOBJECTCONTEXTDATA *context;
+          double scale;
+          uint32_t flags;
+          if (!valid_mtext_annotation_context (
+                  dwg,
+                  reference_object (
+                      dwg, dictionary->itemhandles[context_index]),
+                  &context, &scale))
+            continue;
+          if (context_count >= MAX_TEXT_ANNOTATION_CONTEXTS
+              || first_column_height
+                     > MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS
+                           - context->num_column_heights)
+            {
+              set_error (
+                  writer, "text annotation context pool exceeds its limits");
+              return 0;
+            }
+          flags = (context->is_default ? 1u : 0u)
+                  | (context->auto_height ? 2u : 0u)
+                  | (context->flow_reversed ? 4u : 0u);
+          if (!write_u64 (writer, (uint64_t)text_object->handle.value)
+              || !write_f64 (writer, scale)
+              || !write_u32 (writer, flags)
+              || !write_i32 (writer, (int32_t)context->attachment)
+              || !write_f64 (writer, context->ins_pt.x)
+              || !write_f64 (writer, context->ins_pt.y)
+              || !write_f64 (writer, context->ins_pt.z)
+              || !write_f64 (writer, context->x_axis_dir.x)
+              || !write_f64 (writer, context->x_axis_dir.y)
+              || !write_f64 (writer, context->x_axis_dir.z)
+              || !write_f64 (writer, context->rect_height)
+              || !write_f64 (writer, context->rect_width)
+              || !write_f64 (writer, context->extents_width)
+              || !write_f64 (writer, context->extents_height)
+              || !write_i32 (writer, (int32_t)context->column_type)
+              || !write_u32 (writer, 0)
+              || !write_f64 (writer, context->column_width)
+              || !write_f64 (writer, context->gutter)
+              || !write_u64 (writer, first_column_height)
+              || !write_u64 (
+                  writer, (uint64_t)context->num_column_heights)
+              || !write_u64 (writer, 0) || !write_u64 (writer, 0))
+            return 0;
+          first_column_height += context->num_column_heights;
+          context_count++;
+        }
+    }
+  return finish_fixed_section (
+      writer, entry, SECTION_TEXT_ANNOTATION_CONTEXTS,
+      TEXT_ANNOTATION_CONTEXT_RECORD_SIZE, "text_annotation_contexts",
+      offset, context_count);
+}
+
+static int
+write_text_annotation_column_height_section (
+    CacheWriter *writer, const Dwg_Data *dwg, SectionEntry *entry)
+{
+  uint64_t offset;
+  uint64_t count = 0;
+  size_t object_index;
+  if (!align_writer (writer, &offset))
+    return 0;
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      Dwg_Object *text_object = &dwg->object[object_index];
+      Dwg_Object_DICTIONARY *dictionary;
+      uint32_t context_index;
+      if (text_object->fixedtype != DWG_TYPE_MTEXT)
+        continue;
+      dictionary = text_annotation_context_dictionary (dwg, text_object);
+      if (!dictionary || dictionary->numitems <= 0
+          || !dictionary->itemhandles)
+        continue;
+      for (context_index = 0;
+           context_index < (uint32_t)dictionary->numitems;
+           context_index++)
+        {
+          const Dwg_Object_MTEXTOBJECTCONTEXTDATA *context;
+          uint32_t column_index;
+          if (!valid_mtext_annotation_context (
+                  dwg,
+                  reference_object (
+                      dwg, dictionary->itemhandles[context_index]),
+                  &context, NULL))
+            continue;
+          if (count
+              > MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS
+                    - context->num_column_heights)
+            {
+              set_error (
+                  writer,
+                  "text annotation column-height pool exceeds its limits");
+              return 0;
+            }
+          for (column_index = 0;
+               column_index < (uint32_t)context->num_column_heights;
+               column_index++)
+            if (!write_f64 (writer, context->column_heights[column_index]))
+              return 0;
+          count += context->num_column_heights;
+        }
+    }
+  return finish_fixed_section (
+      writer, entry, SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS,
+      TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+      "text_annotation_column_heights", offset, count);
 }
 
 static int
@@ -11159,7 +11500,9 @@ write_scene_preview (
           &writer, dwg, tables, &sections[40])
       || !write_empty_fixed_section (&writer, &sections[41], 41)
       || !write_empty_string_section (&writer, &sections[42], 42)
-      || !write_empty_fixed_section (&writer, &sections[43], 43))
+      || !write_empty_fixed_section (&writer, &sections[43], 43)
+      || !write_empty_fixed_section (&writer, &sections[44], 44)
+      || !write_empty_fixed_section (&writer, &sections[45], 45))
     goto done;
   if (!position (&writer, &file_size)
       || !write_header (
@@ -11403,6 +11746,10 @@ libredwg_write_scene_cache (
           &writer, dwg, &tables, &sections[42])
       || !write_image_clip_vertex_section (
           &writer, dwg, &sections[43])
+      || !write_text_annotation_context_section (
+          &writer, dwg, &sections[44])
+      || !write_text_annotation_column_height_section (
+          &writer, dwg, &sections[45])
       || !position (&writer, &file_size)
       || !write_header (
           &writer, file_size, source_size, source_version,

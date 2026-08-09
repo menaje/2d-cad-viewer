@@ -470,6 +470,7 @@ export function buildInstanceGraph(
     layerVisibilityRows = null,
     paperToModelScalesByVisibilityRow = null,
     linetypeScalesByVisibilityRow = null,
+    annotationScalesByVisibilityRow = null,
   } = {},
 ) {
   const blockIndexByHandle = new Map(
@@ -532,6 +533,20 @@ export function buildInstanceGraph(
   ) {
     throw new TypeError(
       "viewport paper-to-model scales must match the layer visibility rows",
+    );
+  }
+  const viewportAnnotationScales =
+    annotationScalesByVisibilityRow === null
+      ? new Float64Array(visibilityRows.length)
+      : Float64Array.from(annotationScalesByVisibilityRow);
+  if (
+    viewportAnnotationScales.length !== visibilityRows.length ||
+    !viewportAnnotationScales.every(
+      (scale) => Number.isFinite(scale) && scale >= 0,
+    )
+  ) {
+    throw new TypeError(
+      "viewport annotation scales must match the layer visibility rows",
     );
   }
   const diagnostics = {
@@ -997,6 +1012,7 @@ export function buildInstanceGraph(
     layerVisibilityRows: visibilityRows,
     paperToModelScalesByVisibilityRow: viewportPaperToModelScales,
     linetypeScalesByVisibilityRow: viewportLinetypeScales,
+    annotationScalesByVisibilityRow: viewportAnnotationScales,
     instanceCount,
     diagnostics: Object.freeze(diagnostics),
     layerZeroIndex:

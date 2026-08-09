@@ -64,6 +64,7 @@ test("composes child model and block instances with the parent XREF insert", () 
     ],
     paperToModelScalesByVisibilityRow: new Float64Array([1, 5]),
     linetypeScalesByVisibilityRow: new Float64Array([1, 5]),
+    annotationScalesByVisibilityRow: new Float64Array([0, 50]),
   };
   const child = {
     instancesByBlock: new Map([
@@ -97,6 +98,10 @@ test("composes child model and block instances with the parent XREF insert", () 
   assert.deepEqual(
     [...composed.instanceGraph.linetypeScalesByVisibilityRow],
     [1, 5],
+  );
+  assert.deepEqual(
+    [...composed.instanceGraph.annotationScalesByVisibilityRow],
+    [0, 50],
   );
 });
 

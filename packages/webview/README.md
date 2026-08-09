@@ -24,7 +24,7 @@ const runtime = await openViewerRuntime(source, {
 
 ## DWG Viewer product shell
 
-Scene Cache v1.18 range reader, WebGL2 line/fill/point renderer, bounded CAD
+Scene Cache v1.19 range reader, WebGL2 line/fill/point renderer, bounded CAD
 text overlay and lazy raster IMAGE overlay for the VS Code Webview.
 
 Standalone Browser의 `File`과 VS Code의 cache channel은 모두
@@ -144,7 +144,7 @@ built-in languages, template keys, or runtime shell keys diverge.
   under its parent INSERT and preserves shared geometry across repeated inserts.
 - Reads current INSERT/XREF spatial clips, propagates nested clip chains through
   shared instances and applies one boundary to WebGL geometry and Canvas text.
-- Reads the v1.18 linetype, saved-view, layout, VIEWPORT and raster IMAGE
+- Reads the v1.19 linetype, saved-view, layout, VIEWPORT and raster IMAGE
   sections and
   allows every paper-space tab to be selected without duplicating model data.
 - Opens each tab at its saved CAD view while the `전체 보기` action fits the
@@ -262,10 +262,10 @@ built-in languages, template keys, or runtime shell keys diverge.
 - Caps one pattern result at 250,000 segments (16 MiB of line vertices),
   65,536 segments per HATCH and eight million boundary intersection tests.
 - Terminates the previous HATCH worker when another cache is selected.
-- Range-reads the current v1.18 POINT/SOLID/3DFACE/WIPEOUT source sections only
+- Range-reads the current v1.19 POINT/SOLID/3DFACE/WIPEOUT source sections only
   after the first line frame, preserving shared block instances without
   expanding geometry per INSERT.
-- Range-reads the current v1.18 normalized `SORTENTSTABLE` tables and entries on
+- Range-reads the current v1.19 normalized `SORTENTSTABLE` tables and entries on
   demand. The first frame reads neither draw-order section.
 - Collapses the preserved sort keys to WIPEOUT-only order events, recursively
   includes nested/DIMENSION/MINSERT mask spans and attaches one compact order
@@ -362,7 +362,7 @@ bounded root/XREF filled-object selection with layer and clip filtering, and
 LRU eviction/request coalescing.
 They also cover delayed Korean text reads, strict EUC-KR, CP949 and Johab
 mapping, per-BigFont overrides, SHX/BigFont cache limits and the
-current v1.18 HATCH range, triangulation, dashed-pattern, block-clipping,
+current v1.19 HATCH range, triangulation, dashed-pattern, block-clipping,
 large-coordinate and render-order contracts, plus POINT/SOLID/3DFACE/WIPEOUT
 range, WCS/OCS, clip-boundary, frame-setting, instance-sharing and GPU-budget
 behavior, plus draw-order normalization,

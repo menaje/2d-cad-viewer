@@ -36,6 +36,8 @@ import {
   SPLINE_SCALAR_RECORD_SIZE,
   TEXT_COLUMN_HEIGHT_RECORD_SIZE,
   TEXT_ENTITY_RECORD_SIZE,
+  TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+  TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
   TEXT_STYLE_RECORD_SIZE,
   VIEWPORT_FROZEN_LAYER_RECORD_SIZE,
   VIEWPORT_CLIP_VERTEX_RECORD_SIZE,
@@ -407,6 +409,7 @@ function makeTextEntitySection() {
     view.setUint32(offset + 16, 0, true);
     view.setInt16(offset + 24, -1, true);
     view.setUint16(offset + 32, row.kind, true);
+    view.setUint16(offset + 34, row.kind === 1 ? 1 << 2 : 0, true);
     view.setUint32(offset + 36, 0, true);
     references[index].forEach((reference, referenceIndex) => {
       view.setUint32(offset + 40 + referenceIndex * 8, reference.offset, true);
@@ -457,6 +460,88 @@ function makeTextColumnHeightSection() {
     kind: SectionKind.TextColumnHeights,
     recordSize: TEXT_COLUMN_HEIGHT_RECORD_SIZE,
     recordCount: 2,
+    flags: 0,
+    buffer,
+  };
+}
+
+function makeTextAnnotationContextSection() {
+  const rows = [
+    {
+      scale: 50,
+      flags: 1,
+      insertionPoint: [103, 201, 0],
+      rectangleHeight: 10,
+      rectangleWidth: 20,
+      extentsWidth: 19,
+      extentsHeight: 9,
+      columnWidth: 9,
+      columnGutter: 2,
+      firstColumnHeight: 0,
+      columnHeightCount: 2,
+    },
+    {
+      scale: 100,
+      flags: 4,
+      insertionPoint: [206, 402, 0],
+      rectangleHeight: 20,
+      rectangleWidth: 40,
+      extentsWidth: 38,
+      extentsHeight: 18,
+      columnWidth: 18,
+      columnGutter: 4,
+      firstColumnHeight: 2,
+      columnHeightCount: 2,
+    },
+  ];
+  const buffer = new ArrayBuffer(
+    TEXT_ANNOTATION_CONTEXT_RECORD_SIZE * rows.length,
+  );
+  const view = new DataView(buffer);
+  rows.forEach((row, index) => {
+    const offset = index * TEXT_ANNOTATION_CONTEXT_RECORD_SIZE;
+    writeU64(view, offset, 301);
+    view.setFloat64(offset + 8, row.scale, true);
+    view.setUint32(offset + 16, row.flags, true);
+    view.setInt32(offset + 20, 1, true);
+    writeVec3(view, offset + 24, row.insertionPoint);
+    writeVec3(view, offset + 48, [1, 0, 0]);
+    view.setFloat64(offset + 72, row.rectangleHeight, true);
+    view.setFloat64(offset + 80, row.rectangleWidth, true);
+    view.setFloat64(offset + 88, row.extentsWidth, true);
+    view.setFloat64(offset + 96, row.extentsHeight, true);
+    view.setInt32(offset + 104, 2, true);
+    view.setFloat64(offset + 112, row.columnWidth, true);
+    view.setFloat64(offset + 120, row.columnGutter, true);
+    writeU64(view, offset + 128, row.firstColumnHeight);
+    writeU64(view, offset + 136, row.columnHeightCount);
+  });
+  return {
+    kind: SectionKind.TextAnnotationContexts,
+    recordSize: TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
+    recordCount: rows.length,
+    flags: 0,
+    buffer,
+  };
+}
+
+function makeTextAnnotationColumnHeightSection() {
+  const values = [10, 11, 20, 22];
+  const buffer = new ArrayBuffer(
+    TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE * values.length,
+  );
+  const view = new DataView(buffer);
+  values.forEach((value, index) => {
+    view.setFloat64(
+      index * TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+      value,
+      true,
+    );
+  });
+  return {
+    kind: SectionKind.TextAnnotationColumnHeights,
+    recordSize: TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+    recordCount: values.length,
     flags: 0,
     buffer,
   };
@@ -1296,6 +1381,7 @@ function makeViewportSection() {
       clipBoundaryHandle: 0,
       firstClipVertex: 0,
       clipVertexCount: 0,
+      annotationScale: 1,
     },
     {
       handle: 2002,
@@ -1310,6 +1396,7 @@ function makeViewportSection() {
       clipBoundaryHandle: 2003,
       firstClipVertex: 0,
       clipVertexCount: 4,
+      annotationScale: 100,
     },
   ];
   return makeMultiStringTable(
@@ -1340,6 +1427,7 @@ function makeViewportSection() {
       view.setUint32(offset + 244, references[0].length, true);
       writeU64(view, offset + 248, row.firstClipVertex);
       view.setUint32(offset + 256, row.clipVertexCount, true);
+      view.setFloat64(offset + 264, row.annotationScale, true);
     },
   );
 }
@@ -1543,6 +1631,8 @@ export function makeFixtureCache({
     makeViewportClipVertexSection(),
     makeImageEntitySection(),
     makeImageClipVertexSection(),
+    makeTextAnnotationContextSection(),
+    makeTextAnnotationColumnHeightSection(),
   ];
   const directoryOffset = HEADER_SIZE;
   const directoryLength = sections.length * DIRECTORY_ENTRY_SIZE;

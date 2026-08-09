@@ -4,7 +4,7 @@ This process-isolated adapter implements the `dwg-engine-adapter/1` inspection
 and conversion contract. It traverses LibreDWG's object model directly instead
 of creating a full JSON dump.
 
-The `convert` path writes Scene Cache v1.18 without a whole-drawing intermediate
+The `convert` path writes Scene Cache v1.19 without a whole-drawing intermediate
 model. It repeatedly traverses LibreDWG objects and streams sections and
 bounded GPU batches directly to a new cache file. For large drawings, it
 spills fixed-size detail records into private unnamed temporary files, sorts
@@ -110,7 +110,7 @@ range-read limit.
 ## Progressive first frame
 
 When the VS Code host supplies both private preview paths, the same conversion
-process emits a Scene Cache v1.18 first-frame sidecar immediately after parsing
+process emits a Scene Cache v1.19 first-frame sidecar immediately after parsing
 and overview planning, before the disk-backed full-detail sort. The sidecar
 contains drawing/layer/block/INSERT metadata and overview-only GPU line data;
 all other required sections are schema-valid and empty. Header flag bit 0

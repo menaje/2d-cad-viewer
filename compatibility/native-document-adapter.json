@@ -10,7 +10,7 @@
     "backendKind": "native-process",
     "status": "query-preview",
     "index": {
-      "projection": "Scene Cache v1.18 source records",
+      "projection": "Scene Cache v1.19 source records",
       "storage": "packed typed arrays",
       "maximumEntries": 1000000,
       "maximumSourceBytes": 268435456,

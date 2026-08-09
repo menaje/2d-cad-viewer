@@ -39,6 +39,7 @@ const viewport = {
   viewDirection: [0, 0, 1],
   viewTwist: 0,
   viewHeight: 1_000,
+  annotationScale: 50,
   viewCenter: [50, -25],
   frozenLayerIndices: [1],
   clipBoundaryVertices: [
@@ -133,6 +134,7 @@ test("builds paper and clipped model roots with frozen layer rows", () => {
   assert.equal(graph.modelInstances.coordinateSpaceIds[0], 1);
   assert.deepEqual([...graph.paperToModelScalesByVisibilityRow], [1, 5]);
   assert.deepEqual([...graph.linetypeScalesByVisibilityRow], [1, 1]);
+  assert.deepEqual([...graph.annotationScalesByVisibilityRow], [0, 50]);
   assert.equal(graph.instancesByBlock.get(1).count, 1);
   assert.equal(graph.instancesByBlock.get(1).coordinateSpaceIds[0], 0);
 });
@@ -143,6 +145,7 @@ test("normalizes paper-space linetypes by each viewport scale", () => {
   });
   assert.deepEqual(plan.paperToModelScalesByVisibilityRow, [1, 5]);
   assert.deepEqual(plan.linetypeScalesByVisibilityRow, [1, 5]);
+  assert.deepEqual(plan.annotationScalesByVisibilityRow, [0, 50]);
 
   const graph = buildLayoutInstanceGraph(
     blocks,
@@ -154,6 +157,25 @@ test("normalizes paper-space linetypes by each viewport scale", () => {
   assert.equal(graph.modelInstances.visibilityRows[0], 1);
   assert.deepEqual([...graph.paperToModelScalesByVisibilityRow], [1, 5]);
   assert.deepEqual([...graph.linetypeScalesByVisibilityRow], [1, 5]);
+  assert.deepEqual([...graph.annotationScalesByVisibilityRow], [0, 50]);
+});
+
+test("keeps a 1:1 model viewport distinct from the paper-space row", () => {
+  const oneToOneViewport = {
+    ...viewport,
+    frozenLayerIndices: [],
+    viewHeight: viewport.height,
+    annotationScale: 1,
+  };
+  const oneToOneLayout = {
+    ...layout,
+    viewports: [layout.viewports[0], oneToOneViewport],
+  };
+  const plan = buildLayoutRootPlan(blocks, [{}, {}], oneToOneLayout);
+
+  assert.equal(plan.rootContexts[1].visibilityRow, 1);
+  assert.deepEqual(plan.paperToModelScalesByVisibilityRow, [1, 1]);
+  assert.deepEqual(plan.annotationScalesByVisibilityRow, [0, 1]);
 });
 
 test("excludes off and invisible model viewports from an active layout", () => {

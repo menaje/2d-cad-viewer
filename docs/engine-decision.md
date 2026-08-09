@@ -255,7 +255,7 @@ is under [`adapters/libredwg/wasm`](../adapters/libredwg/wasm/README.md).
 
 ## Native document query and writer admission
 
-이 문서에서 기존에 “writer”라고 부른 구현은 DWG를 Scene Cache v1.18로
+이 문서에서 기존에 “writer”라고 부른 구현은 DWG를 Scene Cache v1.19로
 투영하는 읽기 전용 cache writer다. 원본 DWG를 수정해 새 DWG/DXF를 만드는
 native document writer와는 별도다.
 

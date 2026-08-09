@@ -85,15 +85,27 @@ export function paperViewportForLayout(layout) {
   );
 }
 
-function visibilityKey(viewport, paperToModelScale, linetypeScale) {
+function visibilityKey(
+  viewport,
+  paperToModelScale,
+  linetypeScale,
+  annotationScale,
+) {
   const frozenLayers = [...new Set(viewport.frozenLayerIndices ?? [])]
     .sort((left, right) => left - right)
     .join(",");
-  return `${frozenLayers}|${paperToModelScale}|${linetypeScale}`;
+  return `${frozenLayers}|${paperToModelScale}|${linetypeScale}|${annotationScale}`;
 }
 
 function viewportPaperToModelScale(viewport) {
   return viewport.viewHeight / viewport.height;
+}
+
+function viewportAnnotationScale(viewport, paperToModelScale) {
+  return Number.isFinite(viewport.annotationScale) &&
+    viewport.annotationScale > 0
+    ? viewport.annotationScale
+    : paperToModelScale;
 }
 
 export function buildLayoutRootPlan(
@@ -116,7 +128,8 @@ export function buildLayoutRootPlan(
   const layerVisibilityRows = [allVisible];
   const paperToModelScalesByVisibilityRow = [1];
   const linetypeScalesByVisibilityRow = [1];
-  const visibilityRowByKey = new Map([["|1|1", 0]]);
+  const annotationScalesByVisibilityRow = [0];
+  const visibilityRowByKey = new Map();
   const rootContexts = [
     Object.freeze({
       blockIndex: layout.blockIndex,
@@ -146,10 +159,15 @@ export function buildLayoutRootPlan(
     const linetypeScale = paperSpaceLinetypeScale
       ? paperToModelScale
       : 1;
+    const annotationScale = viewportAnnotationScale(
+      viewport,
+      paperToModelScale,
+    );
     const key = visibilityKey(
       viewport,
       paperToModelScale,
       linetypeScale,
+      annotationScale,
     );
     let visibilityRow = visibilityRowByKey.get(key);
     if (visibilityRow === undefined) {
@@ -169,6 +187,7 @@ export function buildLayoutRootPlan(
       layerVisibilityRows.push(row);
       paperToModelScalesByVisibilityRow.push(paperToModelScale);
       linetypeScalesByVisibilityRow.push(linetypeScale);
+      annotationScalesByVisibilityRow.push(annotationScale);
     }
     const matrix = viewportModelToPaperMatrix(viewport);
     const clipPoints =
@@ -200,6 +219,9 @@ export function buildLayoutRootPlan(
     linetypeScalesByVisibilityRow: Object.freeze(
       linetypeScalesByVisibilityRow,
     ),
+    annotationScalesByVisibilityRow: Object.freeze(
+      annotationScalesByVisibilityRow,
+    ),
     paperViewport,
     modelViewports: Object.freeze(modelViewports),
   });
@@ -222,5 +244,7 @@ export function buildLayoutInstanceGraph(
       plan.paperToModelScalesByVisibilityRow,
     linetypeScalesByVisibilityRow:
       plan.linetypeScalesByVisibilityRow,
+    annotationScalesByVisibilityRow:
+      plan.annotationScalesByVisibilityRow,
   });
 }

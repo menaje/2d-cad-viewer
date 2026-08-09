@@ -1,6 +1,6 @@
 export const KO_MESSAGES = Object.freeze({
   "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.18",
+  "page.eyebrow": "DWG Viewer · Scene Cache v1.19",
   "page.heading": "대형 도면 첫 화면 검증기",
   "page.hostHeading": "DWG 도면 뷰어",
   "toolbar.more.open": "도면 도구 펼치기",

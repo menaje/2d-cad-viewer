@@ -18,13 +18,13 @@ import {
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
-} from "./external-reference.mjs?v=1.18.8";
+} from "./external-reference.mjs?v=1.19.0";
 import {
   createVsCodeRangeSource,
   installWorkerRangeProxy,
   WORKER_RANGE_REQUEST,
 } from "./host-range-source.mjs";
-import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.18.8";
+import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.19.0";
 import {
   buildLayerGroups,
   isolateLayerGroup,
@@ -80,10 +80,10 @@ import {
   CompositeTextOverlay,
   registerLocalOutlineFont,
   unregisterLocalOutlineFont,
-} from "./text-overlay.mjs?v=1.18.16";
+} from "./text-overlay.mjs?v=1.19.0";
 import {
   loadExternalFirstFrame,
-} from "./viewer.mjs?v=1.18.8";
+} from "./viewer.mjs?v=1.19.0";
 import {
   addViewBookmark,
   CameraViewHistory,
