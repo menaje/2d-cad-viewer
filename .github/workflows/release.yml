@@ -622,6 +622,10 @@ jobs:
           pattern: dwg-viewer-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: SHA256SUMS
+          path: dist
 
       - name: Create immutable tag and GitHub release
         shell: bash

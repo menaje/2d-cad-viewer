@@ -104,6 +104,10 @@ test("release automation publishes every GPL target before the MPL viewer", asyn
   );
   assert.match(releaseWorkflow, /\$packageFlags \+= "--pre-release"/u);
   assert.match(releaseWorkflow, /--pre-release/u);
+  assert.match(
+    releaseWorkflow,
+    /github-release:[\s\S]*name: SHA256SUMS[\s\S]*"dist\/SHA256SUMS"/u,
+  );
   assert.ok(
     releaseWorkflow.indexOf("for target in linux-x64 darwin-arm64 win32-x64") <
       releaseWorkflow.indexOf(
