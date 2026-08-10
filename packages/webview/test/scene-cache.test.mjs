@@ -7,6 +7,7 @@ import {
 } from "../src/range-source.mjs";
 import {
   ARC_RECORD_SIZE,
+  CACHE_VERSION_MINOR,
   DIRECTORY_ENTRY_SIZE,
   ELLIPSE_RECORD_SIZE,
   GPU_LINE_VERTEX_RECORD_SIZE,
@@ -29,13 +30,13 @@ test("opens the header and directory without reading the full cache", async () =
   const reader = await SceneCacheReader.open(source);
 
   assert.equal(reader.header.major, 1);
-  assert.equal(reader.header.minor, 20);
+  assert.equal(reader.header.minor, CACHE_VERSION_MINOR);
   assert.equal(reader.header.fileSize, buffer.byteLength);
   assert.equal(reader.header.preview, false);
-  assert.equal(reader.sections.size, 47);
+  assert.equal(reader.sections.size, Object.keys(SectionKind).length);
   assert.deepEqual(source.requests, [
     { offset: 0, length: 64 },
-    { offset: 64, length: 47 * 40 },
+    { offset: 64, length: Object.keys(SectionKind).length * 40 },
   ]);
   assert.ok(source.bytesRead < buffer.byteLength / 2);
 });
@@ -153,7 +154,7 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
   );
   const reader = new SceneCacheReader(
     source,
-    { minor: 20 },
+    { minor: CACHE_VERSION_MINOR },
     sections,
   );
   const curves = await reader.readCurveRefinementSource();
@@ -204,7 +205,11 @@ test("reads deferred polyline source in independently bounded chunks", async () 
       },
     ],
   ]);
-  const reader = new SceneCacheReader(source, { minor: 20 }, sections);
+  const reader = new SceneCacheReader(
+    source,
+    { minor: CACHE_VERSION_MINOR },
+    sections,
+  );
   const polylines = await reader.readPolylineSource();
 
   assert.equal(polylines.polylines.length, headerCount);
@@ -253,9 +258,11 @@ test("does not read curve source sections while loading first-frame data", async
 test("rejects a newer unsupported Scene Cache minor version", async () => {
   await assert.rejects(
     SceneCacheReader.open(
-      new MemoryRangeSource(makeFixtureCache({ minorVersion: 21 })),
+      new MemoryRangeSource(
+        makeFixtureCache({ minorVersion: CACHE_VERSION_MINOR + 1 }),
+      ),
     ),
-    /unsupported scene-cache version 1\.21/,
+    /unsupported scene-cache version 1\.22/,
   );
 });
 
@@ -263,7 +270,7 @@ test("reads current drawing display settings", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 20,
+        minorVersion: CACHE_VERSION_MINOR,
         wipeoutFrame: 2,
         lineWeightDisplay: true,
         fillMode: false,
@@ -299,7 +306,7 @@ test("reads current linetype definitions and scale", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 20,
+        minorVersion: CACHE_VERSION_MINOR,
         globalLinetypeScale: 300,
       }),
     ),
@@ -476,7 +483,7 @@ test("reads the current saved model view", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 20,
+        minorVersion: CACHE_VERSION_MINOR,
         savedModelView,
       }),
     ),
@@ -486,7 +493,7 @@ test("reads the current saved model view", async () => {
   assert.deepEqual(metadata.drawing.savedModelView, savedModelView);
 });
 
-test("reads bounded Scene Cache v1.20 raster image references", async () => {
+test("reads bounded Scene Cache v1.21 raster image references", async () => {
   const source = new TrackedRangeSource(
     new MemoryRangeSource(makeFixtureCache()),
   );
@@ -511,6 +518,88 @@ test("reads bounded Scene Cache v1.20 raster image references", async () => {
     [6.5, 4.5],
   ]);
   assert.equal(source.requests.length - requestsAfterOpen, 2);
+});
+
+test("range-reads bounded embedded OLE bitmap payloads", async () => {
+  const payload = new Uint8Array([0x42, 0x4d, 1, 2, 3, 4, 5, 6]);
+  const source = new TrackedRangeSource(
+    new MemoryRangeSource(
+      makeFixtureCache({ embeddedImageBytes: payload }),
+    ),
+  );
+  const reader = await SceneCacheReader.open(source);
+  const requestsAfterOpen = source.requests.length;
+  const embedded = await reader.readEmbeddedImages();
+
+  assert.equal(embedded.length, 1);
+  assert.deepEqual(embedded.get(0), {
+    imageIndex: 0,
+    mimeType: "image/bmp",
+    payloadOffset: 0,
+    payloadLength: payload.byteLength,
+    width: 2,
+    height: 2,
+    sourceBmp: true,
+    sourceEmf: false,
+  });
+  assert.deepEqual(
+    new Uint8Array(await embedded.readPayload(0)),
+    payload,
+  );
+  assert.equal(source.requests.length - requestsAfterOpen, 2);
+});
+
+test("range-reads bounded embedded OLE EMF payloads", async () => {
+  const payload = new Uint8Array(108);
+  const reader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        embeddedImageBytes: payload,
+        embeddedImageMime: 2,
+        embeddedImageWidth: 1_835,
+        embeddedImageHeight: 949,
+      }),
+    ),
+  );
+  const embedded = await reader.readEmbeddedImages();
+
+  assert.deepEqual(embedded.get(0), {
+    imageIndex: 0,
+    mimeType: "application/x-emf",
+    payloadOffset: 0,
+    payloadLength: payload.byteLength,
+    width: 1_835,
+    height: 949,
+    sourceBmp: false,
+    sourceEmf: true,
+  });
+  assert.deepEqual(new Uint8Array(await embedded.readPayload(0)), payload);
+});
+
+test("rejects an embedded OLE bitmap range outside its byte pool", async () => {
+  const buffer = makeFixtureCache({
+    embeddedImageBytes: new Uint8Array([0x42, 0x4d, 1, 2]),
+  });
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  for (let index = 0; index < sectionCount; index += 1) {
+    const directoryOffset = 64 + index * DIRECTORY_ENTRY_SIZE;
+    if (
+      view.getUint32(directoryOffset, true) ===
+      SectionKind.EmbeddedImageRecords
+    ) {
+      const sectionOffset = Number(
+        view.getBigUint64(directoryOffset + 8, true),
+      );
+      view.setBigUint64(sectionOffset + 16, 5n, true);
+      break;
+    }
+  }
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(
+    reader.readEmbeddedImages(),
+    /embedded IMAGE record 0 is invalid/u,
+  );
 });
 
 test("reads the original XREF path", async () => {
@@ -545,7 +634,7 @@ test("accepts the current HATCH-boundary sections", async () => {
   );
 
   assert.equal(reader.header.major, 1);
-  assert.equal(reader.header.minor, 20);
+  assert.equal(reader.header.minor, CACHE_VERSION_MINOR);
 });
 
 test("reads bounded HATCH source pools lazily", async () => {
@@ -556,7 +645,7 @@ test("reads bounded HATCH source pools lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const hatches = await reader.readHatchSource();
 
-  assert.equal(reader.header.minor, 20);
+  assert.equal(reader.header.minor, CACHE_VERSION_MINOR);
   assert.equal(hatches.length, 1);
   assert.equal(hatches.loopCount, 2);
   assert.equal(hatches.vertexCount, 8);
@@ -631,7 +720,7 @@ test("reads bounded POINT and SOLID source lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const primitives = await reader.readPrimitiveSource();
 
-  assert.equal(reader.header.minor, 20);
+  assert.equal(reader.header.minor, CACHE_VERSION_MINOR);
   assert.equal(primitives.points.length, 1);
   assert.equal(primitives.solids.length, 2);
   assert.equal(primitives.faces.length, 5);
@@ -654,7 +743,7 @@ test("reads bounded 3DFACE source lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const primitives = await reader.readPrimitiveSource();
 
-  assert.equal(reader.header.minor, 20);
+  assert.equal(reader.header.minor, CACHE_VERSION_MINOR);
   assert.equal(primitives.faces.length, 5);
   assert.deepEqual(
     [0, 1, 2, 3, 4].map(
@@ -739,7 +828,7 @@ test("rejects a WIPEOUT source table above its record cap", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 20,
+        minorVersion: CACHE_VERSION_MINOR,
         wipeoutRecordCount: 65_537,
       }),
     ),
@@ -879,7 +968,7 @@ test("rejects a 3DFACE source table above its record cap", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 20,
+        minorVersion: CACHE_VERSION_MINOR,
         faceRecordCount: 131_073,
       }),
     ),
@@ -944,7 +1033,7 @@ test("preserves Korean source text, style fonts and MTEXT columns", async () => 
   const styles = await reader.readTextStyles();
   const texts = await reader.readTextEntities();
 
-  assert.equal(reader.header.minor, 20);
+  assert.equal(reader.header.minor, CACHE_VERSION_MINOR);
   assert.equal(styles[0].fontFile, "txt.shx");
   assert.equal(styles[0].bigFontFile, "hztxt.shx");
   assert.equal(texts.length, 2);

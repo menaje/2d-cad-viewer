@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   buildLayoutInstanceGraph,
   buildLayoutRootPlan,
+  paperViewportForLayout,
+  paperViewportIdentityError,
   viewportModelToPaperMatrix,
 } from "../src/layout-scene.mjs";
 import { transformPoint } from "../src/math.mjs";
@@ -295,4 +297,69 @@ test("treats an inactive layout's active id-zero viewport as paper space", () =>
   assert.equal(plan.rootContexts.length, 3);
   assert.equal(plan.rootContexts[1].modelSpace, true);
   assert.equal(plan.rootContexts[2].modelSpace, true);
+});
+
+test("infers an id-zero paper viewport instead of the active model viewport", () => {
+  const missingIdsLayout = {
+    ...layout,
+    activeViewportHandle: 502n,
+    viewports: [
+      {
+        ...layout.viewports[0],
+        handle: 501n,
+        id: 0,
+        on: 0,
+      },
+      {
+        ...viewport,
+        handle: 502n,
+        id: 0,
+        on: 0,
+        center: [420.5, 297, 0],
+        width: 841,
+        height: 594,
+        viewCenter: [126_150, 29_700],
+        viewHeight: 59_400,
+      },
+    ],
+  };
+
+  assert.equal(paperViewportForLayout(missingIdsLayout).handle, 501n);
+  assert.equal(
+    paperViewportIdentityError(missingIdsLayout.viewports[0]),
+    0,
+  );
+  assert.ok(
+    paperViewportIdentityError(missingIdsLayout.viewports[1]) > 1,
+  );
+  const plan = buildLayoutRootPlan(blocks, [{}, {}], missingIdsLayout);
+  assert.equal(plan.paperViewport.handle, 501n);
+  assert.deepEqual(
+    plan.modelViewports.map(({ handle }) => handle),
+    [502n],
+  );
+  assert.equal(plan.rootContexts.length, 2);
+});
+
+test("keeps the explicit paper viewport ahead of identity inference", () => {
+  const explicitLayout = {
+    ...layout,
+    viewports: [
+      {
+        ...layout.viewports[0],
+        viewCenter: [0, 0],
+        viewHeight: 1,
+      },
+      {
+        ...viewport,
+        id: 2,
+        center: [10, 20, 0],
+        viewCenter: [10, 20],
+        viewTarget: [0, 0, 0],
+        viewHeight: viewport.height,
+      },
+    ],
+  };
+
+  assert.equal(paperViewportForLayout(explicitLayout).id, 1);
 });

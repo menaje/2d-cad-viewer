@@ -1171,7 +1171,7 @@ function makeCamera(bounds, width, height, padding = 1.08) {
   return makeCameraFromView(origin, worldHeight, width, height);
 }
 
-function normalizePreferredView(view) {
+function normalizePreferredView(view, width, height) {
   if (!view) {
     return null;
   }
@@ -1184,10 +1184,84 @@ function normalizePreferredView(view) {
   ) {
     throw new TypeError("preferred drawing view is invalid");
   }
+  const aspect = width / height;
+  const worldHeight =
+    Number.isFinite(view.width) && view.width > 0 && aspect > 0
+      ? Math.max(view.height, view.width / aspect)
+      : view.height;
   return Object.freeze({
     origin: Object.freeze([...view.center]),
-    worldHeight: view.height,
+    worldHeight,
   });
+}
+
+export function validatedPreferredView(view, bounds, width, height) {
+  const normalized = normalizePreferredView(view, width, height);
+  if (!normalized) {
+    return null;
+  }
+  /*
+   * The 2D renderer does not rotate its camera.  Applying the center and
+   * height from a twisted DWG view without its rotation can put the complete
+   * drawing outside the viewport, so fit the drawable bounds instead.
+   */
+  if (Number.isFinite(view.twist) && Math.abs(view.twist) > 1e-7) {
+    return null;
+  }
+  if (!boundsAreFinite(bounds)) {
+    return normalized;
+  }
+  const camera = makeCameraFromView(
+    normalized.origin,
+    normalized.worldHeight,
+    width,
+    height,
+  );
+  const drawableWidth = Math.max(bounds.max[0] - bounds.min[0], 0);
+  const drawableHeight = Math.max(bounds.max[1] - bounds.min[1], 0);
+  const drawableScale = Math.max(drawableWidth, drawableHeight, 1e-6);
+  const drawableArea = Math.max(
+    drawableWidth * drawableHeight,
+    drawableScale * drawableScale * 1e-6,
+  );
+  const viewArea = camera.worldWidth * camera.worldHeight;
+  /*
+   * Some producers store paper-space viewport width in paper units while
+   * leaving its height and center in hundredths of those units.  Such a view
+   * can still graze the drawable bounds, but opens the sheet as a nearly
+   * invisible dot.  A 256x area allowance preserves ordinary saved zooms in
+   * the qualification corpus while rejecting those unit-mismatched views.
+   */
+  if (!Number.isFinite(viewArea) || viewArea > drawableArea * 256) {
+    return null;
+  }
+  const halfWidth = camera.worldWidth * 0.5;
+  const halfHeight = camera.worldHeight * 0.5;
+  const overlapWidth = Math.max(
+    0,
+    Math.min(camera.origin[0] + halfWidth, bounds.max[0]) -
+      Math.max(camera.origin[0] - halfWidth, bounds.min[0]),
+  );
+  const overlapHeight = Math.max(
+    0,
+    Math.min(camera.origin[1] + halfHeight, bounds.max[1]) -
+      Math.max(camera.origin[1] - halfHeight, bounds.min[1]),
+  );
+  if (overlapWidth === 0 || overlapHeight === 0) {
+    return null;
+  }
+  /*
+   * A saved view that is larger than the drawable bounds but still clips a
+   * substantial part of them is stale or unnecessarily panned.  Fitting is
+   * strictly more useful at that scale.  Keep true zoomed-in saved views and
+   * tolerate small outlying geometry by requiring only 90% bounds coverage.
+   */
+  const drawableCoverage =
+    (overlapWidth * overlapHeight) / drawableArea;
+  if (viewArea > drawableArea && drawableCoverage < 0.9) {
+    return null;
+  }
+  return normalized;
 }
 
 function instancesForBatch(batch, instanceGraph) {
@@ -2009,24 +2083,42 @@ function calculateOverviewBounds(batches, instanceGraph) {
   const rootClips = (instanceGraph.clipNodes ?? []).filter(
     (node) => node.parentId === 0 && !node.inverted,
   );
-  const focusBounds = rootClips.length > 0 ? emptyBounds3() : null;
+  const rootClipBounds =
+    rootClips.length > 0 ? emptyBounds3() : null;
   for (const node of rootClips) {
-    focusBounds.min[0] = Math.min(focusBounds.min[0], node.bounds.min[0]);
-    focusBounds.min[1] = Math.min(focusBounds.min[1], node.bounds.min[1]);
-    focusBounds.min[2] = Math.min(focusBounds.min[2], 0);
-    focusBounds.max[0] = Math.max(focusBounds.max[0], node.bounds.max[0]);
-    focusBounds.max[1] = Math.max(focusBounds.max[1], node.bounds.max[1]);
-    focusBounds.max[2] = Math.max(focusBounds.max[2], 0);
+    rootClipBounds.min[0] = Math.min(
+      rootClipBounds.min[0],
+      node.bounds.min[0],
+    );
+    rootClipBounds.min[1] = Math.min(
+      rootClipBounds.min[1],
+      node.bounds.min[1],
+    );
+    rootClipBounds.min[2] = Math.min(rootClipBounds.min[2], 0);
+    rootClipBounds.max[0] = Math.max(
+      rootClipBounds.max[0],
+      node.bounds.max[0],
+    );
+    rootClipBounds.max[1] = Math.max(
+      rootClipBounds.max[1],
+      node.bounds.max[1],
+    );
+    rootClipBounds.max[2] = Math.max(rootClipBounds.max[2], 0);
   }
-  const focusSearchBounds = focusBounds
+  const focusBounds = rootClipBounds ? emptyBounds3() : null;
+  const focusSearchBounds = rootClipBounds
     ? {
         min: [
-          focusBounds.min[0] - (focusBounds.max[0] - focusBounds.min[0]),
-          focusBounds.min[1] - (focusBounds.max[1] - focusBounds.min[1]),
+          rootClipBounds.min[0] -
+            (rootClipBounds.max[0] - rootClipBounds.min[0]),
+          rootClipBounds.min[1] -
+            (rootClipBounds.max[1] - rootClipBounds.min[1]),
         ],
         max: [
-          focusBounds.max[0] + (focusBounds.max[0] - focusBounds.min[0]),
-          focusBounds.max[1] + (focusBounds.max[1] - focusBounds.min[1]),
+          rootClipBounds.max[0] +
+            (rootClipBounds.max[0] - rootClipBounds.min[0]),
+          rootClipBounds.max[1] +
+            (rootClipBounds.max[1] - rootClipBounds.min[1]),
         ],
       }
     : null;
@@ -6016,8 +6108,9 @@ export class WebGlLineRenderer {
     );
     this.setLineWeightsVisible(lineWeightDisplay);
     this.blocks = blocks;
-    let bounds = calculateOverviewBounds(batches, instanceGraph);
-    includeFiniteBounds(bounds, supplementalBounds);
+    const drawableBounds = calculateOverviewBounds(batches, instanceGraph);
+    includeFiniteBounds(drawableBounds, supplementalBounds);
+    let bounds = drawableBounds;
     if (preferredBounds && boundsAreFinite(preferredBounds)) {
       if (!boundsAreFinite(bounds)) {
         bounds = {
@@ -6048,7 +6141,12 @@ export class WebGlLineRenderer {
             min: [...bounds.min],
             max: [...bounds.max],
           };
-    const fittedView = normalizePreferredView(preferredView);
+    const fittedView = validatedPreferredView(
+      preferredView,
+      drawableBounds,
+      size.width,
+      size.height,
+    );
     const camera = fittedView
       ? makeCameraFromView(
           fittedView.origin,
@@ -6056,12 +6154,14 @@ export class WebGlLineRenderer {
           size.width,
           size.height,
         )
-      : makeCamera(bounds, size.width, size.height);
+      : makeCamera(fitBounds, size.width, size.height);
     const resource = this.uploadVertices(vertices.buffer);
     this.overviewScene = Object.freeze({
       batches,
       bounds,
       fitBounds,
+      preferredBounds:
+        preferredBounds && boundsAreFinite(preferredBounds),
       camera,
       preferredView: fittedView,
       instanceGraph,
@@ -6092,11 +6192,12 @@ export class WebGlLineRenderer {
       throw new Error("cannot switch a view before rendering an overview");
     }
     this.clearCurveRefinement();
-    let bounds = calculateOverviewBounds(
+    const drawableBounds = calculateOverviewBounds(
       this.overviewScene.batches,
       instanceGraph,
     );
-    includeFiniteBounds(bounds, supplementalBounds);
+    includeFiniteBounds(drawableBounds, supplementalBounds);
+    let bounds = drawableBounds;
     if (preferredBounds && boundsAreFinite(preferredBounds)) {
       if (!boundsAreFinite(bounds)) {
         bounds = {
@@ -6127,6 +6228,13 @@ export class WebGlLineRenderer {
             min: [...bounds.min],
             max: [...bounds.max],
           };
+    const size = this.resize();
+    const fittedView = validatedPreferredView(
+      preferredView,
+      drawableBounds,
+      size.width,
+      size.height,
+    );
     this.setViewportLayerVisibility(instanceGraph);
     this.detailSelections.clear();
     this.clearHatchPatterns();
@@ -6134,7 +6242,9 @@ export class WebGlLineRenderer {
       ...this.overviewScene,
       bounds,
       fitBounds,
-      preferredView: normalizePreferredView(preferredView),
+      preferredBounds:
+        preferredBounds && boundsAreFinite(preferredBounds),
+      preferredView: fittedView,
       instanceGraph,
     });
     if (clearExternal) {
@@ -6380,6 +6490,17 @@ export class WebGlLineRenderer {
       return makeCameraFromView(
         this.overviewScene.preferredView.origin,
         this.overviewScene.preferredView.worldHeight,
+        size.width,
+        size.height,
+      );
+    }
+    if (
+      this.overviewScene?.preferredBounds &&
+      boundsAreFinite(this.overviewScene.fitBounds)
+    ) {
+      const size = this.resize(targetSize);
+      return makeCamera(
+        this.overviewScene.fitBounds,
         size.width,
         size.height,
       );

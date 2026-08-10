@@ -1,0 +1,107 @@
+--- a/src/acds.spec
++++ b/src/acds.spec
+@@ -26,6 +26,88 @@
+                0, 0, 0, dat->size);
+     LOG_TRACE_TF (dat->chain, (int)dat->size);
+     LOG_TRACE ("\n");
++
++#ifdef IS_DECODER
++    /* Extract SAB streams before decoding the optional AcDs schema.  Some
++       ODA writers use schema variants that the structured decoder rejects;
++       the SAB payloads themselves remain complete and self-delimiting. */
++    if (dwg->num_acis_sab_hdl)
++      {
++        char *s, *e;
++        unsigned int i = 0;
++        unsigned int found = 0;
++        const unsigned int wanted = dwg->num_acis_sab_hdl;
++        const char acis_start[] = "ACIS BinaryFile";
++        const char asm_start[] = "ASM BinaryFile";
++        const char asm_end[] = "\016\003End\016\002of\016\003ASM\r\004data";
++        const char acis_end[] = "End-of-ACIS-data";
++        while (i < dat->size)
++          {
++            char *acis_s = (char *)memmem (&dat->chain[i], dat->size - i,
++                                           acis_start, strlen (acis_start));
++            char *asm_s = (char *)memmem (&dat->chain[i], dat->size - i,
++                                          asm_start, strlen (asm_start));
++            char *asm_e;
++            char *acis_e;
++            size_t offset;
++            size_t end_size;
++            if (!acis_s && !asm_s)
++              break;
++            s = !acis_s ? asm_s : !asm_s ? acis_s
++                                        : acis_s < asm_s ? acis_s : asm_s;
++            offset = s - (char *)&dat->chain[0];
++            asm_e = (char *)memmem (s, dat->size - offset, asm_end,
++                                    strlen (asm_end));
++            acis_e = (char *)memmem (s, dat->size - offset, acis_end,
++                                     strlen (acis_end));
++            e = !asm_e ? acis_e : !acis_e ? asm_e
++                                      : asm_e < acis_e ? asm_e : acis_e;
++            end_size = e == asm_e ? strlen (asm_end) : strlen (acis_end);
++            if (e)
++              {
++                BITCODE_H hdl;
++                Dwg_Object *o;
++                Dwg_Entity_3DSOLID *sol;
++                size_t size = (size_t)(e - s) + end_size;
++                char *acis_sab_data;
++                if (!dwg->num_acis_sab_hdl || size > UINT32_MAX)
++                  break;
++                hdl = SHIFT_HV (dwg, num_acis_sab_hdl, acis_sab_hdl);
++                o = dwg_resolve_handle (dwg, hdl->handleref.value);
++                if (!o || !dwg_obj_is_3dsolid (o))
++                  {
++                    free (hdl);
++                    error |= DWG_ERR_INVALIDHANDLE;
++                    i = (offset + size) & UINT_MAX;
++                    continue;
++                  }
++                sol = o->tio.entity->tio._3DSOLID;
++                acis_sab_data = (char *)malloc (size);
++                if (!acis_sab_data)
++                  {
++                    free (hdl);
++                    return DWG_ERR_OUTOFMEM;
++                  }
++                memcpy (acis_sab_data, s, size);
++                free (sol->acis_data);
++                sol->acis_data = (BITCODE_RC *)acis_sab_data;
++                sol->sab_size = (BITCODE_BL)size;
++                sol->version = 2;
++                sol->acis_empty = 0;
++                found++;
++                free (hdl);
++                i = (offset + size) & UINT_MAX;
++              }
++            else
++              i = (offset + 1) & UINT_MAX;
++          }
++        if (found != wanted)
++          {
++            while (dwg->num_acis_sab_hdl > 0)
++              free (SHIFT_HV (dwg, num_acis_sab_hdl, acis_sab_hdl));
++          }
++      }
++#endif
+   }
+   // header
+   FIELD_RLx (file_signature, 0);
+@@ -330,6 +412,8 @@
+
+ #ifdef IS_DECODER
+   DECODER {
++    if (dwg->num_acis_sab_hdl)
++      {
+     char *s, *e;
+     unsigned int i = 0;
+     char *acis_sab_data;
+@@ -413,5 +497,6 @@
+         while (dwg->num_acis_sab_hdl > 0)
+           free (SHIFT_HV (dwg, num_acis_sab_hdl, acis_sab_hdl));
+       }
++      }
+   }
+ #endif

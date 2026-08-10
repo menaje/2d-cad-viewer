@@ -565,7 +565,7 @@ jobs:
           fi
           printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
             "$release_label: open, inspect, search, measure, and export DWG drawings directly in VS Code." \
-            "Navigation supports click-drag, two-finger trackpad panning, stronger pinch zoom, compact icon tools with hover labels, and English or Korean controls selected from the VS Code environment." \
+            "This version improves compressed R2007 drawings, model and layout view placement, multiline text, nested references, CAD proxy and surface objects, and embedded BMP or EMF content across the expanded qualification corpus." \
             "The viewer installs and verifies its exact version-matched native converter in the background for Linux x64, macOS arm64, macOS Intel x64, or Windows x64." \
             "The main VSIX is MPL-2.0. Each separately downloaded GPL-3.0-or-later converter has a source-complete archive with unmodified license texts in this same release." \
             "Verify SHA256SUMS and the GitHub artifact attestations before installation." \

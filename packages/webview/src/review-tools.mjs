@@ -57,6 +57,8 @@ const SOURCE_KIND_MESSAGE_KEYS = Object.freeze([
   "review.runtime.kind.viewportBoundary",
   "review.runtime.kind.leader",
   "review.runtime.kind.oleBoundary",
+  "review.runtime.kind.polygonMesh",
+  "review.runtime.kind.multiline",
 ]);
 
 function fallbackMessage(template, values) {

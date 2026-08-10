@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MPL-2.0
  *
- * A bounded-memory Scene Cache v1.20 writer for GNU LibreDWG. Geometry and
+ * A bounded-memory Scene Cache v1.21 writer for GNU LibreDWG. Geometry and
  * source text are traversed repeatedly and written directly to the
  * destination; the writer never creates a JSON or whole-drawing in-memory
  * representation. Large detail passes use private temporary files for an
@@ -30,6 +30,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <float.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -124,7 +125,7 @@ _Static_assert (
 #define MAX_HATCH_CIRCULAR_SEGMENTS 64u
 #define HATCH_SPLINE_SEGMENTS_PER_SPAN 8u
 #define MAX_HATCH_SPLINE_SEGMENTS 1024u
-#define MAX_HATCH_BOUNDARY_SEGMENTS 65536u
+#define MAX_HATCH_BOUNDARY_SEGMENTS 262144u
 #define MAX_HATCH_FILL_VERTICES 1048576u
 #define MAX_HATCH_AUX_RECORDS 1048576u
 #define MAX_HATCH_PATTERN_LINES_PER_ENTITY 4096u
@@ -135,6 +136,14 @@ _Static_assert (
 #define MAX_WIPEOUT_CLIP_VERTICES 1048576u
 #define MAX_IMAGE_SOURCE_RECORDS 65536u
 #define MAX_IMAGE_CLIP_VERTICES 1048576u
+#define MAX_EMBEDDED_IMAGE_BYTES (512u * 1024u * 1024u)
+#define MAX_EMBEDDED_IMAGE_BYTES_PER_RECORD (64u * 1024u * 1024u)
+#define MAX_EMBEDDED_IMAGE_SCAN_BYTES (128u * 1024u * 1024u)
+#define MAX_EMBEDDED_IMAGE_PIXELS 100000000u
+#define MAX_EMBEDDED_EMF_RECORDS 200000u
+#define MAX_EMBEDDED_WMFC_CHUNKS 65536u
+#define WMFC_HEADER_SIZE 34u
+#define WMFC_RECORD_PREFIX_SIZE 10u
 #define MAX_DRAW_ORDER_TABLES 65536u
 #define MAX_DRAW_ORDER_ENTRIES 1048576u
 #define MAX_INSERT_CLIP_RECORDS 65536u
@@ -152,6 +161,20 @@ _Static_assert (
 #define MAX_MULTILEADER_POINTS_PER_LINE 65536u
 #define MAX_MULTILEADER_SEGMENTS_PER_ENTITY 262144u
 #define MAX_LEADER_POINTS_PER_ENTITY 65536u
+#define MAX_ACIS_BYTES_PER_ENTITY (64u * 1024u * 1024u)
+#define MAX_ACIS_RECORDS_PER_ENTITY 262144u
+#define MAX_ACIS_TOKENS_PER_ENTITY 2097152u
+#define MAX_ACIS_SEGMENTS_PER_ENTITY 262144u
+#define MAX_ACIS_KNOTS 4096u
+#define MAX_ACIS_CONTROL_POINTS 65536u
+#define MAX_PROXY_GRAPHIC_BYTES (64u * 1024u * 1024u)
+#define MAX_PROXY_GRAPHIC_CHUNKS 262144u
+#define MAX_PROXY_GRAPHIC_MATRIX_DEPTH 32u
+#define MAX_PROXY_GRAPHIC_VERTICES_PER_CHUNK 1048576u
+#define MAX_PROXY_GRAPHIC_SEGMENTS_PER_ENTITY 262144u
+#define MAX_PROXY_GRAPHIC_TEXTS_PER_ENTITY 262144u
+#define MAX_PROXY_GRAPHIC_UTF16_UNITS (4u * 1024u * 1024u)
+#define MAX_LINETYPE_DEFINITIONS 2045u
 #define HATCH_FLAG_SOLID 1u
 #define HATCH_FLAG_ASSOCIATIVE (1u << 1)
 #define HATCH_FLAG_DOUBLE (1u << 2)
@@ -217,7 +240,9 @@ enum
   SECTION_IMAGE_CLIP_VERTICES = 55,
   SECTION_TEXT_ANNOTATION_CONTEXTS = 56,
   SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS = 57,
-  SECTION_VIEWPORT_LAYER_OVERRIDES = 58
+  SECTION_VIEWPORT_LAYER_OVERRIDES = 58,
+  SECTION_EMBEDDED_IMAGE_RECORDS = 59,
+  SECTION_EMBEDDED_IMAGE_BYTES = 60
 };
 
 enum
@@ -265,7 +290,9 @@ enum
   IMAGE_CLIP_VERTEX_RECORD_SIZE = 16,
   TEXT_ANNOTATION_CONTEXT_RECORD_SIZE = 160,
   TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8,
-  VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE = 24
+  VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE = 24,
+  EMBEDDED_IMAGE_RECORD_SIZE = 40,
+  EMBEDDED_IMAGE_BYTE_RECORD_SIZE = 1
 };
 
 typedef struct
@@ -344,6 +371,10 @@ typedef struct
   LinetypeEntry *linetypes;
   size_t linetype_count;
   HandleIndex *linetype_codes;
+  size_t linetype_code_count;
+  size_t source_linetype_count;
+  size_t referenced_linetype_count;
+  size_t omitted_referenced_linetype_count;
   uint64_t model_handle;
   uint64_t paper_handle;
 } CacheTables;
@@ -401,7 +432,54 @@ typedef struct
   double column_gutter;
   const double *column_heights;
   uint64_t column_height_count;
+  uint64_t serialized_handle;
+  uint32_t common_color;
+  uint32_t common_linetype_code;
+  int16_t common_line_weight;
+  uint32_t style_index_override;
+  int has_common_override;
+  int has_style_index_override;
 } TextSource;
+
+typedef struct
+{
+  const uint8_t *data;
+  size_t size;
+  size_t offset;
+  uint32_t expected_chunks;
+  uint32_t chunks;
+} ProxyGraphicReader;
+
+typedef struct
+{
+  uint32_t type;
+  const uint8_t *data;
+  size_t size;
+} ProxyGraphicChunk;
+
+typedef struct
+{
+  double matrices[MAX_PROXY_GRAPHIC_MATRIX_DEPTH][16];
+  size_t matrix_depth;
+  uint32_t color;
+  uint32_t linetype_code;
+  int16_t line_weight;
+} ProxyGraphicState;
+
+enum
+{
+  PROXY_GRAPHIC_POLYLINE = 6,
+  PROXY_GRAPHIC_POLYGON = 7,
+  PROXY_GRAPHIC_ATTRIBUTE_COLOR = 14,
+  PROXY_GRAPHIC_ATTRIBUTE_LINETYPE = 18,
+  PROXY_GRAPHIC_ATTRIBUTE_TRUE_COLOR = 22,
+  PROXY_GRAPHIC_ATTRIBUTE_LINEWEIGHT = 23,
+  PROXY_GRAPHIC_PUSH_MATRIX = 29,
+  PROXY_GRAPHIC_PUSH_MATRIX2 = 30,
+  PROXY_GRAPHIC_POP_MATRIX = 31,
+  PROXY_GRAPHIC_POLYLINE_WITH_NORMALS = 32,
+  PROXY_GRAPHIC_UNICODE_TEXT2 = 38
+};
 
 typedef struct
 {
@@ -609,6 +687,7 @@ static int segment_iteration_emit (SegmentIteration *iteration,
                                    const LineSegment *segment);
 static void segment_iteration_reject (SegmentIteration *iteration);
 static int is_viewport_entity (const Dwg_Object *object);
+static int is_text_source_object (const Dwg_Object *object);
 
 static uint32_t viewport_clip_vertex_count (
     const Dwg_Data *dwg, const CacheTables *tables,
@@ -691,7 +770,9 @@ static const uint32_t SECTION_KINDS[LIBREDWG_SCENE_SECTION_COUNT]
         SECTION_IMAGE_CLIP_VERTICES,
         SECTION_TEXT_ANNOTATION_CONTEXTS,
         SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS,
-        SECTION_VIEWPORT_LAYER_OVERRIDES };
+        SECTION_VIEWPORT_LAYER_OVERRIDES,
+        SECTION_EMBEDDED_IMAGE_RECORDS,
+        SECTION_EMBEDDED_IMAGE_BYTES };
 
 static const uint32_t SECTION_RECORD_SIZES[LIBREDWG_SCENE_SECTION_COUNT]
     = { DRAWING_RECORD_SIZE,
@@ -740,7 +821,9 @@ static const uint32_t SECTION_RECORD_SIZES[LIBREDWG_SCENE_SECTION_COUNT]
         IMAGE_CLIP_VERTEX_RECORD_SIZE,
         TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
         TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
-        VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE };
+        VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
+        EMBEDDED_IMAGE_RECORD_SIZE,
+        EMBEDDED_IMAGE_BYTE_RECORD_SIZE };
 
 static const char *const SECTION_NAMES[LIBREDWG_SCENE_SECTION_COUNT]
     = { "drawing",
@@ -789,7 +872,9 @@ static const char *const SECTION_NAMES[LIBREDWG_SCENE_SECTION_COUNT]
         "image_clip_vertices",
         "text_annotation_contexts",
         "text_annotation_column_heights",
-        "viewport_layer_overrides" };
+        "viewport_layer_overrides",
+        "embedded_image_records",
+        "embedded_image_bytes" };
 
 static void
 set_error (CacheWriter *writer, const char *message)
@@ -1482,6 +1567,177 @@ find_handle_index (const HandleIndex *indices, size_t count, uint64_t handle)
   return UINT32_MAX;
 }
 
+static size_t
+drawing_object_index (const Dwg_Data *dwg, const Dwg_Object *object)
+{
+  if (!dwg || !dwg->object || !object || object < dwg->object
+      || object >= dwg->object + dwg->num_objects)
+    return SIZE_MAX;
+  return (size_t)(object - dwg->object);
+}
+
+static void
+mark_linetype_reference (const Dwg_Data *dwg,
+                         Dwg_Object_Ref *reference,
+                         unsigned char *referenced)
+{
+  Dwg_Object *object = reference_object (dwg, reference);
+  size_t index = drawing_object_index (dwg, object);
+  if (index != SIZE_MAX && object->fixedtype == DWG_TYPE_LTYPE)
+    referenced[index] = 1u;
+}
+
+static double
+normalized_linetype_number (double value, double fallback)
+{
+  return isfinite (value) ? value : fallback;
+}
+
+static int
+simple_linetypes_equal (const Dwg_Object_LTYPE *left,
+                        const Dwg_Object_LTYPE *right)
+{
+  size_t index;
+  if (!left || !right || left->alignment != right->alignment
+      || left->numdashes != right->numdashes
+      || fabs (normalized_linetype_number (left->pattern_len, 0.0))
+             != fabs (normalized_linetype_number (right->pattern_len, 0.0))
+      || (left->numdashes > 0 && (!left->dashes || !right->dashes)))
+    return 0;
+  for (index = 0; index < (size_t)left->numdashes; index++)
+    {
+      const Dwg_LTYPE_dash *a = &left->dashes[index];
+      const Dwg_LTYPE_dash *b = &right->dashes[index];
+      if (a->shape_flag || b->shape_flag || a->length != b->length
+          || a->complex_shapecode != b->complex_shapecode
+          || reference_handle (a->style) != reference_handle (b->style)
+          || normalized_linetype_number (a->x_offset, 0.0)
+                 != normalized_linetype_number (b->x_offset, 0.0)
+          || normalized_linetype_number (a->y_offset, 0.0)
+                 != normalized_linetype_number (b->y_offset, 0.0)
+          || normalized_linetype_number (a->scale, 1.0)
+                 != normalized_linetype_number (b->scale, 1.0)
+          || normalized_linetype_number (a->rotation, 0.0)
+                 != normalized_linetype_number (b->rotation, 0.0))
+        return 0;
+    }
+  return 1;
+}
+
+static int
+linetype_special_code (const Dwg_Data *dwg, uint64_t handle,
+                       uint32_t *code)
+{
+  if (handle
+      && handle == reference_handle (dwg->header_vars.LTYPE_BYLAYER))
+    *code = 0u;
+  else if (handle
+           && handle
+                  == reference_handle (dwg->header_vars.LTYPE_BYBLOCK))
+    *code = 1u;
+  else if (handle
+           && handle
+                  == reference_handle (dwg->header_vars.LTYPE_CONTINUOUS))
+    *code = 2u;
+  else
+    return 0;
+  return 1;
+}
+
+static uint32_t
+equivalent_linetype_code (const CacheTables *tables,
+                          const Dwg_Object_LTYPE *candidate)
+{
+  size_t index;
+  for (index = 0; index < tables->linetype_count; index++)
+    {
+      const LinetypeEntry *entry = &tables->linetypes[index];
+      const Dwg_Object_LTYPE *existing
+          = entry->object->tio.object->tio.LTYPE;
+      if (entry->code >= 3u
+          && simple_linetypes_equal (existing, candidate))
+        return entry->code;
+    }
+  return UINT32_MAX;
+}
+
+static int
+append_linetype_definition (const Dwg_Data *dwg, CacheTables *tables,
+                            Dwg_Object *object, uint32_t code)
+{
+  LinetypeEntry *entry;
+  Dwg_Object_LTYPE *linetype;
+  if (!object || object->fixedtype != DWG_TYPE_LTYPE
+      || !object->tio.object
+      || !(linetype = object->tio.object->tio.LTYPE)
+      || tables->linetype_count >= MAX_LINETYPE_DEFINITIONS)
+    return 0;
+  entry = &tables->linetypes[tables->linetype_count];
+  entry->object = object;
+  entry->handle = (uint64_t)object->handle.value;
+  entry->code = code;
+  entry->name = copy_utf8_field (dwg->header.codepage, linetype, "LTYPE",
+                                 "name", "Continuous");
+  entry->description = copy_utf8_field (
+      dwg->header.codepage, linetype, "LTYPE", "description", "");
+  if (!entry->name || !entry->description)
+    {
+      free (entry->name);
+      free (entry->description);
+      memset (entry, 0, sizeof (*entry));
+      return 0;
+    }
+  tables->linetype_count++;
+  return 1;
+}
+
+static int
+register_linetype (const Dwg_Data *dwg, CacheTables *tables,
+                   Dwg_Object *object, int referenced,
+                   unsigned char *processed, uint32_t *next_code)
+{
+  size_t object_index = drawing_object_index (dwg, object);
+  uint64_t handle;
+  uint32_t code;
+  Dwg_Object_LTYPE *linetype;
+  if (object_index == SIZE_MAX || processed[object_index]
+      || object->fixedtype != DWG_TYPE_LTYPE || !object->tio.object
+      || !(linetype = object->tio.object->tio.LTYPE))
+    return 1;
+  handle = (uint64_t)object->handle.value;
+  if (linetype_special_code (dwg, handle, &code))
+    {
+      if (!append_linetype_definition (dwg, tables, object, code))
+        return 0;
+    }
+  else
+    {
+      code = equivalent_linetype_code (tables, linetype);
+      if (code == UINT32_MAX)
+        {
+          if (tables->linetype_count < MAX_LINETYPE_DEFINITIONS
+              && *next_code <= 2047u)
+            {
+              code = (*next_code)++;
+              if (!append_linetype_definition (
+                      dwg, tables, object, code))
+                return 0;
+            }
+          else
+            {
+              code = 2u;
+              if (referenced)
+                tables->omitted_referenced_linetype_count++;
+            }
+        }
+    }
+  tables->linetype_codes[tables->linetype_code_count].handle = handle;
+  tables->linetype_codes[tables->linetype_code_count].index = code;
+  tables->linetype_code_count++;
+  processed[object_index] = 1u;
+  return 1;
+}
+
 static void
 free_tables (CacheTables *tables)
 {
@@ -1524,12 +1780,15 @@ build_tables (Dwg_Data *dwg, CacheTables *tables)
   size_t layer_count = 0;
   size_t block_count = 0;
   size_t text_style_count = 0;
-  size_t linetype_count = 0;
+  size_t source_linetype_count = 0;
+  size_t linetype_capacity = 0;
   size_t layer_index = 0;
   size_t block_index = 0;
   size_t text_style_index = 0;
-  size_t linetype_index = 0;
+  size_t referenced_linetype_count = 0;
   uint32_t next_linetype_code = 3;
+  unsigned char *referenced_linetypes = NULL;
+  unsigned char *processed_linetypes = NULL;
   size_t i;
 
   memset (tables, 0, sizeof (*tables));
@@ -1547,11 +1806,51 @@ build_tables (Dwg_Data *dwg, CacheTables *tables)
       else if (dwg->object[i].fixedtype == DWG_TYPE_STYLE)
         text_style_count++;
       else if (dwg->object[i].fixedtype == DWG_TYPE_LTYPE)
-        linetype_count++;
+        source_linetype_count++;
     }
   if (layer_count > UINT32_MAX || block_count > UINT32_MAX
-      || text_style_count > UINT32_MAX || linetype_count > 2045u)
+      || text_style_count > UINT32_MAX)
     return 0;
+  if (dwg->num_objects > 0)
+    {
+      referenced_linetypes
+          = (unsigned char *)calloc ((size_t)dwg->num_objects, 1u);
+      processed_linetypes
+          = (unsigned char *)calloc ((size_t)dwg->num_objects, 1u);
+      if (!referenced_linetypes || !processed_linetypes)
+        goto table_allocation_failed;
+    }
+  for (i = 0; i < (size_t)dwg->num_objects; i++)
+    {
+      Dwg_Object *object = &dwg->object[i];
+      if (object->fixedtype == DWG_TYPE_LAYER && object->tio.object
+          && object->tio.object->tio.LAYER)
+        mark_linetype_reference (
+            dwg, object->tio.object->tio.LAYER->ltype,
+            referenced_linetypes);
+      else if (object->supertype == DWG_SUPERTYPE_ENTITY
+               && object->tio.entity
+               && object->tio.entity->ltype_flags != 0
+               && object->tio.entity->ltype_flags != 1
+               && object->tio.entity->ltype_flags != 2
+               && object->tio.entity->ltype)
+        mark_linetype_reference (dwg, object->tio.entity->ltype,
+                                 referenced_linetypes);
+    }
+  mark_linetype_reference (dwg, dwg->header_vars.LTYPE_BYLAYER,
+                           referenced_linetypes);
+  mark_linetype_reference (dwg, dwg->header_vars.LTYPE_BYBLOCK,
+                           referenced_linetypes);
+  mark_linetype_reference (dwg, dwg->header_vars.LTYPE_CONTINUOUS,
+                           referenced_linetypes);
+  for (i = 0; i < (size_t)dwg->num_objects; i++)
+    if (dwg->object[i].fixedtype == DWG_TYPE_LTYPE
+        && referenced_linetypes[i])
+      referenced_linetype_count++;
+  linetype_capacity
+      = source_linetype_count < MAX_LINETYPE_DEFINITIONS
+            ? source_linetype_count
+            : MAX_LINETYPE_DEFINITIONS;
   tables->layers
       = layer_count ? (LayerEntry *)calloc (layer_count, sizeof (LayerEntry))
                     : NULL;
@@ -1576,21 +1875,25 @@ build_tables (Dwg_Data *dwg, CacheTables *tables)
             ? (HandleIndex *)malloc (text_style_count * sizeof (HandleIndex))
             : NULL;
   tables->linetypes
-      = linetype_count
-            ? (LinetypeEntry *)calloc (linetype_count,
+      = linetype_capacity
+            ? (LinetypeEntry *)calloc (linetype_capacity,
                                       sizeof (LinetypeEntry))
             : NULL;
   tables->linetype_codes
-      = linetype_count
-            ? (HandleIndex *)malloc (linetype_count * sizeof (HandleIndex))
+      = source_linetype_count
+            ? (HandleIndex *)malloc (source_linetype_count
+                                    * sizeof (HandleIndex))
             : NULL;
   if ((layer_count && (!tables->layers || !tables->layer_indices))
       || (block_count && (!tables->blocks || !tables->block_indices))
       || (text_style_count
           && (!tables->text_styles || !tables->text_style_indices))
-      || (linetype_count
-          && (!tables->linetypes || !tables->linetype_codes)))
+      || (linetype_capacity && !tables->linetypes)
+      || (source_linetype_count && !tables->linetype_codes))
     {
+table_allocation_failed:
+      free (referenced_linetypes);
+      free (processed_linetypes);
       free_tables (tables);
       return 0;
     }
@@ -1601,7 +1904,11 @@ build_tables (Dwg_Data *dwg, CacheTables *tables)
   tables->layer_count = layer_count;
   tables->block_count = block_count;
   tables->text_style_count = text_style_count;
-  tables->linetype_count = linetype_count;
+  tables->linetype_count = 0;
+  tables->linetype_code_count = 0;
+  tables->source_linetype_count = source_linetype_count;
+  tables->referenced_linetype_count = referenced_linetype_count;
+  tables->omitted_referenced_linetype_count = 0;
 
   for (i = 0; i < (size_t)dwg->num_objects; i++)
     {
@@ -1620,10 +1927,7 @@ build_tables (Dwg_Data *dwg, CacheTables *tables)
               dwg->header.codepage,
               object->tio.object->tio.LAYER->ltype);
           if (!entry->name || !entry->linetype)
-            {
-              free_tables (tables);
-              return 0;
-            }
+            goto linetype_registration_failed;
           tables->layer_indices[layer_index].handle = entry->handle;
           tables->layer_indices[layer_index].index = (uint32_t)layer_index;
           layer_index++;
@@ -1644,10 +1948,7 @@ build_tables (Dwg_Data *dwg, CacheTables *tables)
                                  object->tio.object->tio.BLOCK_HEADER,
                                  "BLOCK_HEADER", "xref_pname", "");
           if (!entry->name || !entry->xref_path)
-            {
-              free_tables (tables);
-              return 0;
-            }
+            goto linetype_registration_failed;
           entry->is_model
               = entry->handle != 0 && entry->handle == tables->model_handle;
           entry->is_paper
@@ -1674,66 +1975,49 @@ build_tables (Dwg_Data *dwg, CacheTables *tables)
               = copy_utf8_field (dwg->header.codepage, style, "STYLE",
                                  "bigfont_file", "");
           if (!entry->name || !entry->font_file || !entry->bigfont_file)
-            {
-              free_tables (tables);
-              return 0;
-            }
+            goto linetype_registration_failed;
           tables->text_style_indices[text_style_index].handle = entry->handle;
           tables->text_style_indices[text_style_index].index
               = (uint32_t)text_style_index;
           text_style_index++;
         }
-      else if (object->fixedtype == DWG_TYPE_LTYPE && object->tio.object
-               && object->tio.object->tio.LTYPE)
-        {
-          LinetypeEntry *entry = &tables->linetypes[linetype_index];
-          Dwg_Object_LTYPE *linetype = object->tio.object->tio.LTYPE;
-          uint64_t handle = (uint64_t)object->handle.value;
-          entry->object = object;
-          entry->handle = handle;
-          entry->name
-              = copy_utf8_field (dwg->header.codepage, linetype, "LTYPE",
-                                 "name", "Continuous");
-          entry->description
-              = copy_utf8_field (dwg->header.codepage, linetype, "LTYPE",
-                                 "description", "");
-          if (!entry->name || !entry->description)
-            {
-              free_tables (tables);
-              return 0;
-            }
-          if (handle
-              && handle
-                     == reference_handle (dwg->header_vars.LTYPE_BYLAYER))
-            entry->code = 0;
-          else if (
-              handle
-              && handle
-                     == reference_handle (dwg->header_vars.LTYPE_BYBLOCK))
-            entry->code = 1;
-          else if (
-              handle
-              && handle
-                     == reference_handle (dwg->header_vars.LTYPE_CONTINUOUS))
-            entry->code = 2;
-          else
-            entry->code = next_linetype_code++;
-          tables->linetype_codes[linetype_index].handle = handle;
-          tables->linetype_codes[linetype_index].index = entry->code;
-          linetype_index++;
-        }
     }
+  if (!register_linetype (
+          dwg, tables,
+          reference_object (dwg, dwg->header_vars.LTYPE_BYLAYER), 1,
+          processed_linetypes, &next_linetype_code)
+      || !register_linetype (
+          dwg, tables,
+          reference_object (dwg, dwg->header_vars.LTYPE_BYBLOCK), 1,
+          processed_linetypes, &next_linetype_code)
+      || !register_linetype (
+          dwg, tables,
+          reference_object (dwg, dwg->header_vars.LTYPE_CONTINUOUS), 1,
+          processed_linetypes, &next_linetype_code))
+    goto linetype_registration_failed;
+  for (i = 0; i < (size_t)dwg->num_objects; i++)
+    if (referenced_linetypes[i]
+        && !register_linetype (
+            dwg, tables, &dwg->object[i], 1, processed_linetypes,
+            &next_linetype_code))
+      goto linetype_registration_failed;
+  for (i = 0; i < (size_t)dwg->num_objects; i++)
+    if (!register_linetype (
+            dwg, tables, &dwg->object[i], 0, processed_linetypes,
+            &next_linetype_code))
+      goto linetype_registration_failed;
+  free (referenced_linetypes);
+  free (processed_linetypes);
   tables->layer_count = layer_index;
   tables->block_count = block_index;
   tables->text_style_count = text_style_index;
-  tables->linetype_count = linetype_index;
   qsort (tables->layer_indices, tables->layer_count, sizeof (HandleIndex),
          handle_index_compare);
   qsort (tables->block_indices, tables->block_count, sizeof (HandleIndex),
          handle_index_compare);
   qsort (tables->text_style_indices, tables->text_style_count,
          sizeof (HandleIndex), handle_index_compare);
-  qsort (tables->linetype_codes, tables->linetype_count,
+  qsort (tables->linetype_codes, tables->linetype_code_count,
          sizeof (HandleIndex), handle_index_compare);
   for (i = 0; i < (size_t)dwg->num_objects; i++)
     {
@@ -1751,6 +2035,12 @@ build_tables (Dwg_Data *dwg, CacheTables *tables)
         }
     }
   return 1;
+
+linetype_registration_failed:
+  free (referenced_linetypes);
+  free (processed_linetypes);
+  free_tables (tables);
+  return 0;
 }
 
 static uint32_t
@@ -1884,7 +2174,7 @@ entity_linetype_code (const Dwg_Object_Entity *entity,
   if (entity->ltype_flags == 2)
     return 2;
   code = find_handle_index (
-      tables->linetype_codes, tables->linetype_count,
+      tables->linetype_codes, tables->linetype_code_count,
       reference_handle (entity->ltype));
   return code <= 2047u ? (uint16_t)code : 2;
 }
@@ -1907,6 +2197,331 @@ write_common (CacheWriter *writer, const Dwg_Object *object,
          && write_i16 (writer, (int16_t)line_weight)
          && write_u16 (writer, flags)
          && write_u32 (writer, entity_linetype_code (entity, tables));
+}
+
+static int
+proxy_read_u16 (const uint8_t *data, size_t size, size_t offset,
+                uint16_t *value)
+{
+  if (!data || !value || offset > size || size - offset < 2u)
+    return 0;
+  *value = (uint16_t)data[offset]
+           | (uint16_t)((uint16_t)data[offset + 1u] << 8u);
+  return 1;
+}
+
+static int
+proxy_read_u32 (const uint8_t *data, size_t size, size_t offset,
+                uint32_t *value)
+{
+  if (!data || !value || offset > size || size - offset < 4u)
+    return 0;
+  *value = (uint32_t)data[offset]
+           | ((uint32_t)data[offset + 1u] << 8u)
+           | ((uint32_t)data[offset + 2u] << 16u)
+           | ((uint32_t)data[offset + 3u] << 24u);
+  return 1;
+}
+
+static int
+proxy_read_i32 (const uint8_t *data, size_t size, size_t offset,
+                int32_t *value)
+{
+  uint32_t raw;
+  if (!proxy_read_u32 (data, size, offset, &raw))
+    return 0;
+  memcpy (value, &raw, sizeof (raw));
+  return 1;
+}
+
+static int
+proxy_read_u64 (const uint8_t *data, size_t size, size_t offset,
+                uint64_t *value)
+{
+  uint32_t low;
+  uint32_t high;
+  if (!proxy_read_u32 (data, size, offset, &low)
+      || !proxy_read_u32 (data, size, offset + 4u, &high))
+    return 0;
+  *value = (uint64_t)low | ((uint64_t)high << 32u);
+  return 1;
+}
+
+static int
+proxy_read_f64 (const uint8_t *data, size_t size, size_t offset,
+                double *value)
+{
+  uint64_t bits;
+  if (!proxy_read_u64 (data, size, offset, &bits))
+    return 0;
+  memcpy (value, &bits, sizeof (bits));
+  return 1;
+}
+
+static int
+proxy_align4 (size_t value, size_t *aligned)
+{
+  if (!aligned || value > SIZE_MAX - 3u)
+    return 0;
+  *aligned = (value + 3u) & ~(size_t)3u;
+  return 1;
+}
+
+static int
+is_proxy_graphic_source_object (const Dwg_Object *object)
+{
+  const Dwg_Object_Entity *entity;
+  if (!object || (object->fixedtype != DWG_TYPE_UNKNOWN_ENT
+                  && object->fixedtype != DWG_TYPE_PROXY_ENTITY)
+      || !(entity = object->tio.entity) || !entity->preview_exists
+      || !entity->preview || entity->preview_size < 8u
+      || entity->preview_size > MAX_PROXY_GRAPHIC_BYTES
+      || entity->preview_size > SIZE_MAX)
+    return 0;
+  return 1;
+}
+
+static int
+initialize_proxy_graphic_reader (const Dwg_Object *object,
+                                 ProxyGraphicReader *reader)
+{
+  uint32_t declared_size;
+  uint32_t expected_chunks;
+  size_t size;
+  if (!reader || !is_proxy_graphic_source_object (object))
+    return 0;
+  size = (size_t)object->tio.entity->preview_size;
+  memset (reader, 0, sizeof (*reader));
+  reader->data = (const uint8_t *)object->tio.entity->preview;
+  reader->size = size;
+  reader->offset = 8u;
+  if (!proxy_read_u32 (reader->data, size, 0u, &declared_size)
+      || !proxy_read_u32 (reader->data, size, 4u, &expected_chunks)
+      || declared_size != size
+      || expected_chunks > MAX_PROXY_GRAPHIC_CHUNKS)
+    return 0;
+  reader->expected_chunks = expected_chunks;
+  return 1;
+}
+
+static int
+next_proxy_graphic_chunk (ProxyGraphicReader *reader,
+                          ProxyGraphicChunk *chunk)
+{
+  uint32_t chunk_size;
+  uint32_t type;
+  if (!reader || !chunk)
+    return -1;
+  if (reader->offset == reader->size)
+    return reader->expected_chunks == 0u
+                   || reader->chunks == reader->expected_chunks
+               ? 0
+               : -1;
+  if (reader->offset > reader->size
+      || reader->size - reader->offset < 8u
+      || reader->chunks >= MAX_PROXY_GRAPHIC_CHUNKS
+      || !proxy_read_u32 (reader->data, reader->size, reader->offset,
+                          &chunk_size)
+      || !proxy_read_u32 (reader->data, reader->size,
+                          reader->offset + 4u, &type)
+      || chunk_size < 8u || (chunk_size & 3u) != 0u
+      || (size_t)chunk_size > reader->size - reader->offset)
+    return -1;
+  chunk->type = type;
+  chunk->data = reader->data + reader->offset + 8u;
+  chunk->size = (size_t)chunk_size - 8u;
+  reader->offset += (size_t)chunk_size;
+  reader->chunks++;
+  return 1;
+}
+
+static uint32_t
+proxy_scene_color (uint32_t raw, uint32_t fallback)
+{
+  uint32_t method = raw >> 24u;
+  if (method == 0xc0u)
+    return 0u;
+  if (method == 0xc1u)
+    return 1u << 30u;
+  if (method == 0xc2u)
+    return (3u << 30u) | (raw & 0x00ffffffu);
+  if (method == 0xc3u)
+    {
+      uint32_t aci = raw & 0xffu;
+      return aci == 0u ? (1u << 30u) : (2u << 30u) | aci;
+    }
+  if (raw <= 256u)
+    {
+      if (raw == 256u)
+        return 0u;
+      if (raw == 0u)
+        return 1u << 30u;
+      return (2u << 30u) | raw;
+    }
+  return fallback;
+}
+
+static void
+initialize_proxy_graphic_state (const Dwg_Object *object,
+                                const CacheTables *tables,
+                                ProxyGraphicState *state)
+{
+  const Dwg_Object_Entity *entity
+      = object && object->tio.entity ? object->tio.entity : NULL;
+  int line_weight = entity ? dxf_cvt_lweight (entity->linewt) : -1;
+  memset (state, 0, sizeof (*state));
+  state->color = encode_entity_color (entity ? &entity->color : NULL);
+  state->linetype_code
+      = tables ? entity_linetype_code (entity, tables) : 0u;
+  state->line_weight
+      = line_weight >= INT16_MIN && line_weight <= INT16_MAX
+            ? (int16_t)line_weight
+            : -1;
+}
+
+static int
+apply_proxy_graphic_control (ProxyGraphicState *state,
+                             const ProxyGraphicChunk *chunk)
+{
+  uint32_t raw;
+  int32_t signed_raw;
+  size_t index;
+  if (!state || !chunk)
+    return -1;
+  switch (chunk->type)
+    {
+    case PROXY_GRAPHIC_PUSH_MATRIX:
+    case PROXY_GRAPHIC_PUSH_MATRIX2:
+      if (chunk->size < 16u * sizeof (double)
+          || state->matrix_depth >= MAX_PROXY_GRAPHIC_MATRIX_DEPTH)
+        return -1;
+      for (index = 0; index < 16u; index++)
+        if (!proxy_read_f64 (
+                chunk->data, chunk->size, index * sizeof (double),
+                &state->matrices[state->matrix_depth][index])
+            || !isfinite (
+                state->matrices[state->matrix_depth][index]))
+          return -1;
+      state->matrix_depth++;
+      return 1;
+    case PROXY_GRAPHIC_POP_MATRIX:
+      if (!state->matrix_depth)
+        return -1;
+      state->matrix_depth--;
+      return 1;
+    case PROXY_GRAPHIC_ATTRIBUTE_COLOR:
+    case PROXY_GRAPHIC_ATTRIBUTE_TRUE_COLOR:
+      if (!proxy_read_u32 (chunk->data, chunk->size, 0u, &raw))
+        return -1;
+      state->color = proxy_scene_color (raw, state->color);
+      return 1;
+    case PROXY_GRAPHIC_ATTRIBUTE_LINETYPE:
+      if (!proxy_read_u32 (chunk->data, chunk->size, 0u, &raw))
+        return -1;
+      if (raw == 32766u)
+        state->linetype_code = 1u;
+      else if (raw == 32767u)
+        state->linetype_code = 0u;
+      else if (raw == 0u)
+        state->linetype_code = 2u;
+      return 1;
+    case PROXY_GRAPHIC_ATTRIBUTE_LINEWEIGHT:
+      if (!proxy_read_i32 (chunk->data, chunk->size, 0u, &signed_raw))
+        return -1;
+      if (signed_raw >= INT16_MIN && signed_raw <= INT16_MAX)
+        state->line_weight = (int16_t)signed_raw;
+      return 1;
+    default:
+      return 0;
+    }
+}
+
+static void
+proxy_transform_point (const ProxyGraphicState *state,
+                       const double input[3], double output[3])
+{
+  const double *matrix;
+  if (!state || !state->matrix_depth)
+    {
+      memcpy (output, input, 3u * sizeof (double));
+      return;
+    }
+  matrix = state->matrices[state->matrix_depth - 1u];
+  output[0] = matrix[0] * input[0] + matrix[1] * input[1]
+              + matrix[2] * input[2] + matrix[3];
+  output[1] = matrix[4] * input[0] + matrix[5] * input[1]
+              + matrix[6] * input[2] + matrix[7];
+  output[2] = matrix[8] * input[0] + matrix[9] * input[1]
+              + matrix[10] * input[2] + matrix[11];
+}
+
+static void
+proxy_transform_vector (const ProxyGraphicState *state,
+                        const double input[3], double output[3])
+{
+  const double *matrix;
+  if (!state || !state->matrix_depth)
+    {
+      memcpy (output, input, 3u * sizeof (double));
+      return;
+    }
+  matrix = state->matrices[state->matrix_depth - 1u];
+  output[0] = matrix[0] * input[0] + matrix[1] * input[1]
+              + matrix[2] * input[2];
+  output[1] = matrix[4] * input[0] + matrix[5] * input[1]
+              + matrix[6] * input[2];
+  output[2] = matrix[8] * input[0] + matrix[9] * input[1]
+              + matrix[10] * input[2];
+}
+
+static int
+proxy_polyline_vertex_count (const ProxyGraphicChunk *chunk,
+                             uint32_t *vertex_count)
+{
+  uint32_t count;
+  uint64_t required;
+  if (!chunk || !vertex_count
+      || (chunk->type != PROXY_GRAPHIC_POLYLINE
+          && chunk->type != PROXY_GRAPHIC_POLYGON
+          && chunk->type != PROXY_GRAPHIC_POLYLINE_WITH_NORMALS)
+      || !proxy_read_u32 (chunk->data, chunk->size, 0u, &count)
+      || count > MAX_PROXY_GRAPHIC_VERTICES_PER_CHUNK)
+    return 0;
+  required = 4u + (uint64_t)count * 3u * sizeof (double);
+  if (chunk->type == PROXY_GRAPHIC_POLYLINE_WITH_NORMALS)
+    required += 3u * sizeof (double);
+  if (required > chunk->size)
+    return 0;
+  *vertex_count = count;
+  return 1;
+}
+
+static int
+proxy_graphic_has_supported_display (const Dwg_Object *object)
+{
+  ProxyGraphicReader reader;
+  ProxyGraphicState state;
+  ProxyGraphicChunk chunk;
+  int status;
+  int found = 0;
+  if (!initialize_proxy_graphic_reader (object, &reader))
+    return 0;
+  initialize_proxy_graphic_state (object, NULL, &state);
+  while ((status = next_proxy_graphic_chunk (&reader, &chunk)) > 0)
+    {
+      int control = apply_proxy_graphic_control (&state, &chunk);
+      uint32_t count;
+      if (control < 0)
+        return 0;
+      if (control > 0)
+        continue;
+      if (chunk.type == PROXY_GRAPHIC_UNICODE_TEXT2)
+        found = 1;
+      else if (proxy_polyline_vertex_count (&chunk, &count)
+               && count >= 2u)
+        found = 1;
+    }
+  return status == 0 && found;
 }
 
 static void
@@ -2280,6 +2895,8 @@ dimension_common (const Dwg_Object *object)
     case DWG_TYPE_DIMENSION_RADIUS:
     case DWG_TYPE_DIMENSION_DIAMETER:
     case DWG_TYPE_DIMENSION_ORDINATE:
+    case DWG_TYPE_ARC_DIMENSION:
+    case DWG_TYPE_LARGE_RADIAL_DIMENSION:
       return object->tio.entity->tio.DIMENSION_common;
     default:
       return NULL;
@@ -2398,6 +3015,22 @@ count_primitives (const Dwg_Data *dwg, const CacheTables *tables)
           if (object->tio.entity && object->tio.entity->tio.SOLID)
             counts.solids++;
           break;
+        case DWG_TYPE_TRACE:
+          if (object->tio.entity && object->tio.entity->tio.TRACE)
+            counts.traces++;
+          break;
+        case DWG_TYPE_REGION:
+          if (object->tio.entity && object->tio.entity->tio.REGION)
+            counts.regions++;
+          break;
+        case DWG_TYPE__3DSOLID:
+          if (object->tio.entity && object->tio.entity->tio._3DSOLID)
+            counts.solids_3d++;
+          break;
+        case DWG_TYPE_BODY:
+          if (object->tio.entity && object->tio.entity->tio.BODY)
+            counts.bodies++;
+          break;
         case DWG_TYPE__3DFACE:
           if (object->tio.entity && object->tio.entity->tio._3DFACE)
             counts.faces++;
@@ -2413,6 +3046,19 @@ count_primitives (const Dwg_Data *dwg, const CacheTables *tables)
         case DWG_TYPE_XLINE:
           if (object->tio.entity && object->tio.entity->tio.XLINE)
             counts.xlines++;
+          break;
+        case DWG_TYPE_RAY:
+          if (object->tio.entity && object->tio.entity->tio.RAY)
+            counts.rays++;
+          break;
+        case DWG_TYPE_POLYLINE_MESH:
+          if (object->tio.entity
+              && object->tio.entity->tio.POLYLINE_MESH)
+            counts.polyline_meshes++;
+          break;
+        case DWG_TYPE_MLINE:
+          if (object->tio.entity && object->tio.entity->tio.MLINE)
+            counts.mlines++;
           break;
         case DWG_TYPE_MULTILEADER:
           if (mleader_has_serializable_content (object))
@@ -2435,6 +3081,11 @@ count_primitives (const Dwg_Data *dwg, const CacheTables *tables)
           if (is_viewport_entity (object))
             counts.viewports++;
           break;
+        case DWG_TYPE_UNKNOWN_ENT:
+        case DWG_TYPE_PROXY_ENTITY:
+          if (proxy_graphic_has_supported_display (object))
+            counts.proxy_graphics++;
+          break;
         case DWG_TYPE_DIMENSION_LINEAR:
         case DWG_TYPE_DIMENSION_ALIGNED:
         case DWG_TYPE_DIMENSION_ANG2LN:
@@ -2442,6 +3093,8 @@ count_primitives (const Dwg_Data *dwg, const CacheTables *tables)
         case DWG_TYPE_DIMENSION_RADIUS:
         case DWG_TYPE_DIMENSION_DIAMETER:
         case DWG_TYPE_DIMENSION_ORDINATE:
+        case DWG_TYPE_ARC_DIMENSION:
+        case DWG_TYPE_LARGE_RADIAL_DIMENSION:
           {
             uint64_t target_handle;
             double base_point[3];
@@ -2470,11 +3123,16 @@ count_primitives (const Dwg_Data *dwg, const CacheTables *tables)
                                + counts.mtexts
                                + counts.attribute_definitions
                                + counts.hatches + counts.points
-                               + counts.solids + counts.faces
+                               + counts.solids + counts.traces
+                               + counts.regions + counts.solids_3d
+                               + counts.bodies
+                               + counts.faces
                                + counts.wipeouts + counts.images
-                               + counts.xlines
+                               + counts.xlines + counts.rays
+                               + counts.polyline_meshes + counts.mlines
                                + counts.multileaders + counts.leaders
-                               + counts.ole2frames + counts.viewports;
+                               + counts.ole2frames + counts.viewports
+                               + counts.proxy_graphics;
   counts.deferred_entities
       = counts.total_entities - counts.serialized_entities;
   return counts;
@@ -3236,6 +3894,470 @@ read_text_source (const Dwg_Data *dwg, const Dwg_Object *object,
       return 0;
     }
   return 1;
+}
+
+static int
+proxy_read_vec3 (const uint8_t *data, size_t size, size_t offset,
+                 double value[3])
+{
+  size_t axis;
+  for (axis = 0; axis < 3u; axis++)
+    if (!proxy_read_f64 (data, size, offset + axis * sizeof (double),
+                         &value[axis])
+        || !isfinite (value[axis]))
+      return 0;
+  return 1;
+}
+
+static int
+proxy_append_utf8 (char *output, size_t capacity, size_t *length,
+                   uint32_t codepoint)
+{
+  uint8_t bytes[4];
+  size_t count;
+  size_t index;
+  if (codepoint <= 0x7fu)
+    {
+      bytes[0] = (uint8_t)codepoint;
+      count = 1u;
+    }
+  else if (codepoint <= 0x7ffu)
+    {
+      bytes[0] = (uint8_t)(0xc0u | (codepoint >> 6u));
+      bytes[1] = (uint8_t)(0x80u | (codepoint & 0x3fu));
+      count = 2u;
+    }
+  else if (codepoint <= 0xffffu)
+    {
+      bytes[0] = (uint8_t)(0xe0u | (codepoint >> 12u));
+      bytes[1] = (uint8_t)(0x80u | ((codepoint >> 6u) & 0x3fu));
+      bytes[2] = (uint8_t)(0x80u | (codepoint & 0x3fu));
+      count = 3u;
+    }
+  else if (codepoint <= 0x10ffffu)
+    {
+      bytes[0] = (uint8_t)(0xf0u | (codepoint >> 18u));
+      bytes[1] = (uint8_t)(0x80u | ((codepoint >> 12u) & 0x3fu));
+      bytes[2] = (uint8_t)(0x80u | ((codepoint >> 6u) & 0x3fu));
+      bytes[3] = (uint8_t)(0x80u | (codepoint & 0x3fu));
+      count = 4u;
+    }
+  else
+    return 0;
+  if (*length > capacity || count > capacity - *length)
+    return 0;
+  for (index = 0; index < count; index++)
+    output[(*length)++] = (char)bytes[index];
+  return 1;
+}
+
+static int
+proxy_read_utf16_string (const uint8_t *data, size_t size,
+                         size_t *cursor, char **value)
+{
+  size_t start;
+  size_t end;
+  size_t units;
+  size_t output_capacity;
+  size_t output_length = 0;
+  size_t position;
+  char *output;
+  if (!data || !cursor || !value || *cursor > size)
+    return 0;
+  start = *cursor;
+  end = start;
+  while (end <= size && size - end >= 2u)
+    {
+      uint16_t unit;
+      if (!proxy_read_u16 (data, size, end, &unit))
+        return 0;
+      if (unit == 0u)
+        break;
+      end += 2u;
+    }
+  if (end > size || size - end < 2u)
+    return 0;
+  units = (end - start) / 2u;
+  if (units > MAX_PROXY_GRAPHIC_UTF16_UNITS
+      || units > (SIZE_MAX - 1u) / 4u)
+    return 0;
+  output_capacity = units * 4u;
+  output = (char *)malloc (output_capacity + 1u);
+  if (!output)
+    return 0;
+  position = start;
+  while (position < end)
+    {
+      uint16_t first;
+      uint32_t codepoint;
+      if (!proxy_read_u16 (data, size, position, &first))
+        goto invalid_string;
+      position += 2u;
+      if (first >= 0xd800u && first <= 0xdbffu)
+        {
+          uint16_t second;
+          if (position < end
+              && proxy_read_u16 (data, size, position, &second)
+              && second >= 0xdc00u && second <= 0xdfffu)
+            {
+              position += 2u;
+              codepoint = 0x10000u
+                          + (((uint32_t)first - 0xd800u) << 10u)
+                          + ((uint32_t)second - 0xdc00u);
+            }
+          else
+            codepoint = 0xfffdu;
+        }
+      else if (first >= 0xdc00u && first <= 0xdfffu)
+        codepoint = 0xfffdu;
+      else
+        codepoint = first;
+      if (!proxy_append_utf8 (
+              output, output_capacity, &output_length, codepoint))
+        goto invalid_string;
+    }
+  output[output_length] = '\0';
+  if (!proxy_align4 (end + 2u, cursor) || *cursor > size)
+    goto invalid_string;
+  *value = output;
+  return 1;
+
+invalid_string:
+  free (output);
+  return 0;
+}
+
+static double
+proxy_vector_length (const double vector[3])
+{
+  return sqrt (vector[0] * vector[0] + vector[1] * vector[1]
+               + vector[2] * vector[2]);
+}
+
+static int
+proxy_normalize_vector (double vector[3])
+{
+  double length = proxy_vector_length (vector);
+  size_t axis;
+  if (!isfinite (length) || length <= CURVE_EPSILON)
+    return 0;
+  for (axis = 0; axis < 3u; axis++)
+    vector[axis] /= length;
+  return 1;
+}
+
+static int
+ascii_case_equal (const char *left, const char *right)
+{
+  if (!left || !right)
+    return 0;
+  while (*left && *right)
+    {
+      unsigned char a = (unsigned char)*left++;
+      unsigned char b = (unsigned char)*right++;
+      if (a >= 'A' && a <= 'Z')
+        a = (unsigned char)(a + ('a' - 'A'));
+      if (b >= 'A' && b <= 'Z')
+        b = (unsigned char)(b + ('a' - 'A'));
+      if (a != b)
+        return 0;
+    }
+  return *left == '\0' && *right == '\0';
+}
+
+static uint32_t
+proxy_text_style_index (const CacheTables *tables, const char *typeface,
+                        const char *font, const char *bigfont)
+{
+  size_t index;
+  if (!tables)
+    return UINT32_MAX;
+  for (index = 0; index < tables->text_style_count; index++)
+    {
+      const TextStyleEntry *style = &tables->text_styles[index];
+      if ((font && font[0]
+           && ascii_case_equal (font, style->font_file))
+          || (bigfont && bigfont[0]
+              && ascii_case_equal (bigfont, style->bigfont_file))
+          || (typeface && typeface[0]
+              && ascii_case_equal (typeface, style->name)))
+        return (uint32_t)index;
+    }
+  return UINT32_MAX;
+}
+
+static int
+read_proxy_unicode_text2 (const Dwg_Object *object,
+                          const CacheTables *tables,
+                          const ProxyGraphicState *state,
+                          const ProxyGraphicChunk *chunk,
+                          uint64_t serialized_handle,
+                          TextSource *source)
+{
+  double insertion[3];
+  double normal[3];
+  double direction[3];
+  double local_y[3];
+  double transformed_x[3];
+  double transformed_y[3];
+  double transformed_normal[3];
+  double x_scale;
+  double y_scale;
+  uint32_t flags[9];
+  char *value = NULL;
+  char *typeface = NULL;
+  char *font = NULL;
+  char *bigfont = NULL;
+  size_t cursor = 0;
+  size_t index;
+  int result = 0;
+  if (!object || !tables || !state || !chunk || !source
+      || chunk->type != PROXY_GRAPHIC_UNICODE_TEXT2)
+    return 0;
+  memset (source, 0, sizeof (*source));
+  if (!proxy_read_vec3 (chunk->data, chunk->size, cursor, insertion))
+    goto done;
+  cursor += 3u * sizeof (double);
+  if (!proxy_read_vec3 (chunk->data, chunk->size, cursor, normal))
+    goto done;
+  cursor += 3u * sizeof (double);
+  if (!proxy_read_vec3 (chunk->data, chunk->size, cursor, direction))
+    goto done;
+  cursor += 3u * sizeof (double);
+  if (!proxy_read_utf16_string (
+          chunk->data, chunk->size, &cursor, &value)
+      || cursor > chunk->size || chunk->size - cursor < 8u)
+    goto done;
+  cursor += 8u;
+  if (!proxy_read_f64 (
+          chunk->data, chunk->size, cursor, &source->height)
+      || !proxy_read_f64 (
+          chunk->data, chunk->size, cursor + 8u,
+          &source->width_factor)
+      || !proxy_read_f64 (
+          chunk->data, chunk->size, cursor + 16u,
+          &source->oblique_angle)
+      || !isfinite (source->height)
+      || !isfinite (source->width_factor)
+      || !isfinite (source->oblique_angle))
+    goto done;
+  cursor += 4u * sizeof (double);
+  for (index = 0; index < 9u; index++)
+    if (!proxy_read_u32 (
+            chunk->data, chunk->size, cursor + index * 4u,
+            &flags[index]))
+      goto done;
+  cursor += 9u * sizeof (uint32_t);
+  if (!proxy_read_utf16_string (
+          chunk->data, chunk->size, &cursor, &typeface)
+      || !proxy_read_utf16_string (
+          chunk->data, chunk->size, &cursor, &font)
+      || !proxy_read_utf16_string (
+          chunk->data, chunk->size, &cursor, &bigfont))
+    goto done;
+
+  local_y[0] = normal[1] * direction[2] - normal[2] * direction[1];
+  local_y[1] = normal[2] * direction[0] - normal[0] * direction[2];
+  local_y[2] = normal[0] * direction[1] - normal[1] * direction[0];
+  proxy_transform_point (state, insertion, source->insertion_point);
+  proxy_transform_vector (state, direction, transformed_x);
+  proxy_transform_vector (state, local_y, transformed_y);
+  proxy_transform_vector (state, normal, transformed_normal);
+  x_scale = proxy_vector_length (transformed_x)
+            / fmax (proxy_vector_length (direction), CURVE_EPSILON);
+  y_scale = proxy_vector_length (transformed_y)
+            / fmax (proxy_vector_length (local_y), CURVE_EPSILON);
+  if (!isfinite (x_scale) || !isfinite (y_scale)
+      || x_scale <= CURVE_EPSILON || y_scale <= CURVE_EPSILON
+      || !proxy_normalize_vector (transformed_x)
+      || !proxy_normalize_vector (transformed_normal))
+    goto done;
+  memcpy (source->x_axis_direction, transformed_x,
+          sizeof (source->x_axis_direction));
+  memcpy (source->normal, transformed_normal, sizeof (source->normal));
+  source->height = fabs (source->height) * y_scale;
+  source->width_factor
+      = fabs (source->width_factor) * x_scale / y_scale;
+  if (!isfinite (source->height)
+      || source->height <= CURVE_EPSILON
+      || !isfinite (source->width_factor)
+      || source->width_factor <= CURVE_EPSILON)
+    goto done;
+  source->rotation
+      = atan2 (source->x_axis_direction[1],
+               source->x_axis_direction[0]);
+  source->object = object;
+  source->kind = 0u;
+  source->value = value;
+  value = NULL;
+  source->tag = strdup ("");
+  source->prompt = strdup ("");
+  if (!source->tag || !source->prompt)
+    goto done;
+  source->line_count = 1;
+  source->generation_flags
+      = (int16_t)((flags[0] ? 2u : 0u)
+                  | (flags[1] ? 4u : 0u));
+  source->linked_handle = (uint64_t)object->handle.value;
+  source->serialized_handle = serialized_handle;
+  source->common_color = state->color;
+  source->common_linetype_code = state->linetype_code;
+  source->common_line_weight = state->line_weight;
+  source->has_common_override = 1;
+  source->style_index_override
+      = proxy_text_style_index (tables, typeface, font, bigfont);
+  source->has_style_index_override = 1;
+  result = 1;
+
+done:
+  free (value);
+  free (typeface);
+  free (font);
+  free (bigfont);
+  if (!result)
+    free_text_source (source);
+  return result;
+}
+
+static uint64_t
+maximum_drawing_object_handle (const Dwg_Data *dwg)
+{
+  uint64_t maximum = 0;
+  size_t index;
+  if (!dwg)
+    return 0;
+  for (index = 0; index < (size_t)dwg->num_objects; index++)
+    if ((uint64_t)dwg->object[index].handle.value > maximum)
+      maximum = (uint64_t)dwg->object[index].handle.value;
+  return maximum;
+}
+
+typedef int (*TextSourceConsumer) (void *context,
+                                   const TextSource *source);
+
+static int
+scene_text_source_count (const Dwg_Data *dwg,
+                         const CacheTables *tables, uint64_t *count)
+{
+  uint64_t total = 0;
+  size_t object_index;
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    if (is_text_source_object (&dwg->object[object_index]))
+      total++;
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      const Dwg_Object *object = &dwg->object[object_index];
+      ProxyGraphicReader reader;
+      ProxyGraphicState state;
+      ProxyGraphicChunk chunk;
+      uint32_t entity_texts = 0;
+      int status;
+      if (!initialize_proxy_graphic_reader (object, &reader))
+        continue;
+      initialize_proxy_graphic_state (object, tables, &state);
+      while ((status = next_proxy_graphic_chunk (&reader, &chunk)) > 0)
+        {
+          int control = apply_proxy_graphic_control (&state, &chunk);
+          if (control < 0)
+            return 0;
+          if (control > 0
+              || chunk.type != PROXY_GRAPHIC_UNICODE_TEXT2)
+            continue;
+          if (entity_texts >= MAX_PROXY_GRAPHIC_TEXTS_PER_ENTITY
+              || total == UINT64_MAX)
+            return 0;
+          entity_texts++;
+          total++;
+        }
+      if (status < 0)
+        return 0;
+    }
+  *count = total;
+  return 1;
+}
+
+static int
+for_each_scene_text_source (const Dwg_Data *dwg,
+                            const CacheTables *tables,
+                            TextSourceConsumer consumer, void *context)
+{
+  uint64_t synthetic_handle;
+  size_t object_index;
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      TextSource source;
+      int accepted;
+      if (!is_text_source_object (&dwg->object[object_index]))
+        continue;
+      if (!read_text_source (dwg, &dwg->object[object_index], &source))
+        return 0;
+      accepted = !consumer || consumer (context, &source);
+      free_text_source (&source);
+      if (!accepted)
+        return 0;
+    }
+  synthetic_handle = maximum_drawing_object_handle (dwg);
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      const Dwg_Object *object = &dwg->object[object_index];
+      ProxyGraphicReader reader;
+      ProxyGraphicState state;
+      ProxyGraphicChunk chunk;
+      uint32_t entity_texts = 0;
+      int status;
+      if (!initialize_proxy_graphic_reader (object, &reader))
+        continue;
+      initialize_proxy_graphic_state (object, tables, &state);
+      while ((status = next_proxy_graphic_chunk (&reader, &chunk)) > 0)
+        {
+          TextSource source;
+          int accepted;
+          int control = apply_proxy_graphic_control (&state, &chunk);
+          if (control < 0)
+            return 0;
+          if (control > 0
+              || chunk.type != PROXY_GRAPHIC_UNICODE_TEXT2)
+            continue;
+          if (entity_texts >= MAX_PROXY_GRAPHIC_TEXTS_PER_ENTITY
+              || synthetic_handle == UINT64_MAX)
+            return 0;
+          synthetic_handle++;
+          if (!read_proxy_unicode_text2 (
+                  object, tables, &state, &chunk, synthetic_handle,
+                  &source))
+            return 0;
+          accepted = !consumer || consumer (context, &source);
+          free_text_source (&source);
+          if (!accepted)
+            return 0;
+          entity_texts++;
+        }
+      if (status < 0)
+        return 0;
+    }
+  return 1;
+}
+
+static int
+write_text_source_common (CacheWriter *writer, const TextSource *source,
+                          const CacheTables *tables)
+{
+  const Dwg_Object_Entity *entity;
+  if (!source->has_common_override)
+    return write_common (writer, source->object, tables);
+  entity = source->object ? source->object->tio.entity : NULL;
+  return write_u64 (writer, source->serialized_handle)
+         && write_u64 (writer, entity_owner_handle (entity, tables))
+         && write_u32 (writer, entity_layer_index (entity, tables))
+         && write_u32 (writer, source->common_color)
+         && write_i16 (writer, source->common_line_weight)
+         && write_u16 (
+             writer, entity && entity->invisible ? 1u : 0u)
+         && write_u32 (writer, source->common_linetype_code);
 }
 
 static int
@@ -4135,7 +5257,7 @@ viewport_layer_override_value (
   if (property == VIEWPORT_LAYER_OVERRIDE_LINETYPE)
     {
       uint32_t code = find_handle_index (
-          tables->linetype_codes, tables->linetype_count,
+          tables->linetype_codes, tables->linetype_code_count,
           (uint64_t)item->value.absref);
       if (code == UINT32_MAX || code > 2047u)
         return 0;
@@ -4265,191 +5387,200 @@ is_text_source_object (const Dwg_Object *object)
                                ->ctx.has_content_txt));
 }
 
+typedef struct
+{
+  uint64_t string_cursor;
+  uint32_t *references;
+  size_t row;
+} TextStringLayoutContext;
+
+static int
+layout_text_source_strings (void *context, const TextSource *source)
+{
+  TextStringLayoutContext *layout
+      = (TextStringLayoutContext *)context;
+  size_t row = layout->row;
+  if (!checked_string_layout (
+          &layout->string_cursor, source->value,
+          &layout->references[row * 6u],
+          &layout->references[row * 6u + 1u])
+      || !checked_string_layout (
+          &layout->string_cursor, source->tag,
+          &layout->references[row * 6u + 2u],
+          &layout->references[row * 6u + 3u])
+      || !checked_string_layout (
+          &layout->string_cursor, source->prompt,
+          &layout->references[row * 6u + 4u],
+          &layout->references[row * 6u + 5u]))
+    return 0;
+  layout->row++;
+  return 1;
+}
+
+typedef struct
+{
+  CacheWriter *writer;
+  const CacheTables *tables;
+  const uint32_t *references;
+  uint64_t first_column_height;
+  size_t row;
+} TextRecordWriterContext;
+
+static int
+write_text_source_record (void *context, const TextSource *source)
+{
+  TextRecordWriterContext *records
+      = (TextRecordWriterContext *)context;
+  CacheWriter *writer = records->writer;
+  uint32_t style_index
+      = source->has_style_index_override
+            ? source->style_index_override
+            : find_handle_index (
+                  records->tables->text_style_indices,
+                  records->tables->text_style_count,
+                  reference_handle (source->style));
+  size_t index;
+  if (UINT64_MAX - records->first_column_height
+      < source->column_height_count)
+    return 0;
+  if (!write_text_source_common (writer, source, records->tables)
+      || !write_u16 (writer, source->kind)
+      || !write_u16 (writer, source->flags)
+      || !write_u32 (writer, style_index))
+    return 0;
+  for (index = 0; index < 6u; index++)
+    if (!write_u32 (
+            writer, records->references[records->row * 6u + index]))
+      return 0;
+  if (!write_u64 (writer, source->linked_handle)
+      || !write_vec3 (writer, source->insertion_point)
+      || !write_vec3 (writer, source->alignment_point)
+      || !write_vec3 (writer, source->normal)
+      || !write_vec3 (writer, source->x_axis_direction)
+      || !write_f64 (writer, source->height)
+      || !write_f64 (writer, source->width_factor)
+      || !write_f64 (writer, source->rotation)
+      || !write_f64 (writer, source->oblique_angle)
+      || !write_f64 (writer, source->thickness)
+      || !write_f64 (writer, source->rectangle_width)
+      || !write_f64 (writer, source->rectangle_height)
+      || !write_f64 (writer, source->extents_width)
+      || !write_f64 (writer, source->extents_height)
+      || !write_f64 (writer, source->line_spacing_factor)
+      || !write_f64 (writer, source->background_scale)
+      || !write_u32 (writer, source->background_color)
+      || !write_i32 (writer, source->background_transparency)
+      || !write_i32 (writer, source->background_flags)
+      || !write_i32 (writer, source->source_flags)
+      || !write_i16 (writer, source->horizontal_alignment)
+      || !write_i16 (writer, source->vertical_alignment)
+      || !write_i16 (writer, source->attachment)
+      || !write_i16 (writer, source->flow_direction)
+      || !write_i16 (writer, source->line_spacing_style)
+      || !write_i16 (writer, source->generation_flags)
+      || !write_i16 (writer, source->field_length)
+      || !write_i16 (writer, source->mtext_type)
+      || !write_i32 (writer, source->line_count)
+      || !write_i32 (writer, source->column_type)
+      || !write_i32 (writer, source->column_count)
+      || !write_u32 (writer, source->column_flags)
+      || !write_f64 (writer, source->column_width)
+      || !write_f64 (writer, source->column_gutter)
+      || !write_u64 (writer, records->first_column_height)
+      || !write_u64 (writer, source->column_height_count))
+    return 0;
+  records->first_column_height += source->column_height_count;
+  records->row++;
+  return 1;
+}
+
+static int
+write_text_source_strings (void *context, const TextSource *source)
+{
+  CacheWriter *writer = (CacheWriter *)context;
+  return write_bytes (writer, source->value, strlen (source->value))
+         && write_bytes (writer, source->tag, strlen (source->tag))
+         && write_bytes (
+             writer, source->prompt, strlen (source->prompt));
+}
+
 static int
 write_text_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
                            const CacheTables *tables, SectionEntry *entry)
 {
+  TextStringLayoutContext layout;
+  TextRecordWriterContext records;
   uint64_t offset;
-  uint64_t text_count = 0;
-  uint64_t string_cursor = 0;
+  uint64_t text_count;
   uint64_t string_offset;
-  uint64_t first_column_height = 0;
-  uint32_t *references;
-  size_t i;
-  size_t row_index = 0;
-  for (i = 0; i < (size_t)dwg->num_objects; i++)
+  uint32_t *references = NULL;
+  int success = 0;
+  if (!scene_text_source_count (dwg, tables, &text_count))
     {
-      if (is_text_source_object (&dwg->object[i]))
-        text_count++;
+      set_error (writer, "cannot count source or proxy text");
+      return 0;
     }
-  if (text_count > SIZE_MAX / (6 * sizeof (uint32_t))
+  if (text_count > SIZE_MAX / (6u * sizeof (uint32_t))
       || text_count > UINT32_MAX)
     {
       set_error (writer, "too many text entities for scene cache");
-      return 0;
+      goto done;
     }
   references
       = text_count
-            ? (uint32_t *)malloc ((size_t)text_count * 6
+            ? (uint32_t *)malloc ((size_t)text_count * 6u
                                  * sizeof (uint32_t))
             : NULL;
   if (text_count && !references)
     {
       set_error (writer, "out of memory while writing source text");
-      return 0;
+      goto done;
     }
-
-  for (i = 0; i < (size_t)dwg->num_objects; i++)
+  memset (&layout, 0, sizeof (layout));
+  layout.references = references;
+  if (!for_each_scene_text_source (
+          dwg, tables, layout_text_source_strings, &layout)
+      || layout.row != (size_t)text_count)
     {
-      TextSource source;
-      if (!is_text_source_object (&dwg->object[i]))
-        continue;
-      if (!read_text_source (dwg, &dwg->object[i], &source))
-        {
-          free (references);
-          set_error (writer, "cannot decode source text as UTF-8");
-          return 0;
-        }
-      if (!checked_string_layout (
-              &string_cursor, source.value, &references[row_index * 6],
-              &references[row_index * 6 + 1])
-          || !checked_string_layout (
-              &string_cursor, source.tag, &references[row_index * 6 + 2],
-              &references[row_index * 6 + 3])
-          || !checked_string_layout (
-              &string_cursor, source.prompt,
-              &references[row_index * 6 + 4],
-              &references[row_index * 6 + 5]))
-        {
-          free_text_source (&source);
-          free (references);
-          set_error (writer, "text string table exceeds its limits");
-          return 0;
-        }
-      free_text_source (&source);
-      row_index++;
+      set_error (writer, "text string table exceeds its limits");
+      goto done;
     }
 
   string_offset
-      = STRING_TABLE_HEADER_SIZE + text_count * TEXT_ENTITY_RECORD_SIZE;
+      = STRING_TABLE_HEADER_SIZE
+        + text_count * TEXT_ENTITY_RECORD_SIZE;
   if (!align_writer (writer, &offset)
       || !write_u32 (writer, (uint32_t)text_count)
       || !write_u32 (writer, TEXT_ENTITY_RECORD_SIZE)
       || !write_u64 (writer, string_offset))
+    goto done;
+  memset (&records, 0, sizeof (records));
+  records.writer = writer;
+  records.tables = tables;
+  records.references = references;
+  if (!for_each_scene_text_source (
+          dwg, tables, write_text_source_record, &records)
+      || records.row != (size_t)text_count)
     {
-      free (references);
-      return 0;
+      if (!writer->failed)
+        set_error (writer, "cannot serialize source or proxy text");
+      goto done;
     }
-
-  row_index = 0;
-  for (i = 0; i < (size_t)dwg->num_objects; i++)
+  if (!for_each_scene_text_source (
+          dwg, tables, write_text_source_strings, writer))
     {
-      TextSource source;
-      uint32_t style_index;
-      size_t j;
-      if (!is_text_source_object (&dwg->object[i]))
-        continue;
-      if (!read_text_source (dwg, &dwg->object[i], &source))
-        {
-          free (references);
-          set_error (writer, "cannot decode source text as UTF-8");
-          return 0;
-        }
-      style_index = find_handle_index (
-          tables->text_style_indices, tables->text_style_count,
-          reference_handle (source.style));
-      if (!write_common (writer, source.object, tables)
-          || !write_u16 (writer, source.kind)
-          || !write_u16 (writer, source.flags)
-          || !write_u32 (writer, style_index))
-        goto text_row_failed;
-      for (j = 0; j < 6; j++)
-        {
-          if (!write_u32 (writer, references[row_index * 6 + j]))
-            goto text_row_failed;
-        }
-      if (!write_u64 (writer, source.linked_handle)
-          || !write_vec3 (writer, source.insertion_point)
-          || !write_vec3 (writer, source.alignment_point)
-          || !write_vec3 (writer, source.normal)
-          || !write_vec3 (writer, source.x_axis_direction)
-          || !write_f64 (writer, source.height)
-          || !write_f64 (writer, source.width_factor)
-          || !write_f64 (writer, source.rotation)
-          || !write_f64 (writer, source.oblique_angle)
-          || !write_f64 (writer, source.thickness)
-          || !write_f64 (writer, source.rectangle_width)
-          || !write_f64 (writer, source.rectangle_height)
-          || !write_f64 (writer, source.extents_width)
-          || !write_f64 (writer, source.extents_height)
-          || !write_f64 (writer, source.line_spacing_factor)
-          || !write_f64 (writer, source.background_scale)
-          || !write_u32 (writer, source.background_color)
-          || !write_i32 (writer, source.background_transparency)
-          || !write_i32 (writer, source.background_flags)
-          || !write_i32 (writer, source.source_flags)
-          || !write_i16 (writer, source.horizontal_alignment)
-          || !write_i16 (writer, source.vertical_alignment)
-          || !write_i16 (writer, source.attachment)
-          || !write_i16 (writer, source.flow_direction)
-          || !write_i16 (writer, source.line_spacing_style)
-          || !write_i16 (writer, source.generation_flags)
-          || !write_i16 (writer, source.field_length)
-          || !write_i16 (writer, source.mtext_type)
-          || !write_i32 (writer, source.line_count)
-          || !write_i32 (writer, source.column_type)
-          || !write_i32 (writer, source.column_count)
-          || !write_u32 (writer, source.column_flags)
-          || !write_f64 (writer, source.column_width)
-          || !write_f64 (writer, source.column_gutter)
-          || !write_u64 (writer, first_column_height)
-          || !write_u64 (writer, source.column_height_count))
-        goto text_row_failed;
-      if (UINT64_MAX - first_column_height
-          < source.column_height_count)
-        {
-          free_text_source (&source);
-          free (references);
-          set_error (writer, "text column-height range overflow");
-          return 0;
-        }
-      first_column_height += source.column_height_count;
-      free_text_source (&source);
-      row_index++;
-      continue;
-
-    text_row_failed:
-      free_text_source (&source);
-      free (references);
-      return 0;
+      if (!writer->failed)
+        set_error (writer, "cannot serialize source or proxy text strings");
+      goto done;
     }
-
-  for (i = 0; i < (size_t)dwg->num_objects; i++)
-    {
-      TextSource source;
-      if (!is_text_source_object (&dwg->object[i]))
-        continue;
-      if (!read_text_source (dwg, &dwg->object[i], &source))
-        {
-          free (references);
-          set_error (writer, "cannot decode source text as UTF-8");
-          return 0;
-        }
-      if (!write_bytes (writer, source.value, strlen (source.value))
-          || !write_bytes (writer, source.tag, strlen (source.tag))
-          || !write_bytes (writer, source.prompt,
-                           strlen (source.prompt)))
-        {
-          free_text_source (&source);
-          free (references);
-          return 0;
-        }
-      free_text_source (&source);
-    }
-  free (references);
-  return finish_variable_section (
+  success = finish_variable_section (
       writer, entry, SECTION_TEXT_ENTITIES, TEXT_ENTITY_RECORD_SIZE,
-      "text_entities", offset, text_count, SECTION_FLAG_STRING_TABLE);
+      "text_entities", offset, text_count,
+      SECTION_FLAG_STRING_TABLE);
+
+done:
+  free (references);
+  return success;
 }
 
 static int
@@ -5451,6 +6582,75 @@ initialize_entity_segment (const Dwg_Object *object,
 }
 
 static int
+iterate_proxy_graphic_segments (const Dwg_Object *object,
+                                const CacheTables *tables,
+                                SegmentIteration *iteration)
+{
+  ProxyGraphicReader reader;
+  ProxyGraphicState state;
+  ProxyGraphicChunk chunk;
+  LineSegment base;
+  uint64_t generated = 0;
+  int status;
+  if (!initialize_proxy_graphic_reader (object, &reader)
+      || !initialize_entity_segment (object, tables, 0u, 0, &base))
+    return 1;
+  initialize_proxy_graphic_state (object, tables, &state);
+  while ((status = next_proxy_graphic_chunk (&reader, &chunk)) > 0)
+    {
+      uint32_t vertex_count;
+      uint32_t edge_count;
+      uint32_t edge_index;
+      int control = apply_proxy_graphic_control (&state, &chunk);
+      if (control < 0)
+        return 1;
+      if (control > 0
+          || !proxy_polyline_vertex_count (&chunk, &vertex_count)
+          || vertex_count < 2u)
+        continue;
+      edge_count = vertex_count - 1u;
+      if (chunk.type == PROXY_GRAPHIC_POLYGON)
+        edge_count++;
+      for (edge_index = 0; edge_index < edge_count; edge_index++)
+        {
+          uint32_t start_index = edge_index;
+          uint32_t end_index = edge_index + 1u;
+          double local_start[3];
+          double local_end[3];
+          LineSegment segment = base;
+          if (generated >= MAX_PROXY_GRAPHIC_SEGMENTS_PER_ENTITY)
+            return 1;
+          if (end_index == vertex_count)
+            end_index = 0u;
+          if (!proxy_read_vec3 (
+                  chunk.data, chunk.size,
+                  4u + (size_t)start_index * 3u * sizeof (double),
+                  local_start)
+              || !proxy_read_vec3 (
+                  chunk.data, chunk.size,
+                  4u + (size_t)end_index * 3u * sizeof (double),
+                  local_end))
+            {
+              segment_iteration_reject (iteration);
+              continue;
+            }
+          proxy_transform_point (&state, local_start, segment.start);
+          proxy_transform_point (&state, local_end, segment.end);
+          segment.color = state.color;
+          segment.line_weight = state.line_weight;
+          segment.linetype_code
+              = state.linetype_code <= GPU_STYLE_LINETYPE_MASK
+                    ? (uint16_t)state.linetype_code
+                    : base.linetype_code;
+          if (!segment_iteration_emit (iteration, &segment))
+            return 0;
+          generated++;
+        }
+    }
+  return status >= 0;
+}
+
+static int
 line_segment_from_object (const Dwg_Object *object,
                           const CacheTables *tables, LineSegment *segment)
 {
@@ -5484,12 +6684,13 @@ finite_point3 (const BITCODE_3BD point)
 }
 
 static int
-xline_segment_from_object (const Dwg_Data *dwg,
-                           const Dwg_Object *object,
-                           const CacheTables *tables,
-                           LineSegment *segment)
+construction_line_segment_from_object (const Dwg_Data *dwg,
+                                       const Dwg_Object *object,
+                                       const CacheTables *tables,
+                                       LineSegment *segment)
 {
-  const Dwg_Entity_XLINE *xline;
+  const Dwg_Entity_RAY *line;
+  int is_ray;
   double bounds_min[2];
   double bounds_max[2];
   double direction[3];
@@ -5497,18 +6698,29 @@ xline_segment_from_object (const Dwg_Data *dwg,
   double t_max = DBL_MAX;
   double length;
   size_t axis;
-  if (!dwg || !object || object->fixedtype != DWG_TYPE_XLINE
-      || !object->tio.entity
-      || !(xline = object->tio.entity->tio.XLINE))
+  if (!dwg || !object || !object->tio.entity)
     return 0;
-  if (!finite_point3 (xline->point) || !finite_point3 (xline->vector))
+  if (object->fixedtype == DWG_TYPE_XLINE)
+    {
+      line = object->tio.entity->tio.XLINE;
+      is_ray = 0;
+    }
+  else if (object->fixedtype == DWG_TYPE_RAY)
+    {
+      line = object->tio.entity->tio.RAY;
+      is_ray = 1;
+    }
+  else
+    return 0;
+  if (!line || !finite_point3 (line->point)
+      || !finite_point3 (line->vector))
     return -1;
-  length = hypot (xline->vector.x, xline->vector.y);
+  length = hypot (line->vector.x, line->vector.y);
   if (!isfinite (length) || length <= 1.0e-12)
     return -1;
-  direction[0] = xline->vector.x / length;
-  direction[1] = xline->vector.y / length;
-  direction[2] = xline->vector.z / length;
+  direction[0] = line->vector.x / length;
+  direction[1] = line->vector.y / length;
+  direction[2] = line->vector.z / length;
   bounds_min[0] = fmin (dwg->header_vars.EXTMIN.x,
                         dwg->header_vars.EXTMAX.x);
   bounds_min[1] = fmin (dwg->header_vars.EXTMIN.y,
@@ -5522,25 +6734,25 @@ xline_segment_from_object (const Dwg_Data *dwg,
       || bounds_max[0] - bounds_min[0] <= 1.0e-9
       || bounds_max[1] - bounds_min[1] <= 1.0e-9)
     {
-      bounds_min[0] = xline->point.x - 1000.0;
-      bounds_min[1] = xline->point.y - 1000.0;
-      bounds_max[0] = xline->point.x + 1000.0;
-      bounds_max[1] = xline->point.y + 1000.0;
+      bounds_min[0] = line->point.x - 1000.0;
+      bounds_min[1] = line->point.y - 1000.0;
+      bounds_max[0] = line->point.x + 1000.0;
+      bounds_max[1] = line->point.y + 1000.0;
     }
   else
     {
       double padding = fmax (bounds_max[0] - bounds_min[0],
                              bounds_max[1] - bounds_min[1])
                        * 0.01;
-      bounds_min[0] = fmin (bounds_min[0], xline->point.x) - padding;
-      bounds_min[1] = fmin (bounds_min[1], xline->point.y) - padding;
-      bounds_max[0] = fmax (bounds_max[0], xline->point.x) + padding;
-      bounds_max[1] = fmax (bounds_max[1], xline->point.y) + padding;
+      bounds_min[0] = fmin (bounds_min[0], line->point.x) - padding;
+      bounds_min[1] = fmin (bounds_min[1], line->point.y) - padding;
+      bounds_max[0] = fmax (bounds_max[0], line->point.x) + padding;
+      bounds_max[1] = fmax (bounds_max[1], line->point.y) + padding;
     }
   for (axis = 0; axis < 2; axis++)
     {
       double coordinate
-          = axis == 0 ? xline->point.x : xline->point.y;
+          = axis == 0 ? line->point.x : line->point.y;
       if (fabs (direction[axis]) <= 1.0e-12)
         {
           if (coordinate < bounds_min[axis]
@@ -5563,15 +6775,18 @@ xline_segment_from_object (const Dwg_Data *dwg,
             return -1;
         }
     }
+  if (is_ray && t_min < 0.0)
+    t_min = 0.0;
   if (!isfinite (t_min) || !isfinite (t_max)
+      || t_min > t_max
       || !initialize_entity_segment (object, tables, 9u, 0, segment))
     return -1;
-  segment->start[0] = xline->point.x + direction[0] * t_min;
-  segment->start[1] = xline->point.y + direction[1] * t_min;
-  segment->start[2] = xline->point.z + direction[2] * t_min;
-  segment->end[0] = xline->point.x + direction[0] * t_max;
-  segment->end[1] = xline->point.y + direction[1] * t_max;
-  segment->end[2] = xline->point.z + direction[2] * t_max;
+  segment->start[0] = line->point.x + direction[0] * t_min;
+  segment->start[1] = line->point.y + direction[1] * t_min;
+  segment->start[2] = line->point.z + direction[2] * t_min;
+  segment->end[0] = line->point.x + direction[0] * t_max;
+  segment->end[1] = line->point.y + direction[1] * t_max;
+  segment->end[2] = line->point.z + direction[2] * t_max;
   return 1;
 }
 
@@ -5596,7 +6811,7 @@ apply_mleader_line_style (const Dwg_Entity_MULTILEADER *mleader,
   if ((mleader->flags & 4u) != 0u)
     {
       linetype_code = find_handle_index (
-          tables->linetype_codes, tables->linetype_count,
+          tables->linetype_codes, tables->linetype_code_count,
           reference_handle (mleader->line_ltype));
       if (linetype_code != UINT32_MAX)
         segment->linetype_code = (uint16_t)linetype_code;
@@ -5614,7 +6829,7 @@ apply_mleader_line_style (const Dwg_Entity_MULTILEADER *mleader,
   if ((line->flags & 4u) != 0u)
     {
       linetype_code = find_handle_index (
-          tables->linetype_codes, tables->linetype_count,
+          tables->linetype_codes, tables->linetype_code_count,
           reference_handle (line->ltype));
       if (linetype_code != UINT32_MAX)
         segment->linetype_code = (uint16_t)linetype_code;
@@ -5935,6 +7150,454 @@ read_embedded_ole_f64 (const uint8_t *bytes, double *value)
   return isfinite (*value);
 }
 
+enum
+{
+  EMBEDDED_IMAGE_MIME_BMP = 1u,
+  EMBEDDED_IMAGE_MIME_EMF = 2u,
+  EMBEDDED_IMAGE_FLAG_SOURCE_BMP = 1u,
+  EMBEDDED_IMAGE_FLAG_SOURCE_EMF = (1u << 1)
+};
+
+typedef struct
+{
+  const Dwg_Object *object;
+  const uint8_t *bmp;
+  const uint8_t *bmi;
+  const uint8_t *bits;
+  uint8_t *owned_payload;
+  uint32_t bmp_length;
+  uint32_t bmi_length;
+  uint32_t bits_length;
+  uint32_t width;
+  uint32_t height;
+  uint32_t mime_type;
+  uint32_t flags;
+  uint64_t payload_offset;
+  uint64_t payload_length;
+} EmbeddedImagePreview;
+
+typedef struct
+{
+  EmbeddedImagePreview *items;
+  size_t count;
+  size_t available_count;
+  size_t source_image_count;
+  uint64_t byte_length;
+} EmbeddedImageTable;
+
+static int
+validate_embedded_emf (const uint8_t *data, size_t size,
+                       uint32_t *width, uint32_t *height)
+{
+  uint32_t header_type;
+  uint32_t header_size;
+  uint32_t signature;
+  uint32_t declared_size;
+  uint32_t declared_records;
+  int32_t left;
+  int32_t top;
+  int32_t right;
+  int32_t bottom;
+  int64_t signed_width;
+  int64_t signed_height;
+  uint64_t pixels;
+  size_t cursor = 0;
+  uint32_t record_count = 0;
+  uint32_t last_type = 0;
+  if (!data || !width || !height || size < 88u
+      || size > MAX_EMBEDDED_IMAGE_BYTES_PER_RECORD
+      || !proxy_read_u32 (data, size, 0, &header_type)
+      || !proxy_read_u32 (data, size, 4, &header_size)
+      || !proxy_read_i32 (data, size, 8, &left)
+      || !proxy_read_i32 (data, size, 12, &top)
+      || !proxy_read_i32 (data, size, 16, &right)
+      || !proxy_read_i32 (data, size, 20, &bottom)
+      || !proxy_read_u32 (data, size, 40, &signature)
+      || !proxy_read_u32 (data, size, 48, &declared_size)
+      || !proxy_read_u32 (data, size, 52, &declared_records)
+      || header_type != 1u || header_size < 88u
+      || (header_size & 3u) != 0u || header_size > size
+      || signature != 0x464d4520u || declared_size != size
+      || declared_records < 2u
+      || declared_records > MAX_EMBEDDED_EMF_RECORDS)
+    return 0;
+  signed_width = (int64_t)right - left;
+  signed_height = (int64_t)bottom - top;
+  if (signed_width <= 0 || signed_height <= 0
+      || signed_width > UINT32_MAX || signed_height > UINT32_MAX)
+    return 0;
+  pixels = (uint64_t)signed_width * (uint64_t)signed_height;
+  if (!pixels || pixels > MAX_EMBEDDED_IMAGE_PIXELS)
+    return 0;
+  while (cursor < size)
+    {
+      uint32_t record_type;
+      uint32_t record_size;
+      if (record_count >= MAX_EMBEDDED_EMF_RECORDS
+          || size - cursor < 8u
+          || !proxy_read_u32 (
+              data + cursor, size - cursor, 0, &record_type)
+          || !proxy_read_u32 (
+              data + cursor, size - cursor, 4, &record_size)
+          || record_size < 8u || (record_size & 3u) != 0u
+          || record_size > size - cursor
+          || (record_count == 0u && record_type != 1u))
+        return 0;
+      last_type = record_type;
+      cursor += record_size;
+      record_count++;
+    }
+  if (cursor != size || last_type != 14u
+      || record_count != declared_records)
+    return 0;
+  *width = (uint32_t)signed_width;
+  *height = (uint32_t)signed_height;
+  return 1;
+}
+
+static int
+wmfc_header (const uint8_t *data, size_t size, size_t offset,
+             uint32_t *chunk_count, uint32_t *chunk_size,
+             uint32_t *remaining_size, uint32_t *total_size)
+{
+  uint32_t identifier;
+  uint32_t comment_type;
+  uint32_t version;
+  uint32_t flags;
+  if (!data || offset > size || size - offset < WMFC_HEADER_SIZE
+      || !proxy_read_u32 (data + offset, size - offset, 0, &identifier)
+      || !proxy_read_u32 (
+          data + offset, size - offset, 4, &comment_type)
+      || !proxy_read_u32 (data + offset, size - offset, 8, &version)
+      || !proxy_read_u32 (data + offset, size - offset, 14, &flags)
+      || !proxy_read_u32 (
+          data + offset, size - offset, 18, chunk_count)
+      || !proxy_read_u32 (
+          data + offset, size - offset, 22, chunk_size)
+      || !proxy_read_u32 (
+          data + offset, size - offset, 26, remaining_size)
+      || !proxy_read_u32 (
+          data + offset, size - offset, 30, total_size)
+      || identifier != 0x43464d57u || comment_type != 1u
+      || version != 0x00010000u || flags != 0u)
+    return 0;
+  return 1;
+}
+
+static int
+reconstruct_wmfc_emf (const uint8_t *data, size_t size,
+                      uint8_t **payload, uint32_t *payload_length,
+                      uint32_t *width, uint32_t *height)
+{
+  size_t search_cursor = 0;
+  if (!data || !payload || !payload_length || !width || !height)
+    return 0;
+  while (search_cursor + WMFC_HEADER_SIZE <= size)
+    {
+      const uint8_t *found = (const uint8_t *)memchr (
+          data + search_cursor, 'W', size - search_cursor);
+      size_t offset;
+      uint32_t expected_chunks;
+      uint32_t chunk_size;
+      uint32_t remaining_size;
+      uint32_t total_size;
+      uint8_t *candidate;
+      uint32_t copied = 0;
+      uint32_t chunk_index;
+      size_t chunk_offset;
+      int valid = 1;
+      if (!found)
+        break;
+      offset = (size_t)(found - data);
+      search_cursor = offset + 1u;
+      if (!wmfc_header (
+              data, size, offset, &expected_chunks, &chunk_size,
+              &remaining_size, &total_size)
+          || expected_chunks == 0u
+          || expected_chunks > MAX_EMBEDDED_WMFC_CHUNKS
+          || total_size < 88u
+          || total_size > MAX_EMBEDDED_IMAGE_BYTES_PER_RECORD
+          || chunk_size == 0u || chunk_size > total_size
+          || remaining_size != total_size - chunk_size
+          || offset > size - WMFC_HEADER_SIZE
+          || chunk_size > size - offset - WMFC_HEADER_SIZE)
+        continue;
+      candidate = (uint8_t *)malloc (total_size);
+      if (!candidate)
+        return 0;
+      chunk_offset = offset;
+      for (chunk_index = 0; chunk_index < expected_chunks;
+           chunk_index++)
+        {
+          uint32_t current_chunks;
+          uint32_t current_chunk_size;
+          uint32_t current_remaining_size;
+          uint32_t current_total_size;
+          if (!wmfc_header (
+                  data, size, chunk_offset, &current_chunks,
+                  &current_chunk_size, &current_remaining_size,
+                  &current_total_size)
+              || current_chunks != expected_chunks
+              || current_total_size != total_size
+              || current_chunk_size == 0u
+              || current_chunk_size > total_size - copied
+              || current_remaining_size
+                     != total_size - copied - current_chunk_size
+              || chunk_offset > size - WMFC_HEADER_SIZE
+              || current_chunk_size
+                     > size - chunk_offset - WMFC_HEADER_SIZE)
+            {
+              valid = 0;
+              break;
+            }
+          memcpy (
+              candidate + copied,
+              data + chunk_offset + WMFC_HEADER_SIZE,
+              current_chunk_size);
+          copied += current_chunk_size;
+          if (chunk_index + 1u < expected_chunks)
+            {
+              size_t padded_chunk_size
+                  = (size_t)current_chunk_size
+                    + (current_chunk_size & 1u);
+              if (chunk_offset
+                      > SIZE_MAX - WMFC_HEADER_SIZE
+                                      - padded_chunk_size
+                                      - WMFC_RECORD_PREFIX_SIZE)
+                {
+                  valid = 0;
+                  break;
+                }
+              chunk_offset += WMFC_HEADER_SIZE + padded_chunk_size
+                              + WMFC_RECORD_PREFIX_SIZE;
+            }
+        }
+      if (valid && copied == total_size
+          && validate_embedded_emf (
+              candidate, total_size, width, height))
+        {
+          *payload = candidate;
+          *payload_length = total_size;
+          return 1;
+        }
+      free (candidate);
+    }
+  return 0;
+}
+
+static int
+validate_embedded_dib (const uint8_t *data, size_t size,
+                       uint32_t *width, uint32_t *height,
+                       uint16_t *bits_per_pixel)
+{
+  uint32_t header_size;
+  uint32_t compression;
+  uint16_t planes;
+  uint16_t depth;
+  int32_t signed_width;
+  int32_t signed_height;
+  uint64_t pixels;
+  if (!data || size < 40u
+      || !proxy_read_u32 (data, size, 0, &header_size)
+      || header_size < 40u || header_size > size
+      || !proxy_read_i32 (data, size, 4, &signed_width)
+      || !proxy_read_i32 (data, size, 8, &signed_height)
+      || !proxy_read_u16 (data, size, 12, &planes)
+      || !proxy_read_u16 (data, size, 14, &depth)
+      || !proxy_read_u32 (data, size, 16, &compression)
+      || signed_width <= 0 || signed_height == 0
+      || signed_height == INT32_MIN || planes != 1u
+      || (depth != 1u && depth != 4u && depth != 8u
+          && depth != 16u && depth != 24u && depth != 32u)
+      || (compression != 0u && compression != 3u)
+      || (compression == 3u && depth != 16u && depth != 32u))
+    return 0;
+  pixels = (uint64_t)(uint32_t)signed_width
+           * (uint64_t)(signed_height < 0 ? -signed_height
+                                          : signed_height);
+  if (!pixels || pixels > MAX_EMBEDDED_IMAGE_PIXELS)
+    return 0;
+  *width = (uint32_t)signed_width;
+  *height = (uint32_t)(signed_height < 0 ? -signed_height
+                                         : signed_height);
+  *bits_per_pixel = depth;
+  return 1;
+}
+
+static int
+validate_embedded_bmp (const uint8_t *data, size_t size,
+                       uint32_t *byte_length, uint32_t *width,
+                       uint32_t *height, uint16_t *bits_per_pixel)
+{
+  uint32_t file_size;
+  uint32_t pixel_offset;
+  uint32_t dib_size;
+  if (!data || size < 54u || data[0] != 'B' || data[1] != 'M'
+      || !proxy_read_u32 (data, size, 2, &file_size)
+      || !proxy_read_u32 (data, size, 10, &pixel_offset)
+      || !proxy_read_u32 (data, size, 14, &dib_size)
+      || file_size < 54u || file_size > size
+      || file_size > MAX_EMBEDDED_IMAGE_BYTES_PER_RECORD
+      || dib_size < 40u || dib_size > file_size - 14u
+      || pixel_offset < 14u + dib_size || pixel_offset >= file_size
+      || !validate_embedded_dib (
+          data + 14u, file_size - 14u, width, height,
+          bits_per_pixel))
+    return 0;
+  *byte_length = file_size;
+  return 1;
+}
+
+static int
+embedded_image_candidate_is_better (
+    uint32_t width, uint32_t height, uint16_t depth,
+    uint32_t byte_length, uint32_t best_width, uint32_t best_height,
+    uint16_t best_depth, uint32_t best_byte_length)
+{
+  uint64_t pixels = (uint64_t)width * height;
+  uint64_t best_pixels = (uint64_t)best_width * best_height;
+  return pixels > best_pixels
+         || (pixels == best_pixels && depth > best_depth)
+         || (pixels == best_pixels && depth == best_depth
+             && byte_length > best_byte_length);
+}
+
+static int
+select_embedded_ole_preview (const Dwg_Object *object,
+                             EmbeddedImagePreview *preview)
+{
+  const Dwg_Entity_OLE2FRAME *frame;
+  const uint8_t *data;
+  size_t size;
+  size_t cursor;
+  const uint8_t *best_bmp = NULL;
+  uint32_t best_bmp_length = 0;
+  uint32_t best_width = 0;
+  uint32_t best_height = 0;
+  uint16_t best_depth = 0;
+  if (!object || !preview || object->fixedtype != DWG_TYPE_OLE2FRAME
+      || !object->tio.entity
+      || !(frame = object->tio.entity->tio.OLE2FRAME)
+      || !frame->data || frame->data_size < 54u)
+    return 0;
+  data = frame->data;
+  size = (size_t)frame->data_size;
+  if (size > MAX_EMBEDDED_IMAGE_SCAN_BYTES)
+    size = MAX_EMBEDDED_IMAGE_SCAN_BYTES;
+
+  cursor = 0;
+  while (cursor + 54u <= size)
+    {
+      const uint8_t *found
+          = (const uint8_t *)memchr (data + cursor, 'B', size - cursor);
+      uint32_t length;
+      uint32_t width;
+      uint32_t height;
+      uint16_t depth;
+      size_t offset;
+      if (!found)
+        break;
+      offset = (size_t)(found - data);
+      if (offset + 54u <= size && found[1] == 'M'
+          && validate_embedded_bmp (
+              found, size - offset, &length, &width, &height, &depth)
+          && embedded_image_candidate_is_better (
+              width, height, depth, length, best_width, best_height,
+              best_depth, best_bmp_length))
+        {
+          best_bmp = found;
+          best_bmp_length = length;
+          best_width = width;
+          best_height = height;
+          best_depth = depth;
+        }
+      cursor = offset + 1u;
+    }
+  if (best_bmp)
+    {
+      preview->bmp = best_bmp;
+      preview->bmp_length = best_bmp_length;
+      preview->width = best_width;
+      preview->height = best_height;
+      preview->mime_type = EMBEDDED_IMAGE_MIME_BMP;
+      preview->flags = EMBEDDED_IMAGE_FLAG_SOURCE_BMP;
+      preview->payload_length = best_bmp_length;
+      return 1;
+    }
+
+  cursor = 0;
+  while (cursor + 80u <= size)
+    {
+      const uint8_t *found
+          = (const uint8_t *)memchr (data + cursor, 81, size - cursor);
+      uint32_t record_size;
+      uint32_t bmi_offset;
+      uint32_t bmi_length;
+      uint32_t bits_offset;
+      uint32_t bits_length;
+      uint32_t width;
+      uint32_t height;
+      uint16_t depth;
+      uint32_t payload_length;
+      size_t offset;
+      if (!found)
+        break;
+      offset = (size_t)(found - data);
+      if (offset + 80u <= size && found[1] == 0u && found[2] == 0u
+          && found[3] == 0u
+          && proxy_read_u32 (found, size - offset, 4, &record_size)
+          && record_size >= 80u && (record_size & 3u) == 0u
+          && record_size <= size - offset
+          && proxy_read_u32 (found, record_size, 48, &bmi_offset)
+          && proxy_read_u32 (found, record_size, 52, &bmi_length)
+          && proxy_read_u32 (found, record_size, 56, &bits_offset)
+          && proxy_read_u32 (found, record_size, 60, &bits_length)
+          && bmi_length >= 40u && bits_length > 0u
+          && bmi_offset >= 80u && bits_offset >= 80u
+          && bmi_offset <= record_size
+          && bmi_length <= record_size - bmi_offset
+          && bits_offset <= record_size
+          && bits_length <= record_size - bits_offset
+          && bmi_length <= UINT32_MAX - 14u
+          && bits_length <= UINT32_MAX - 14u - bmi_length
+          && (payload_length = 14u + bmi_length + bits_length)
+                 <= MAX_EMBEDDED_IMAGE_BYTES_PER_RECORD
+          && validate_embedded_dib (
+              found + bmi_offset, bmi_length, &width, &height, &depth)
+          && embedded_image_candidate_is_better (
+              width, height, depth, payload_length, best_width,
+              best_height, best_depth,
+              preview->bmi_length + preview->bits_length + 14u))
+        {
+          preview->bmi = found + bmi_offset;
+          preview->bits = found + bits_offset;
+          preview->bmi_length = bmi_length;
+          preview->bits_length = bits_length;
+          preview->width = width;
+          preview->height = height;
+          preview->mime_type = EMBEDDED_IMAGE_MIME_BMP;
+          preview->flags = 0;
+          preview->payload_length = payload_length;
+          best_width = width;
+          best_height = height;
+          best_depth = depth;
+        }
+      cursor = offset + 1u;
+    }
+  if (preview->payload_length > 0u)
+    return 1;
+  if (reconstruct_wmfc_emf (
+          data, size, &preview->owned_payload,
+          &preview->bmp_length, &preview->width, &preview->height))
+    {
+      preview->mime_type = EMBEDDED_IMAGE_MIME_EMF;
+      preview->flags = EMBEDDED_IMAGE_FLAG_SOURCE_EMF;
+      preview->payload_length = preview->bmp_length;
+      return 1;
+    }
+  return 0;
+}
+
 static int
 ole2frame_corners (const Dwg_Entity_OLE2FRAME *frame,
                    double points[4][3])
@@ -5947,11 +7610,13 @@ ole2frame_corners (const Dwg_Entity_OLE2FRAME *frame,
   /*
    * LibreDWG 0.14 leaves the public pt1/pt2 fields at the embedded object's
    * natural size for binary DWG OLE2FRAME records. AutoCAD's 128-byte OLE
-   * preamble starts with 0x5581 and stores the four actual WCS corners as
-   * twelve little-endian f64 values at byte 2, before the CFB stream.
+   * preamble starts with 0x5580 or 0x5581 and stores the four actual WCS
+   * corners as twelve little-endian f64 values at byte 2, before the CFB
+   * stream. Both markers occur in supported production drawings.
    */
   if (frame->data && frame->data_size >= 98u
-      && frame->data[0] == 0x81u && frame->data[1] == 0x55u)
+      && (frame->data[0] == 0x80u || frame->data[0] == 0x81u)
+      && frame->data[1] == 0x55u)
     {
       for (point_index = 0; point_index < 4; point_index++)
         for (axis = 0; axis < 3; axis++)
@@ -5989,6 +7654,104 @@ ole2frame_corners (const Dwg_Entity_OLE2FRAME *frame,
   return 1;
 }
 
+static void
+free_embedded_image_table (EmbeddedImageTable *table)
+{
+  size_t index;
+  if (!table)
+    return;
+  for (index = 0; index < table->count; index++)
+    free (table->items[index].owned_payload);
+  free (table->items);
+  memset (table, 0, sizeof (*table));
+}
+
+static int
+collect_embedded_image_table (CacheWriter *writer, const Dwg_Data *dwg,
+                              EmbeddedImageTable *table)
+{
+  size_t object_index;
+  size_t ole_count = 0;
+  if (!writer || !dwg || !table)
+    return 0;
+  memset (table, 0, sizeof (*table));
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      const Dwg_Object *object = &dwg->object[object_index];
+      double points[4][3];
+      if (object->fixedtype == DWG_TYPE_IMAGE && object->tio.entity
+          && object->tio.entity->tio.IMAGE)
+        table->source_image_count++;
+      else if (object->fixedtype == DWG_TYPE_OLE2FRAME
+               && object->tio.entity
+               && object->tio.entity->tio.OLE2FRAME
+               && ole2frame_corners (
+                   object->tio.entity->tio.OLE2FRAME, points))
+        ole_count++;
+    }
+  if (table->source_image_count > MAX_IMAGE_SOURCE_RECORDS
+      || ole_count > MAX_IMAGE_SOURCE_RECORDS - table->source_image_count)
+    {
+      set_error (writer, "embedded IMAGE placements exceed cache limits");
+      return 0;
+    }
+  if (ole_count)
+    {
+      if (ole_count > SIZE_MAX / sizeof (*table->items))
+        {
+          set_error (writer, "embedded IMAGE table exceeds host limits");
+          return 0;
+        }
+      table->items = (EmbeddedImagePreview *)calloc (
+          ole_count, sizeof (*table->items));
+      if (!table->items)
+        {
+          set_error (writer, "cannot allocate bounded embedded IMAGE table");
+          return 0;
+        }
+    }
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      const Dwg_Object *object = &dwg->object[object_index];
+      const Dwg_Entity_OLE2FRAME *frame;
+      EmbeddedImagePreview *preview;
+      double points[4][3];
+      if (object->fixedtype != DWG_TYPE_OLE2FRAME || !object->tio.entity
+          || !(frame = object->tio.entity->tio.OLE2FRAME)
+          || !ole2frame_corners (frame, points))
+        continue;
+      preview = &table->items[table->count++];
+      preview->object = object;
+      if (!select_embedded_ole_preview (object, preview))
+        continue;
+      if (preview->payload_length > MAX_EMBEDDED_IMAGE_BYTES
+          || table->byte_length
+                 > MAX_EMBEDDED_IMAGE_BYTES - preview->payload_length)
+        {
+          free (preview->owned_payload);
+          preview->bmp = NULL;
+          preview->bmi = NULL;
+          preview->bits = NULL;
+          preview->owned_payload = NULL;
+          preview->bmp_length = 0;
+          preview->bmi_length = 0;
+          preview->bits_length = 0;
+          preview->width = 0;
+          preview->height = 0;
+          preview->mime_type = 0;
+          preview->flags = 0;
+          preview->payload_length = 0;
+          continue;
+        }
+      preview->payload_offset = table->byte_length;
+      table->byte_length += preview->payload_length;
+      table->available_count++;
+    }
+  return 1;
+}
+
 static int
 iterate_ole2frame_segments (const Dwg_Object *object,
                             const CacheTables *tables,
@@ -6022,17 +7785,101 @@ iterate_ole2frame_segments (const Dwg_Object *object,
 static int
 is_primary_paper_viewport (const Dwg_Data *dwg,
                            const Dwg_Object *object,
-                           const Dwg_Entity_VIEWPORT *viewport)
+                           const Dwg_Entity_VIEWPORT *viewport,
+                           const CacheTables *tables)
 {
+  uint64_t active_handle = 0;
+  uint64_t best_handle = 0;
   uint64_t handle;
+  uint64_t owner_handle;
+  double best_error = HUGE_VAL;
   size_t object_index;
-  if (!dwg || !object || !viewport)
+  if (!dwg || !object || !viewport || !tables || !object->tio.entity)
     return 0;
   if (viewport->id == 1)
     return 1;
-  if (viewport->id > 1)
-    return 0;
   handle = (uint64_t)object->handle.value;
+  owner_handle = entity_owner_handle (object->tio.entity, tables);
+  for (object_index = 0;
+       object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      const Dwg_Object *candidate = &dwg->object[object_index];
+      const Dwg_Entity_VIEWPORT *candidate_viewport;
+      double center_error;
+      double direction_length;
+      double direction_error;
+      double error;
+      double height_error;
+      double scale;
+      double target_error;
+      double twist_error;
+      if (!is_viewport_entity (candidate)
+          || entity_owner_handle (candidate->tio.entity, tables)
+                 != owner_handle
+          || !(candidate_viewport
+                   = candidate->tio.entity->tio.VIEWPORT))
+        continue;
+      if (candidate_viewport->id == 1)
+        return 0;
+      if (!isfinite (candidate_viewport->center.x)
+          || !isfinite (candidate_viewport->center.y)
+          || !isfinite (candidate_viewport->width)
+          || !isfinite (candidate_viewport->height)
+          || !isfinite (candidate_viewport->VIEWCTR.x)
+          || !isfinite (candidate_viewport->VIEWCTR.y)
+          || !finite_point3 (candidate_viewport->view_target)
+          || !finite_point3 (candidate_viewport->VIEWDIR)
+          || !isfinite (candidate_viewport->VIEWTWIST)
+          || !isfinite (candidate_viewport->VIEWSIZE)
+          || candidate_viewport->width <= 0.0
+          || candidate_viewport->height <= 0.0
+          || candidate_viewport->VIEWSIZE <= 0.0)
+        continue;
+      scale = fmax (
+          fabs (candidate_viewport->width),
+          fmax (fabs (candidate_viewport->height),
+                fmax (fabs (candidate_viewport->VIEWSIZE), 1.0)));
+      direction_length
+          = hypot (hypot (candidate_viewport->VIEWDIR.x,
+                          candidate_viewport->VIEWDIR.y),
+                   candidate_viewport->VIEWDIR.z);
+      if (!isfinite (direction_length) || direction_length <= 1.0e-12)
+        continue;
+      center_error
+          = hypot (candidate_viewport->VIEWCTR.x
+                       - candidate_viewport->center.x,
+                   candidate_viewport->VIEWCTR.y
+                       - candidate_viewport->center.y)
+            / scale;
+      height_error
+          = fabs (candidate_viewport->VIEWSIZE
+                  - candidate_viewport->height)
+            / fmax (fmax (candidate_viewport->VIEWSIZE,
+                          candidate_viewport->height),
+                    1.0);
+      target_error
+          = hypot (hypot (candidate_viewport->view_target.x,
+                          candidate_viewport->view_target.y),
+                   candidate_viewport->view_target.z)
+            / scale;
+      direction_error
+          = hypot (
+              hypot (candidate_viewport->VIEWDIR.x / direction_length,
+                     candidate_viewport->VIEWDIR.y / direction_length),
+              candidate_viewport->VIEWDIR.z / direction_length - 1.0);
+      twist_error
+          = 2.0 * fabs (sin (candidate_viewport->VIEWTWIST * 0.5));
+      error = center_error + height_error + target_error
+              + direction_error + twist_error;
+      if (isfinite (error) && error < best_error)
+        {
+          best_error = error;
+          best_handle = (uint64_t)candidate->handle.value;
+        }
+    }
+  if (best_handle)
+    return best_handle == handle;
   for (object_index = 0;
        object_index < (size_t)dwg->num_objects;
        object_index++)
@@ -6043,10 +7890,13 @@ is_primary_paper_viewport (const Dwg_Data *dwg,
           || !candidate->tio.object
           || !(layout = candidate->tio.object->tio.LAYOUT))
         continue;
-      if (reference_handle (layout->active_viewport) == handle)
-        return 1;
+      if (reference_handle (layout->block_header) == owner_handle)
+        {
+          active_handle = reference_handle (layout->active_viewport);
+          break;
+        }
     }
-  return 0;
+  return active_handle == handle;
 }
 
 static int
@@ -6070,7 +7920,7 @@ iterate_viewport_frame_segments (const Dwg_Data *dwg,
    * already emitted through the normal primitive path; drawing its fallback
    * rectangle would expose geometry that AutoCAD intentionally hides.
    */
-  if (is_primary_paper_viewport (dwg, object, viewport)
+  if (is_primary_paper_viewport (dwg, object, viewport, tables)
       || reference_handle (viewport->clip_boundary) != 0)
     return 1;
   if (!isfinite (viewport->width) || !isfinite (viewport->height)
@@ -6694,6 +8544,577 @@ iterate_polyline_segments (const Dwg_Object *object,
   return 1;
 }
 
+typedef struct
+{
+  double (*points)[3];
+  size_t capacity;
+  size_t count;
+  int invalid;
+} MeshPointCollector;
+
+static void
+collect_mesh_vertex (MeshPointCollector *collector,
+                     const Dwg_Object *vertex_object)
+{
+  const Dwg_Entity_VERTEX_MESH *vertex = NULL;
+  if (!collector || !vertex_object || !vertex_object->tio.entity)
+    return;
+  if (vertex_object->fixedtype == DWG_TYPE_VERTEX_MESH)
+    vertex = vertex_object->tio.entity->tio.VERTEX_MESH;
+  else if (vertex_object->fixedtype == DWG_TYPE_VERTEX_3D)
+    vertex = vertex_object->tio.entity->tio.VERTEX_3D;
+  if (!vertex)
+    return;
+  if (collector->count >= collector->capacity)
+    {
+      collector->invalid = 1;
+      return;
+    }
+  collector->points[collector->count][0] = vertex->point.x;
+  collector->points[collector->count][1] = vertex->point.y;
+  collector->points[collector->count][2] = vertex->point.z;
+  if (!isfinite (vertex->point.x) || !isfinite (vertex->point.y)
+      || !isfinite (vertex->point.z))
+    collector->invalid = 1;
+  collector->count++;
+}
+
+static void
+collect_mesh_vertices (const Dwg_Object *object,
+                       const Dwg_Entity_POLYLINE_MESH *mesh,
+                       MeshPointCollector *collector)
+{
+  const Dwg_Data *dwg = object ? object->parent : NULL;
+  uint64_t visited = 0;
+  uint64_t limit;
+  if (!dwg || !mesh || !collector)
+    {
+      if (collector)
+        collector->invalid = 1;
+      return;
+    }
+  limit = (uint64_t)dwg->num_objects;
+  if (dwg->header.version < R_13b1)
+    {
+      Dwg_Object *current = dwg_next_object (object);
+      while (current && visited < limit
+             && current->fixedtype != DWG_TYPE_SEQEND)
+        {
+          collect_mesh_vertex (collector, current);
+          current = dwg_next_object (current);
+          visited++;
+        }
+    }
+  else if (dwg->header.version <= R_2000)
+    {
+      Dwg_Object *current
+          = mesh->first_vertex
+                ? reference_object (dwg, mesh->first_vertex)
+                : NULL;
+      while (current && visited < limit)
+        {
+          collect_mesh_vertex (collector, current);
+          visited++;
+          if (mesh->last_vertex && current == mesh->last_vertex->obj)
+            break;
+          current = dwg_next_object (current);
+          if (!current || current->fixedtype == DWG_TYPE_SEQEND)
+            break;
+        }
+    }
+  else if (mesh->vertex)
+    {
+      uint64_t declared = (uint64_t)mesh->num_owned;
+      if (declared < limit)
+        limit = declared;
+      for (visited = 0; visited < limit; visited++)
+        collect_mesh_vertex (
+            collector,
+            mesh->vertex[visited]
+                ? reference_object (dwg, mesh->vertex[visited])
+                : NULL);
+    }
+}
+
+static int
+emit_mesh_edge (SegmentIteration *iteration, const LineSegment *base,
+                const double start[3], const double end[3],
+                uint64_t *generated)
+{
+  return emit_mleader_segment (
+      iteration, base, start, end, 0, generated);
+}
+
+static int
+iterate_polyline_mesh_segments (const Dwg_Object *object,
+                                const CacheTables *tables,
+                                SegmentIteration *iteration)
+{
+  const Dwg_Entity_POLYLINE_MESH *mesh;
+  MeshPointCollector collector;
+  LineSegment base;
+  size_t m_count;
+  size_t n_count;
+  size_t expected;
+  size_t m;
+  size_t n;
+  uint64_t generated = 0;
+  if (!object || object->fixedtype != DWG_TYPE_POLYLINE_MESH
+      || !object->tio.entity
+      || !(mesh = object->tio.entity->tio.POLYLINE_MESH))
+    return 1;
+  if (mesh->num_m_verts <= 0 || mesh->num_n_verts <= 0
+      || !object->parent)
+    {
+      segment_iteration_reject (iteration);
+      return 1;
+    }
+  m_count = (size_t)mesh->num_m_verts;
+  n_count = (size_t)mesh->num_n_verts;
+  if (m_count > SIZE_MAX / n_count)
+    {
+      segment_iteration_reject (iteration);
+      return 1;
+    }
+  expected = m_count * n_count;
+  /*
+   * A surface-fit polygon mesh stores the generated density grid rather
+   * than the original control grid. Prefer those dimensions only when the
+   * owned vertex count confirms the complete grid.
+   */
+  if (mesh->curve_type != 0 && mesh->m_density > 0
+      && mesh->n_density > 0
+      && (size_t)mesh->m_density <= SIZE_MAX / (size_t)mesh->n_density
+      && (size_t)mesh->m_density * (size_t)mesh->n_density
+             == (size_t)mesh->num_owned)
+    {
+      m_count = (size_t)mesh->m_density;
+      n_count = (size_t)mesh->n_density;
+      expected = m_count * n_count;
+    }
+  if (expected < 2 || expected > (size_t)object->parent->num_objects
+      || expected > SIZE_MAX / sizeof (*collector.points))
+    {
+      segment_iteration_reject (iteration);
+      return 1;
+    }
+  memset (&collector, 0, sizeof (collector));
+  collector.capacity = expected;
+  collector.points
+      = (double (*)[3])malloc (expected * sizeof (*collector.points));
+  if (!collector.points)
+    return 0;
+  collect_mesh_vertices (object, mesh, &collector);
+  if (collector.invalid || collector.count != expected
+      || !initialize_entity_segment (object, tables, 14u, 0, &base))
+    {
+      free (collector.points);
+      segment_iteration_reject (iteration);
+      return 1;
+    }
+  /* Vertices are ordered as M groups containing N consecutive vertices. */
+  for (m = 0; m < m_count; m++)
+    for (n = 0; n < n_count; n++)
+      {
+        size_t index = m * n_count + n;
+        if (n + 1 < n_count
+            && !emit_mesh_edge (
+                iteration, &base, collector.points[index],
+                collector.points[index + 1], &generated))
+          goto emit_failed;
+        if (m + 1 < m_count
+            && !emit_mesh_edge (
+                iteration, &base, collector.points[index],
+                collector.points[index + n_count], &generated))
+          goto emit_failed;
+      }
+  if ((mesh->flag & 1u) != 0u)
+    for (n = 0; n < n_count; n++)
+      if (!emit_mesh_edge (
+              iteration, &base,
+              collector.points[(m_count - 1) * n_count + n],
+              collector.points[n], &generated))
+        goto emit_failed;
+  if ((mesh->flag & 32u) != 0u)
+    for (m = 0; m < m_count; m++)
+      if (!emit_mesh_edge (
+              iteration, &base,
+              collector.points[m * n_count + n_count - 1],
+              collector.points[m * n_count], &generated))
+        goto emit_failed;
+  free (collector.points);
+  return 1;
+
+emit_failed:
+  free (collector.points);
+  return 0;
+}
+
+static int
+normalize_mline_vector (const BITCODE_3BD source, double result[3])
+{
+  double length
+      = hypot (hypot (source.x, source.y), source.z);
+  if (!isfinite (length) || length <= 1.0e-12)
+    return 0;
+  result[0] = source.x / length;
+  result[1] = source.y / length;
+  result[2] = source.z / length;
+  return 1;
+}
+
+static int
+mline_element_intersection (const Dwg_MLINE_vertex *vertex,
+                            size_t line_index, double point[3])
+{
+  const Dwg_MLINE_line *line;
+  double miter[3];
+  double distance;
+  if (!vertex || !vertex->lines
+      || line_index >= (size_t)vertex->num_lines
+      || !(line = &vertex->lines[line_index])
+      || line->num_segparms <= 0 || !line->segparms
+      || !finite_point3 (vertex->vertex)
+      || !normalize_mline_vector (vertex->miter_direction, miter))
+    return 0;
+  distance = line->segparms[0];
+  if (!isfinite (distance))
+    return 0;
+  point[0] = vertex->vertex.x + miter[0] * distance;
+  point[1] = vertex->vertex.y + miter[1] * distance;
+  point[2] = vertex->vertex.z + miter[2] * distance;
+  return 1;
+}
+
+static int
+mline_element_start (const Dwg_MLINE_vertex *vertex,
+                     size_t line_index, double point[3])
+{
+  const Dwg_MLINE_line *line;
+  double direction[3];
+  double distance;
+  size_t axis;
+  if (!mline_element_intersection (vertex, line_index, point)
+      || !(line = &vertex->lines[line_index]))
+    return 0;
+  if (line->num_segparms < 2)
+    return 1;
+  if (!normalize_mline_vector (vertex->vertex_direction, direction)
+      || !isfinite (line->segparms[1]))
+    return 0;
+  distance = line->segparms[1];
+  for (axis = 0; axis < 3; axis++)
+    point[axis] += direction[axis] * distance;
+  return 1;
+}
+
+static const Dwg_Object_MLINESTYLE *
+resolve_mline_style (const Dwg_Object *object,
+                     const Dwg_Entity_MLINE *mline)
+{
+  Dwg_Object *style_object;
+  if (!object || !object->parent || !mline || !mline->mlinestyle)
+    return NULL;
+  style_object
+      = reference_object (object->parent, mline->mlinestyle);
+  if (!style_object || style_object->fixedtype != DWG_TYPE_MLINESTYLE
+      || !style_object->tio.object)
+    return NULL;
+  return style_object->tio.object->tio.MLINESTYLE;
+}
+
+static void
+apply_mline_element_style (const Dwg_Object_MLINESTYLE *style,
+                           size_t line_index,
+                           const CacheTables *tables,
+                           LineSegment *segment)
+{
+  const Dwg_MLINESTYLE_line *line;
+  uint32_t linetype_code;
+  if (!style || !style->lines
+      || line_index >= (size_t)style->num_lines)
+    return;
+  line = &style->lines[line_index];
+  segment->color = encode_color (&line->color);
+  if (!line->lt_ltype)
+    return;
+  linetype_code = find_handle_index (
+      tables->linetype_codes, tables->linetype_code_count,
+      reference_handle (line->lt_ltype));
+  if (linetype_code != UINT32_MAX)
+    segment->linetype_code = (uint16_t)linetype_code;
+}
+
+static int
+emit_mline_round_cap (SegmentIteration *iteration,
+                      const LineSegment *base, const double first[3],
+                      const double last[3], const double outward[3],
+                      uint64_t *generated)
+{
+  double center[3];
+  double across[3];
+  double bulge[3];
+  double radius;
+  double projection;
+  double bulge_length;
+  double previous[3];
+  size_t axis;
+  size_t chord;
+  const size_t chords = 12;
+  for (axis = 0; axis < 3; axis++)
+    {
+      center[axis] = (first[axis] + last[axis]) * 0.5;
+      across[axis] = first[axis] - center[axis];
+    }
+  radius = hypot (hypot (across[0], across[1]), across[2]);
+  if (!isfinite (radius) || radius <= 1.0e-12)
+    return 1;
+  for (axis = 0; axis < 3; axis++)
+    across[axis] /= radius;
+  projection = outward[0] * across[0] + outward[1] * across[1]
+               + outward[2] * across[2];
+  for (axis = 0; axis < 3; axis++)
+    bulge[axis] = outward[axis] - across[axis] * projection;
+  bulge_length = hypot (hypot (bulge[0], bulge[1]), bulge[2]);
+  if (!isfinite (bulge_length) || bulge_length <= 1.0e-12)
+    {
+      bulge[0] = -across[1];
+      bulge[1] = across[0];
+      bulge[2] = 0.0;
+      bulge_length = hypot (bulge[0], bulge[1]);
+    }
+  if (!isfinite (bulge_length) || bulge_length <= 1.0e-12)
+    return 1;
+  for (axis = 0; axis < 3; axis++)
+    {
+      bulge[axis] /= bulge_length;
+      previous[axis] = first[axis];
+    }
+  for (chord = 1; chord <= chords; chord++)
+    {
+      double angle = acos (-1.0) * (double)chord / (double)chords;
+      double point[3];
+      for (axis = 0; axis < 3; axis++)
+        point[axis] = center[axis]
+                      + radius
+                            * (across[axis] * cos (angle)
+                               + bulge[axis] * sin (angle));
+      if (!emit_mleader_segment (
+              iteration, base, previous, point, 1, generated))
+        return 0;
+      memcpy (previous, point, sizeof (previous));
+    }
+  return 1;
+}
+
+static int
+emit_mline_cap (const Dwg_Entity_MLINE *mline,
+                const Dwg_Object_MLINESTYLE *style,
+                const CacheTables *tables, SegmentIteration *iteration,
+                const LineSegment *entity_base, size_t vertex_index,
+                int is_start, uint64_t *generated)
+{
+  const Dwg_MLINE_vertex *vertex = &mline->verts[vertex_index];
+  double endpoints[256][3];
+  double outward[3];
+  size_t line_count = (size_t)mline->num_lines;
+  size_t line_index;
+  uint32_t square_flag = is_start ? 16u : 256u;
+  uint32_t inner_arc_flag = is_start ? 32u : 512u;
+  uint32_t outer_arc_flag = is_start ? 64u : 1024u;
+  if (!style || line_count < 2 || !vertex->lines
+      || line_count > sizeof (endpoints) / sizeof (endpoints[0]))
+    return 1;
+  if (line_count > (size_t)vertex->num_lines)
+    line_count = (size_t)vertex->num_lines;
+  if (line_count > (size_t)style->num_lines)
+    line_count = (size_t)style->num_lines;
+  if (line_count < 2)
+    return 1;
+  for (line_index = 0; line_index < line_count; line_index++)
+    if (!(is_start
+              ? mline_element_start (
+                    vertex, line_index, endpoints[line_index])
+              : mline_element_intersection (
+                    vertex, line_index, endpoints[line_index])))
+      return 1;
+  if (!normalize_mline_vector (vertex->vertex_direction, outward))
+    return 1;
+  if (is_start)
+    for (line_index = 0; line_index < 3; line_index++)
+      outward[line_index] = -outward[line_index];
+  if (((uint32_t)style->flag & square_flag) != 0u)
+    {
+      LineSegment cap = *entity_base;
+      if (!emit_mleader_segment (
+              iteration, &cap, endpoints[0],
+              endpoints[line_count - 1], 0, generated))
+        return 0;
+    }
+  if (((uint32_t)style->flag & inner_arc_flag) != 0u)
+    for (line_index = 0; line_index + 1 < line_count; line_index++)
+      {
+        LineSegment cap = *entity_base;
+        apply_mline_element_style (style, line_index, tables, &cap);
+        if (!emit_mline_round_cap (
+                iteration, &cap, endpoints[line_index],
+                endpoints[line_index + 1], outward, generated))
+          return 0;
+      }
+  if (((uint32_t)style->flag & outer_arc_flag) != 0u)
+    {
+      LineSegment cap = *entity_base;
+      if (!emit_mline_round_cap (
+              iteration, &cap, endpoints[0],
+              endpoints[line_count - 1], outward, generated))
+        return 0;
+    }
+  return 1;
+}
+
+static int
+iterate_mline_segments (const Dwg_Object *object,
+                        const CacheTables *tables,
+                        SegmentIteration *iteration)
+{
+  const Dwg_Entity_MLINE *mline;
+  const Dwg_Object_MLINESTYLE *style;
+  LineSegment entity_base;
+  size_t vertex_count;
+  size_t line_count;
+  size_t segment_count;
+  size_t vertex_index;
+  size_t line_index;
+  uint64_t generated = 0;
+  if (!object || object->fixedtype != DWG_TYPE_MLINE
+      || !object->tio.entity
+      || !(mline = object->tio.entity->tio.MLINE))
+    return 1;
+  if (mline->num_verts < 2 || mline->num_lines == 0 || !mline->verts
+      || !initialize_entity_segment (object, tables, 15u, 0,
+                                     &entity_base))
+    {
+      segment_iteration_reject (iteration);
+      return 1;
+    }
+  vertex_count = (size_t)mline->num_verts;
+  line_count = (size_t)mline->num_lines;
+  style = resolve_mline_style (object, mline);
+  if (style && line_count > (size_t)style->num_lines)
+    line_count = (size_t)style->num_lines;
+  if (line_count == 0
+      || vertex_count > SIZE_MAX / line_count
+      || vertex_count * line_count
+             > MAX_MULTILEADER_SEGMENTS_PER_ENTITY)
+    {
+      segment_iteration_reject (iteration);
+      return 1;
+    }
+  segment_count
+      = ((uint32_t)mline->flags & 2u) != 0u
+            ? vertex_count
+            : vertex_count - 1;
+  for (vertex_index = 0; vertex_index < segment_count; vertex_index++)
+    {
+      const Dwg_MLINE_vertex *vertex = &mline->verts[vertex_index];
+      const Dwg_MLINE_vertex *next
+          = &mline->verts[(vertex_index + 1) % vertex_count];
+      size_t usable_lines = line_count;
+      if (usable_lines > (size_t)vertex->num_lines)
+        usable_lines = (size_t)vertex->num_lines;
+      if (usable_lines > (size_t)next->num_lines)
+        usable_lines = (size_t)next->num_lines;
+      for (line_index = 0; line_index < usable_lines; line_index++)
+        {
+          const Dwg_MLINE_line *line = &vertex->lines[line_index];
+          LineSegment base = entity_base;
+          double start[3];
+          double end[3];
+          double intersection[3];
+          double direction[3];
+          size_t parameter_index;
+          size_t axis;
+          if (line->num_segparms < 2 || !line->segparms
+              || !mline_element_start (vertex, line_index, start)
+              || !mline_element_intersection (
+                  vertex, line_index, intersection)
+              || !mline_element_intersection (next, line_index, end)
+              || !normalize_mline_vector (
+                  vertex->vertex_direction, direction))
+            continue;
+          apply_mline_element_style (style, line_index, tables, &base);
+          for (parameter_index = 2;
+               parameter_index < (size_t)line->num_segparms;
+               parameter_index++)
+            {
+              double boundary_distance;
+              double boundary[3];
+              if (!isfinite (line->segparms[parameter_index]))
+                break;
+              boundary_distance
+                  = line->segparms[1]
+                    + line->segparms[parameter_index];
+              for (axis = 0; axis < 3; axis++)
+                boundary[axis]
+                    = intersection[axis]
+                      + direction[axis] * boundary_distance;
+              if ((parameter_index & 1u) == 0u)
+                {
+                  if (!emit_mleader_segment (
+                          iteration, &base, start, boundary, 0,
+                          &generated))
+                    return 0;
+                }
+              else
+                memcpy (start, boundary, sizeof (start));
+            }
+          if (((size_t)line->num_segparms & 1u) == 0u
+              && !emit_mleader_segment (
+                  iteration, &base, start, end, 0, &generated))
+            return 0;
+        }
+    }
+  if (style && ((uint32_t)style->flag & 2u) != 0u)
+    {
+      size_t first_vertex
+          = ((uint32_t)mline->flags & 2u) != 0u ? 0u : 1u;
+      size_t last_vertex
+          = ((uint32_t)mline->flags & 2u) != 0u
+                ? vertex_count
+                : vertex_count - 1u;
+      for (vertex_index = first_vertex; vertex_index < last_vertex;
+           vertex_index++)
+        for (line_index = 0; line_index + 1 < line_count;
+             line_index++)
+          {
+            double first[3];
+            double last[3];
+            if (mline_element_intersection (
+                    &mline->verts[vertex_index], line_index, first)
+                && mline_element_intersection (
+                    &mline->verts[vertex_index], line_index + 1, last)
+                && !emit_mleader_segment (
+                    iteration, &entity_base, first, last, 0,
+                    &generated))
+              return 0;
+          }
+    }
+  if (((uint32_t)mline->flags & 2u) == 0u)
+    {
+      if (((uint32_t)mline->flags & 4u) == 0u
+          && !emit_mline_cap (
+              mline, style, tables, iteration, &entity_base, 0u, 1,
+              &generated))
+        return 0;
+      if (((uint32_t)mline->flags & 8u) == 0u
+          && !emit_mline_cap (
+              mline, style, tables, iteration, &entity_base,
+              vertex_count - 1u, 0, &generated))
+        return 0;
+    }
+  return 1;
+}
+
 static void
 circular_ocs_point (const double center[3], double radius, double angle,
                     const double normal[3], double point[3])
@@ -7256,6 +9677,1835 @@ iterate_spline_segments (const Dwg_Object *object,
           return 0;
       }
   }
+  return 1;
+}
+
+typedef enum
+{
+  ACIS_RECORD_OTHER = 0,
+  ACIS_RECORD_BODY,
+  ACIS_RECORD_LUMP,
+  ACIS_RECORD_SHELL,
+  ACIS_RECORD_FACE,
+  ACIS_RECORD_LOOP,
+  ACIS_RECORD_COEDGE,
+  ACIS_RECORD_EDGE,
+  ACIS_RECORD_VERTEX,
+  ACIS_RECORD_POINT,
+  ACIS_RECORD_STRAIGHT_CURVE,
+  ACIS_RECORD_ELLIPSE_CURVE,
+  ACIS_RECORD_INTCURVE_CURVE,
+  ACIS_RECORD_TRANSFORM
+} AcisRecordKind;
+
+typedef enum
+{
+  ACIS_TOKEN_NUMBER = 0,
+  ACIS_TOKEN_POINTER,
+  ACIS_TOKEN_IDENTIFIER,
+  ACIS_TOKEN_FALSE,
+  ACIS_TOKEN_TRUE
+} AcisTokenKind;
+
+typedef struct
+{
+  AcisTokenKind kind;
+  int64_t pointer;
+  double number;
+  const unsigned char *text;
+  size_t text_length;
+} AcisToken;
+
+typedef struct
+{
+  int32_t index;
+  AcisRecordKind kind;
+  size_t first_token;
+  size_t token_count;
+} AcisRecord;
+
+typedef struct
+{
+  AcisRecord *records;
+  AcisToken *tokens;
+  size_t record_count;
+  size_t record_capacity;
+  size_t token_count;
+  size_t token_capacity;
+  uint32_t version;
+} AcisDocument;
+
+typedef struct
+{
+  const unsigned char *data;
+  size_t size;
+  size_t position;
+  int join_lines;
+} AcisTextReader;
+
+typedef struct
+{
+  const unsigned char *data;
+  size_t length;
+} AcisTextSlice;
+
+typedef struct
+{
+  double matrix[9];
+  double translation[3];
+  double scale;
+} AcisTransform;
+
+typedef struct
+{
+  size_t degree;
+  size_t control_count;
+  size_t knot_count;
+  double *knots;
+  double *controls;
+  double *weights;
+  int rational;
+} AcisSpline;
+
+static void
+free_acis_document (AcisDocument *document)
+{
+  if (!document)
+    return;
+  free (document->records);
+  free (document->tokens);
+  memset (document, 0, sizeof (*document));
+}
+
+static int
+reserve_acis_records (AcisDocument *document, size_t additional)
+{
+  size_t required;
+  size_t capacity;
+  AcisRecord *records;
+  if (!document || additional > MAX_ACIS_RECORDS_PER_ENTITY
+      || document->record_count
+             > MAX_ACIS_RECORDS_PER_ENTITY - additional)
+    return 0;
+  required = document->record_count + additional;
+  if (required <= document->record_capacity)
+    return 1;
+  capacity = document->record_capacity ? document->record_capacity : 256u;
+  while (capacity < required)
+    {
+      if (capacity > MAX_ACIS_RECORDS_PER_ENTITY / 2u)
+        {
+          capacity = MAX_ACIS_RECORDS_PER_ENTITY;
+          break;
+        }
+      capacity *= 2u;
+    }
+  if (capacity < required
+      || capacity > SIZE_MAX / sizeof (AcisRecord))
+    return 0;
+  records = (AcisRecord *)realloc (
+      document->records, capacity * sizeof (AcisRecord));
+  if (!records)
+    return 0;
+  document->records = records;
+  document->record_capacity = capacity;
+  return 1;
+}
+
+static int
+reserve_acis_tokens (AcisDocument *document, size_t additional)
+{
+  size_t required;
+  size_t capacity;
+  AcisToken *tokens;
+  if (!document || additional > MAX_ACIS_TOKENS_PER_ENTITY
+      || document->token_count
+             > MAX_ACIS_TOKENS_PER_ENTITY - additional)
+    return 0;
+  required = document->token_count + additional;
+  if (required <= document->token_capacity)
+    return 1;
+  capacity = document->token_capacity ? document->token_capacity : 1024u;
+  while (capacity < required)
+    {
+      if (capacity > MAX_ACIS_TOKENS_PER_ENTITY / 2u)
+        {
+          capacity = MAX_ACIS_TOKENS_PER_ENTITY;
+          break;
+        }
+      capacity *= 2u;
+    }
+  if (capacity < required
+      || capacity > SIZE_MAX / sizeof (AcisToken))
+    return 0;
+  tokens = (AcisToken *)realloc (
+      document->tokens, capacity * sizeof (AcisToken));
+  if (!tokens)
+    return 0;
+  document->tokens = tokens;
+  document->token_capacity = capacity;
+  return 1;
+}
+
+static int
+append_acis_token (AcisDocument *document, AcisToken token)
+{
+  if (!reserve_acis_tokens (document, 1u))
+    return 0;
+  document->tokens[document->token_count++] = token;
+  return 1;
+}
+
+static int
+append_acis_number (AcisDocument *document, double number)
+{
+  AcisToken token;
+  memset (&token, 0, sizeof (token));
+  token.kind = ACIS_TOKEN_NUMBER;
+  token.number = number;
+  return append_acis_token (document, token);
+}
+
+static int
+append_acis_pointer (AcisDocument *document, int64_t pointer)
+{
+  AcisToken token;
+  memset (&token, 0, sizeof (token));
+  token.kind = ACIS_TOKEN_POINTER;
+  token.pointer = pointer;
+  return append_acis_token (document, token);
+}
+
+static int
+append_acis_identifier (AcisDocument *document,
+                        const unsigned char *text, size_t length)
+{
+  AcisToken token;
+  memset (&token, 0, sizeof (token));
+  token.kind = ACIS_TOKEN_IDENTIFIER;
+  token.text = text;
+  token.text_length = length;
+  return append_acis_token (document, token);
+}
+
+static int
+append_acis_boolean (AcisDocument *document, int value)
+{
+  AcisToken token;
+  memset (&token, 0, sizeof (token));
+  token.kind = value ? ACIS_TOKEN_TRUE : ACIS_TOKEN_FALSE;
+  return append_acis_token (document, token);
+}
+
+static size_t
+normalized_acis_text_length (const unsigned char *text, size_t length)
+{
+  size_t index;
+  size_t count = 0;
+  for (index = 0; index < length; index++)
+    if (text[index] != '\r' && text[index] != '\n')
+      count++;
+  return count;
+}
+
+static int
+acis_text_equals (const unsigned char *text, size_t length,
+                  const char *expected)
+{
+  size_t source = 0;
+  size_t target = 0;
+  size_t expected_length = strlen (expected);
+  if (normalized_acis_text_length (text, length) != expected_length)
+    return 0;
+  while (source < length)
+    {
+      unsigned char value = text[source++];
+      if (value == '\r' || value == '\n')
+        continue;
+      if (target >= expected_length
+          || value != (unsigned char)expected[target++])
+        return 0;
+    }
+  return target == expected_length;
+}
+
+static int
+copy_normalized_acis_text (const unsigned char *text, size_t length,
+                           char *buffer, size_t buffer_size)
+{
+  size_t source;
+  size_t target = 0;
+  if (!buffer || !buffer_size)
+    return 0;
+  for (source = 0; source < length; source++)
+    {
+      unsigned char value = text[source];
+      if (value == '\r' || value == '\n')
+        continue;
+      if (target + 1u >= buffer_size)
+        return 0;
+      buffer[target++] = (char)value;
+    }
+  buffer[target] = '\0';
+  return 1;
+}
+
+static int
+parse_acis_integer_text (const unsigned char *text, size_t length,
+                         int64_t *result)
+{
+  char buffer[96];
+  char *end;
+  long long value;
+  if (!result
+      || !copy_normalized_acis_text (
+          text, length, buffer, sizeof (buffer)))
+    return 0;
+  errno = 0;
+  value = strtoll (buffer, &end, 10);
+  if (errno || end == buffer || *end != '\0')
+    return 0;
+  *result = (int64_t)value;
+  return 1;
+}
+
+static int
+parse_acis_number_text (const unsigned char *text, size_t length,
+                        double *result)
+{
+  char buffer[128];
+  char *end;
+  double value;
+  if (!result
+      || !copy_normalized_acis_text (
+          text, length, buffer, sizeof (buffer)))
+    return 0;
+  errno = 0;
+  value = strtod (buffer, &end);
+  if (errno || end == buffer || *end != '\0')
+    return 0;
+  *result = value;
+  return 1;
+}
+
+static void
+skip_acis_text_separators (AcisTextReader *reader)
+{
+  while (reader && reader->position < reader->size)
+    {
+      unsigned char value = reader->data[reader->position];
+      if (value == ' ' || value == '\t'
+          || value == '\r' || value == '\n')
+        reader->position++;
+      else
+        break;
+    }
+}
+
+static int
+next_acis_text_slice (AcisTextReader *reader, AcisTextSlice *slice)
+{
+  size_t start;
+  if (!reader || !slice)
+    return 0;
+  skip_acis_text_separators (reader);
+  if (reader->position >= reader->size)
+    return 0;
+  if (reader->data[reader->position] == '#')
+    {
+      slice->data = &reader->data[reader->position++];
+      slice->length = 1u;
+      return 1;
+    }
+  start = reader->position;
+  while (reader->position < reader->size)
+    {
+      unsigned char value = reader->data[reader->position];
+      if (value == ' ' || value == '\t' || value == '#')
+        break;
+      if (!reader->join_lines && (value == '\r' || value == '\n'))
+        break;
+      reader->position++;
+    }
+  if (reader->position == start)
+    return 0;
+  slice->data = &reader->data[start];
+  slice->length = reader->position - start;
+  return 1;
+}
+
+static AcisRecordKind
+classify_acis_record (const unsigned char *text, size_t length)
+{
+  if (acis_text_equals (text, length, "body"))
+    return ACIS_RECORD_BODY;
+  if (acis_text_equals (text, length, "lump"))
+    return ACIS_RECORD_LUMP;
+  if (acis_text_equals (text, length, "shell"))
+    return ACIS_RECORD_SHELL;
+  if (acis_text_equals (text, length, "face"))
+    return ACIS_RECORD_FACE;
+  if (acis_text_equals (text, length, "loop"))
+    return ACIS_RECORD_LOOP;
+  if (acis_text_equals (text, length, "coedge"))
+    return ACIS_RECORD_COEDGE;
+  if (acis_text_equals (text, length, "edge"))
+    return ACIS_RECORD_EDGE;
+  if (acis_text_equals (text, length, "vertex"))
+    return ACIS_RECORD_VERTEX;
+  if (acis_text_equals (text, length, "point"))
+    return ACIS_RECORD_POINT;
+  if (acis_text_equals (text, length, "straight-curve"))
+    return ACIS_RECORD_STRAIGHT_CURVE;
+  if (acis_text_equals (text, length, "ellipse-curve"))
+    return ACIS_RECORD_ELLIPSE_CURVE;
+  if (acis_text_equals (text, length, "intcurve-curve"))
+    return ACIS_RECORD_INTCURVE_CURVE;
+  if (acis_text_equals (text, length, "transform"))
+    return ACIS_RECORD_TRANSFORM;
+  return ACIS_RECORD_OTHER;
+}
+
+static int
+append_acis_text_slice_token (AcisDocument *document,
+                              const AcisTextSlice *slice)
+{
+  int64_t integer;
+  double number;
+  if (!document || !slice || !slice->length)
+    return 0;
+  if (slice->data[0] == '$'
+      && parse_acis_integer_text (
+          slice->data + 1u, slice->length - 1u, &integer))
+    return append_acis_pointer (document, integer);
+  if (parse_acis_number_text (slice->data, slice->length, &number))
+    return append_acis_number (document, number);
+  if (acis_text_equals (slice->data, slice->length, "TRUE")
+      || acis_text_equals (slice->data, slice->length, "T"))
+    return append_acis_boolean (document, 1);
+  if (acis_text_equals (slice->data, slice->length, "FALSE"))
+    return append_acis_boolean (document, 0);
+  return append_acis_identifier (
+      document, slice->data, slice->length);
+}
+
+static int
+append_acis_embedded_text (AcisDocument *document,
+                           const unsigned char *text, size_t length)
+{
+  AcisTextReader reader;
+  AcisTextSlice slice;
+  memset (&reader, 0, sizeof (reader));
+  reader.data = text;
+  reader.size = length;
+  while (next_acis_text_slice (&reader, &slice))
+    if (!append_acis_text_slice_token (document, &slice))
+      return 0;
+  return 1;
+}
+
+static int
+begin_acis_record (AcisDocument *document, int32_t index,
+                   AcisRecordKind kind, AcisRecord **record)
+{
+  AcisRecord *created;
+  if (!document || !record
+      || !reserve_acis_records (document, 1u))
+    return 0;
+  created = &document->records[document->record_count++];
+  memset (created, 0, sizeof (*created));
+  created->index = index;
+  created->kind = kind;
+  created->first_token = document->token_count;
+  *record = created;
+  return 1;
+}
+
+static int
+parse_sat_acis_document (const unsigned char *data, size_t size,
+                         AcisDocument *document)
+{
+  AcisTextReader reader;
+  AcisTextSlice slice;
+  size_t header_end = 0;
+  size_t line_count = 0;
+  size_t index;
+  int64_t version;
+  int32_t automatic_index = 0;
+  if (!data || !document || !size
+      || size > MAX_ACIS_BYTES_PER_ENTITY)
+    return 0;
+  for (index = 0; index < size && line_count < 3u; index++)
+    if (data[index] == '\n')
+      {
+        line_count++;
+        header_end = index + 1u;
+      }
+  if (line_count < 3u)
+    return 0;
+  memset (&reader, 0, sizeof (reader));
+  reader.data = data;
+  reader.size = header_end;
+  if (!next_acis_text_slice (&reader, &slice)
+      || !parse_acis_integer_text (
+          slice.data, slice.length, &version)
+      || version < 1 || version > UINT32_MAX)
+    return 0;
+  document->version = (uint32_t)version;
+  memset (&reader, 0, sizeof (reader));
+  reader.data = data;
+  reader.size = size;
+  reader.position = header_end;
+  reader.join_lines = 1;
+  while (next_acis_text_slice (&reader, &slice))
+    {
+      AcisTextSlice type_slice = slice;
+      AcisRecordKind kind;
+      AcisRecord *record;
+      int32_t record_index = automatic_index;
+      int64_t explicit_index;
+      AcisTextSlice attribute;
+      size_t first_token;
+      if (slice.length == 1u && slice.data[0] == '#')
+        continue;
+      if (document->version >= 700u && slice.length > 1u
+          && slice.data[0] == '-'
+          && parse_acis_integer_text (
+              slice.data, slice.length, &explicit_index)
+          && explicit_index <= 0
+          && explicit_index >= INT32_MIN)
+        {
+          int64_t positive
+              = explicit_index == INT32_MIN
+                    ? (int64_t)INT32_MAX + 1u
+                    : -explicit_index;
+          if (positive > INT32_MAX
+              || !next_acis_text_slice (&reader, &type_slice))
+            return 0;
+          record_index = (int32_t)positive;
+        }
+      if (acis_text_equals (
+              type_slice.data, type_slice.length,
+              "End-of-ACIS-data")
+          || acis_text_equals (
+              type_slice.data, type_slice.length,
+              "End-of-ASM-data"))
+        break;
+      kind = classify_acis_record (
+          type_slice.data, type_slice.length);
+      if (!begin_acis_record (
+              document, record_index, kind, &record)
+          || !next_acis_text_slice (&reader, &attribute))
+        return 0;
+      first_token = document->token_count;
+      if (document->version >= 700u)
+        {
+          AcisTextReader saved = reader;
+          AcisTextSlice subtype;
+          int64_t subtype_id;
+          if (next_acis_text_slice (&reader, &subtype)
+              && !parse_acis_integer_text (
+                  subtype.data, subtype.length, &subtype_id))
+            reader = saved;
+        }
+      for (;;)
+        {
+          if (!next_acis_text_slice (&reader, &slice))
+            return 0;
+          if (slice.length == 1u && slice.data[0] == '#')
+            break;
+          if (!append_acis_text_slice_token (document, &slice))
+            return 0;
+        }
+      record->first_token = first_token;
+      record->token_count = document->token_count - first_token;
+      if (record_index >= automatic_index)
+        automatic_index = record_index + 1;
+      else
+        automatic_index++;
+    }
+  return document->record_count != 0u;
+}
+
+static int
+read_acis_u8 (const unsigned char *data, size_t size,
+              size_t *position, uint8_t *value)
+{
+  if (!data || !position || !value || *position >= size)
+    return 0;
+  *value = data[(*position)++];
+  return 1;
+}
+
+static int
+read_acis_u16 (const unsigned char *data, size_t size,
+               size_t *position, uint16_t *value)
+{
+  if (!data || !position || !value || *position > size
+      || size - *position < 2u)
+    return 0;
+  *value = (uint16_t)data[*position]
+           | (uint16_t)((uint16_t)data[*position + 1u] << 8u);
+  *position += 2u;
+  return 1;
+}
+
+static int
+read_acis_u32 (const unsigned char *data, size_t size,
+               size_t *position, uint32_t *value)
+{
+  if (!data || !position || !value || *position > size
+      || size - *position < 4u)
+    return 0;
+  *value = (uint32_t)data[*position]
+           | (uint32_t)data[*position + 1u] << 8u
+           | (uint32_t)data[*position + 2u] << 16u
+           | (uint32_t)data[*position + 3u] << 24u;
+  *position += 4u;
+  return 1;
+}
+
+static int
+read_acis_u64 (const unsigned char *data, size_t size,
+               size_t *position, uint64_t *value)
+{
+  uint32_t low;
+  uint32_t high;
+  if (!read_acis_u32 (data, size, position, &low)
+      || !read_acis_u32 (data, size, position, &high))
+    return 0;
+  *value = (uint64_t)low | (uint64_t)high << 32u;
+  return 1;
+}
+
+static int
+read_acis_f32 (const unsigned char *data, size_t size,
+               size_t *position, double *value)
+{
+  uint32_t bits;
+  float decoded;
+  if (!value || !read_acis_u32 (data, size, position, &bits))
+    return 0;
+  memcpy (&decoded, &bits, sizeof (decoded));
+  *value = (double)decoded;
+  return 1;
+}
+
+static int
+read_acis_f64 (const unsigned char *data, size_t size,
+               size_t *position, double *value)
+{
+  uint64_t bits;
+  if (!value || !read_acis_u64 (data, size, position, &bits))
+    return 0;
+  memcpy (value, &bits, sizeof (*value));
+  return 1;
+}
+
+static int
+read_sab_string (const unsigned char *data, size_t size,
+                 size_t *position, size_t length_bytes,
+                 const unsigned char **text, size_t *length)
+{
+  uint8_t length8;
+  uint16_t length16;
+  uint32_t length32;
+  size_t decoded;
+  if (!data || !position || !text || !length)
+    return 0;
+  if (length_bytes == 1u)
+    {
+      if (!read_acis_u8 (data, size, position, &length8))
+        return 0;
+      decoded = (size_t)length8;
+    }
+  else if (length_bytes == 2u)
+    {
+      if (!read_acis_u16 (data, size, position, &length16))
+        return 0;
+      decoded = (size_t)length16;
+    }
+  else if (length_bytes == 4u)
+    {
+      if (!read_acis_u32 (data, size, position, &length32))
+        return 0;
+      decoded = (size_t)length32;
+    }
+  else
+    return 0;
+  if (*position > size || decoded > size - *position)
+    return 0;
+  *text = &data[*position];
+  *length = decoded;
+  *position += decoded;
+  return 1;
+}
+
+static int
+read_tagged_sab_string (const unsigned char *data, size_t size,
+                        size_t *position)
+{
+  uint8_t tag;
+  const unsigned char *text;
+  size_t length;
+  if (!read_acis_u8 (data, size, position, &tag))
+    return 0;
+  if (tag == 0x07u)
+    return read_sab_string (
+        data, size, position, 1u, &text, &length);
+  if (tag == 0x08u)
+    return read_sab_string (
+        data, size, position, 2u, &text, &length);
+  if (tag == 0x09u || tag == 0x12u)
+    return read_sab_string (
+        data, size, position, 4u, &text, &length);
+  return 0;
+}
+
+static int
+read_tagged_sab_double (const unsigned char *data, size_t size,
+                        size_t *position, double *value)
+{
+  uint8_t tag;
+  return read_acis_u8 (data, size, position, &tag)
+         && tag == 0x06u
+         && read_acis_f64 (data, size, position, value);
+}
+
+static int
+append_sab_record_token (AcisDocument *document,
+                         const unsigned char *data, size_t size,
+                         size_t *position, uint8_t tag)
+{
+  const unsigned char *text;
+  size_t length;
+  uint8_t value8;
+  uint16_t value16;
+  uint32_t value32;
+  uint64_t value64;
+  double number;
+  size_t axis;
+  switch (tag)
+    {
+    case 0x02u:
+      return read_acis_u8 (data, size, position, &value8)
+             && append_acis_number (
+                 document, (double)(int8_t)value8);
+    case 0x03u:
+      return read_acis_u16 (data, size, position, &value16)
+             && append_acis_number (
+                 document, (double)(int16_t)value16);
+    case 0x04u:
+    case 0x15u:
+      return read_acis_u32 (data, size, position, &value32)
+             && append_acis_number (
+                 document, (double)(int32_t)value32);
+    case 0x05u:
+      return read_acis_f32 (data, size, position, &number)
+             && append_acis_number (document, number);
+    case 0x06u:
+      return read_acis_f64 (data, size, position, &number)
+             && append_acis_number (document, number);
+    case 0x07u:
+      return read_sab_string (
+                 data, size, position, 1u, &text, &length)
+             && append_acis_identifier (document, text, length);
+    case 0x08u:
+      return read_sab_string (
+                 data, size, position, 2u, &text, &length)
+             && append_acis_identifier (document, text, length);
+    case 0x09u:
+      return read_sab_string (
+                 data, size, position, 4u, &text, &length)
+             && append_acis_identifier (document, text, length);
+    case 0x0au:
+      return append_acis_boolean (document, 0);
+    case 0x0bu:
+      return append_acis_boolean (document, 1);
+    case 0x0cu:
+      return read_acis_u32 (data, size, position, &value32)
+             && append_acis_pointer (
+                 document, (int64_t)(int32_t)value32);
+    case 0x0du:
+    case 0x0eu:
+      return read_sab_string (
+                 data, size, position, 1u, &text, &length)
+             && append_acis_identifier (document, text, length);
+    case 0x0fu:
+      return append_acis_identifier (
+          document, (const unsigned char *)"{", 1u);
+    case 0x10u:
+      return append_acis_identifier (
+          document, (const unsigned char *)"}", 1u);
+    case 0x12u:
+      return read_sab_string (
+                 data, size, position, 4u, &text, &length)
+             && append_acis_embedded_text (
+                 document, text, length);
+    case 0x13u:
+    case 0x14u:
+      for (axis = 0; axis < 3u; axis++)
+        if (!read_acis_f64 (
+                data, size, position, &number)
+            || !append_acis_number (document, number))
+          return 0;
+      return 1;
+    case 0x17u:
+      return read_acis_u64 (data, size, position, &value64)
+             && append_acis_number (
+                 document, (double)(int64_t)value64);
+    default:
+      return 0;
+    }
+}
+
+static int
+append_sab_name_part (char *name, size_t name_size,
+                      size_t *name_length,
+                      const unsigned char *text, size_t length)
+{
+  if (!name || !name_size || !name_length
+      || length > name_size - *name_length - 1u)
+    return 0;
+  if (*name_length)
+    name[(*name_length)++] = '-';
+  memcpy (&name[*name_length], text, length);
+  *name_length += length;
+  name[*name_length] = '\0';
+  return 1;
+}
+
+static int
+parse_sab_acis_document (const unsigned char *data, size_t size,
+                         AcisDocument *document)
+{
+  size_t position = 15u;
+  uint32_t version;
+  uint32_t ignored;
+  double tolerance;
+  int32_t record_index = 0;
+  if (!data || !document || size < 31u
+      || size > MAX_ACIS_BYTES_PER_ENTITY
+      || (memcmp (data, "ACIS BinaryFile", 15u) != 0
+          && memcmp (data, "ASM BinaryFile", 14u) != 0)
+      || !read_acis_u32 (data, size, &position, &version)
+      || !read_acis_u32 (data, size, &position, &ignored)
+      || !read_acis_u32 (data, size, &position, &ignored)
+      || !read_acis_u32 (data, size, &position, &ignored)
+      || !read_tagged_sab_string (data, size, &position)
+      || !read_tagged_sab_string (data, size, &position)
+      || !read_tagged_sab_string (data, size, &position)
+      || !read_tagged_sab_double (
+          data, size, &position, &tolerance)
+      || !read_tagged_sab_double (
+          data, size, &position, &tolerance))
+    return 0;
+  if (position < size && data[position] == 0x06u
+      && !read_tagged_sab_double (
+          data, size, &position, &tolerance))
+    return 0;
+  document->version = version;
+  while (position < size)
+    {
+      char name[128];
+      size_t name_length = 0;
+      const unsigned char *part;
+      size_t part_length;
+      uint8_t tag;
+      AcisRecord *record;
+      AcisRecordKind kind;
+      size_t first_token;
+      uint32_t ignored_value;
+      memset (name, 0, sizeof (name));
+      while (position < size && data[position] == 0x0eu)
+        {
+          position++;
+          if (!read_sab_string (
+                  data, size, &position, 1u, &part, &part_length)
+              || !append_sab_name_part (
+                  name, sizeof (name), &name_length,
+                  part, part_length))
+            return 0;
+        }
+      if (position >= size || data[position++] != 0x0du
+          || !read_sab_string (
+              data, size, &position, 1u, &part, &part_length)
+          || !append_sab_name_part (
+              name, sizeof (name), &name_length,
+              part, part_length))
+        return 0;
+      if (strcmp (name, "End-of-ACIS-data") == 0
+          || strcmp (name, "End-of-ASM-data") == 0)
+        break;
+      kind = classify_acis_record (
+          (const unsigned char *)name, name_length);
+      if (!begin_acis_record (
+              document, record_index++, kind, &record))
+        return 0;
+      if (position < size && data[position] == 0x0cu)
+        {
+          position++;
+          if (!read_acis_u32 (
+                  data, size, &position, &ignored_value))
+            return 0;
+        }
+      if (position < size && data[position] == 0x04u)
+        {
+          position++;
+          if (!read_acis_u32 (
+                  data, size, &position, &ignored_value))
+            return 0;
+        }
+      first_token = document->token_count;
+      for (;;)
+        {
+          if (!read_acis_u8 (data, size, &position, &tag))
+            return 0;
+          if (tag == 0x11u)
+            break;
+          if (!append_sab_record_token (
+                  document, data, size, &position, tag))
+            return 0;
+        }
+      record->first_token = first_token;
+      record->token_count = document->token_count - first_token;
+    }
+  return document->record_count != 0u;
+}
+
+static int
+read_acis_entity_data (const Dwg_Object *object,
+                       const unsigned char **data, size_t *size,
+                       int *binary)
+{
+  const Dwg_Entity__3DSOLID *solid = NULL;
+  uint64_t total = 0;
+  size_t block;
+  if (!object || !object->tio.entity || !data || !size || !binary)
+    return 0;
+  if (object->fixedtype == DWG_TYPE_REGION)
+    solid = object->tio.entity->tio.REGION;
+  else if (object->fixedtype == DWG_TYPE__3DSOLID)
+    solid = object->tio.entity->tio._3DSOLID;
+  else if (object->fixedtype == DWG_TYPE_BODY)
+    solid = object->tio.entity->tio.BODY;
+  if (!solid || !solid->acis_data || solid->acis_empty)
+    return 0;
+  if (solid->version > 1)
+    {
+      total = (uint64_t)solid->sab_size;
+      *binary = 1;
+    }
+  else
+    {
+      if (!solid->block_size
+          || solid->num_blocks > MAX_ACIS_RECORDS_PER_ENTITY)
+        return 0;
+      for (block = 0; block < (size_t)solid->num_blocks; block++)
+        {
+          uint64_t length = (uint64_t)solid->block_size[block];
+          if (length > MAX_ACIS_BYTES_PER_ENTITY - total)
+            return 0;
+          total += length;
+        }
+      *binary = 0;
+    }
+  if (!total || total > MAX_ACIS_BYTES_PER_ENTITY
+      || total > SIZE_MAX)
+    return 0;
+  *data = (const unsigned char *)solid->acis_data;
+  *size = (size_t)total;
+  return 1;
+}
+
+static int
+parse_acis_entity_document (const Dwg_Object *object,
+                            AcisDocument *document)
+{
+  const unsigned char *data;
+  size_t size;
+  int binary;
+  int success;
+  if (!document)
+    return 0;
+  memset (document, 0, sizeof (*document));
+  if (!read_acis_entity_data (
+          object, &data, &size, &binary))
+    return 0;
+  success = binary
+                ? parse_sab_acis_document (data, size, document)
+                : parse_sat_acis_document (data, size, document);
+  if (!success)
+    free_acis_document (document);
+  return success;
+}
+
+static const AcisRecord *
+find_acis_record (const AcisDocument *document, int64_t index)
+{
+  size_t low;
+  size_t high;
+  if (!document || index < 0 || index > INT32_MAX)
+    return NULL;
+  if ((uint64_t)index < (uint64_t)document->record_count
+      && document->records[index].index == (int32_t)index)
+    return &document->records[index];
+  low = 0;
+  high = document->record_count;
+  while (low < high)
+    {
+      size_t middle = low + (high - low) / 2u;
+      int32_t candidate = document->records[middle].index;
+      if ((int64_t)candidate < index)
+        low = middle + 1u;
+      else
+        high = middle;
+    }
+  if (low < document->record_count
+      && document->records[low].index == (int32_t)index)
+    return &document->records[low];
+  return NULL;
+}
+
+static const AcisToken *
+acis_record_token (const AcisDocument *document,
+                   const AcisRecord *record, size_t index)
+{
+  if (!document || !record || index >= record->token_count
+      || record->first_token > document->token_count
+      || index > document->token_count - record->first_token)
+    return NULL;
+  return &document->tokens[record->first_token + index];
+}
+
+static int
+acis_record_pointer_from_end (const AcisDocument *document,
+                              const AcisRecord *record,
+                              size_t reverse_ordinal,
+                              int64_t *pointer)
+{
+  size_t index;
+  size_t ordinal = 0;
+  if (!document || !record || !pointer)
+    return 0;
+  for (index = record->token_count; index > 0; index--)
+    {
+      const AcisToken *token
+          = acis_record_token (document, record, index - 1u);
+      if (!token || token->kind != ACIS_TOKEN_POINTER)
+        continue;
+      if (ordinal++ == reverse_ordinal)
+        {
+          *pointer = token->pointer;
+          return 1;
+        }
+    }
+  return 0;
+}
+
+static int
+acis_record_number (const AcisDocument *document,
+                    const AcisRecord *record, size_t ordinal,
+                    double *number)
+{
+  size_t index;
+  size_t current = 0;
+  if (!document || !record || !number)
+    return 0;
+  for (index = 0; index < record->token_count; index++)
+    {
+      const AcisToken *token
+          = acis_record_token (document, record, index);
+      if (!token || token->kind != ACIS_TOKEN_NUMBER)
+        continue;
+      if (current++ == ordinal)
+        {
+          *number = token->number;
+          return 1;
+        }
+    }
+  return 0;
+}
+
+static int
+acis_token_identifier_equals (const AcisToken *token,
+                              const char *expected)
+{
+  return token && token->kind == ACIS_TOKEN_IDENTIFIER
+         && acis_text_equals (
+             token->text, token->text_length, expected);
+}
+
+static int
+acis_record_is_reversed (const AcisDocument *document,
+                         const AcisRecord *record)
+{
+  size_t index;
+  if (!document || !record)
+    return 0;
+  for (index = record->token_count; index > 0; index--)
+    {
+      const AcisToken *token
+          = acis_record_token (document, record, index - 1u);
+      if (!token)
+        continue;
+      if (token->kind == ACIS_TOKEN_FALSE
+          || acis_token_identifier_equals (token, "reversed"))
+        return 1;
+      if (token->kind == ACIS_TOKEN_TRUE
+          || acis_token_identifier_equals (token, "forward"))
+        return 0;
+    }
+  return 0;
+}
+
+static int
+acis_point_from_record (const AcisDocument *document,
+                        const AcisRecord *record, double point[3])
+{
+  size_t axis;
+  if (!record || record->kind != ACIS_RECORD_POINT || !point)
+    return 0;
+  for (axis = 0; axis < 3u; axis++)
+    if (!acis_record_number (document, record, axis, &point[axis])
+        || !isfinite (point[axis]))
+      return 0;
+  return 1;
+}
+
+static int
+acis_edge_endpoint (const AcisDocument *document,
+                    const AcisRecord *edge, int end,
+                    double point[3])
+{
+  int64_t vertex_pointer;
+  int64_t point_pointer;
+  const AcisRecord *vertex;
+  const AcisRecord *point_record;
+  size_t reverse_ordinal = end ? 2u : 3u;
+  if (!edge || edge->kind != ACIS_RECORD_EDGE
+      || !acis_record_pointer_from_end (
+          document, edge, reverse_ordinal, &vertex_pointer)
+      || !(vertex = find_acis_record (document, vertex_pointer))
+      || vertex->kind != ACIS_RECORD_VERTEX
+      || !acis_record_pointer_from_end (
+          document, vertex, 0u, &point_pointer)
+      || !(point_record = find_acis_record (
+          document, point_pointer)))
+    return 0;
+  return acis_point_from_record (document, point_record, point);
+}
+
+static void
+identity_acis_transform (AcisTransform *transform)
+{
+  if (!transform)
+    return;
+  memset (transform, 0, sizeof (*transform));
+  transform->matrix[0] = 1.0;
+  transform->matrix[4] = 1.0;
+  transform->matrix[8] = 1.0;
+  transform->scale = 1.0;
+}
+
+static int
+acis_transform_from_record (const AcisDocument *document,
+                            const AcisRecord *record,
+                            AcisTransform *transform)
+{
+  size_t index;
+  identity_acis_transform (transform);
+  if (!record || record->kind != ACIS_RECORD_TRANSFORM)
+    return 0;
+  for (index = 0; index < 9u; index++)
+    if (!acis_record_number (
+            document, record, index, &transform->matrix[index])
+        || !isfinite (transform->matrix[index]))
+      return 0;
+  for (index = 0; index < 3u; index++)
+    if (!acis_record_number (
+            document, record, 9u + index,
+            &transform->translation[index])
+        || !isfinite (transform->translation[index]))
+      return 0;
+  if (!acis_record_number (
+          document, record, 12u, &transform->scale)
+      || !isfinite (transform->scale)
+      || fabs (transform->scale) <= CURVE_EPSILON)
+    return 0;
+  return 1;
+}
+
+static const AcisRecord *
+acis_edge_body (const AcisDocument *document,
+                const AcisRecord *edge)
+{
+  const AcisRecord *record;
+  int64_t pointer;
+  if (!acis_record_pointer_from_end (
+          document, edge, 1u, &pointer)
+      || !(record = find_acis_record (document, pointer))
+      || record->kind != ACIS_RECORD_COEDGE
+      || !acis_record_pointer_from_end (
+          document, record, 0u, &pointer)
+      || !(record = find_acis_record (document, pointer))
+      || record->kind != ACIS_RECORD_LOOP
+      || !acis_record_pointer_from_end (
+          document, record, 0u, &pointer)
+      || !(record = find_acis_record (document, pointer))
+      || record->kind != ACIS_RECORD_FACE
+      || !acis_record_pointer_from_end (
+          document, record, 2u, &pointer)
+      || !(record = find_acis_record (document, pointer))
+      || record->kind != ACIS_RECORD_SHELL
+      || !acis_record_pointer_from_end (
+          document, record, 0u, &pointer)
+      || !(record = find_acis_record (document, pointer))
+      || record->kind != ACIS_RECORD_LUMP
+      || !acis_record_pointer_from_end (
+          document, record, 0u, &pointer)
+      || !(record = find_acis_record (document, pointer))
+      || record->kind != ACIS_RECORD_BODY)
+    return NULL;
+  return record;
+}
+
+static const AcisRecord *
+first_acis_body (const AcisDocument *document)
+{
+  size_t index;
+  if (!document)
+    return NULL;
+  for (index = 0; index < document->record_count; index++)
+    if (document->records[index].kind == ACIS_RECORD_BODY)
+      return &document->records[index];
+  return NULL;
+}
+
+static void
+acis_edge_transform (const AcisDocument *document,
+                     const AcisRecord *edge,
+                     AcisTransform *transform)
+{
+  const AcisRecord *body = acis_edge_body (document, edge);
+  const AcisRecord *transform_record;
+  int64_t pointer;
+  identity_acis_transform (transform);
+  if (!body)
+    body = first_acis_body (document);
+  if (!body
+      || !acis_record_pointer_from_end (
+          document, body, 0u, &pointer)
+      || pointer < 0
+      || !(transform_record = find_acis_record (
+          document, pointer)))
+    return;
+  (void)acis_transform_from_record (
+      document, transform_record, transform);
+}
+
+static void
+apply_acis_transform (const AcisTransform *transform,
+                      const double point[3], double result[3])
+{
+  double scaled[3];
+  scaled[0] = point[0] * transform->matrix[0]
+              + point[1] * transform->matrix[3]
+              + point[2] * transform->matrix[6];
+  scaled[1] = point[0] * transform->matrix[1]
+              + point[1] * transform->matrix[4]
+              + point[2] * transform->matrix[7];
+  scaled[2] = point[0] * transform->matrix[2]
+              + point[1] * transform->matrix[5]
+              + point[2] * transform->matrix[8];
+  result[0] = scaled[0] * transform->scale
+              + transform->translation[0];
+  result[1] = scaled[1] * transform->scale
+              + transform->translation[1];
+  result[2] = scaled[2] * transform->scale
+              + transform->translation[2];
+}
+
+static double
+acis_ellipse_parameter (const double center[3],
+                        const double major_axis[3],
+                        const double minor_axis[3],
+                        const double point[3])
+{
+  double difference[3];
+  double major_squared = 0.0;
+  double minor_squared = 0.0;
+  double major_projection = 0.0;
+  double minor_projection = 0.0;
+  size_t axis;
+  for (axis = 0; axis < 3u; axis++)
+    {
+      difference[axis] = point[axis] - center[axis];
+      major_squared += major_axis[axis] * major_axis[axis];
+      minor_squared += minor_axis[axis] * minor_axis[axis];
+      major_projection += difference[axis] * major_axis[axis];
+      minor_projection += difference[axis] * minor_axis[axis];
+    }
+  if (!isfinite (major_squared) || !isfinite (minor_squared)
+      || major_squared <= CURVE_EPSILON
+      || minor_squared <= CURVE_EPSILON)
+    return NAN;
+  return atan2 (
+      minor_projection / minor_squared,
+      major_projection / major_squared);
+}
+
+static void
+free_acis_spline (AcisSpline *spline)
+{
+  if (!spline)
+    return;
+  free (spline->knots);
+  free (spline->controls);
+  free (spline->weights);
+  memset (spline, 0, sizeof (*spline));
+}
+
+static int
+acis_token_number_at (const AcisDocument *document,
+                      const AcisRecord *record, size_t index,
+                      double *number)
+{
+  const AcisToken *token
+      = acis_record_token (document, record, index);
+  if (!token || token->kind != ACIS_TOKEN_NUMBER || !number)
+    return 0;
+  *number = token->number;
+  return 1;
+}
+
+static int
+acis_bounded_integer (double value, size_t maximum, size_t *result)
+{
+  double rounded;
+  if (!result || !isfinite (value) || value < 0.0
+      || value > (double)maximum)
+    return 0;
+  rounded = nearbyint (value);
+  if (fabs (rounded - value) > 1.0e-7)
+    return 0;
+  *result = (size_t)rounded;
+  return 1;
+}
+
+static int
+parse_acis_exact_spline (const AcisDocument *document,
+                         const AcisRecord *record,
+                         AcisSpline *spline)
+{
+  size_t position;
+  size_t degree;
+  size_t closure;
+  size_t unique_count;
+  size_t control_count;
+  size_t knot_count;
+  size_t index;
+  size_t sum = 0;
+  size_t expanded = 0;
+  double value;
+  double *unique_knots = NULL;
+  size_t *multiplicities = NULL;
+  const AcisToken *token;
+  int success = 0;
+  if (!document || !record || !spline
+      || record->kind != ACIS_RECORD_INTCURVE_CURVE)
+    return 0;
+  memset (spline, 0, sizeof (*spline));
+  for (position = 0; position < record->token_count; position++)
+    {
+      token = acis_record_token (document, record, position);
+      if (acis_token_identifier_equals (token, "exact_int_cur"))
+        break;
+    }
+  if (position >= record->token_count)
+    return 0;
+  position++;
+  if (!acis_token_number_at (
+          document, record, position++, &value))
+    return 0;
+  token = acis_record_token (document, record, position++);
+  if (!acis_token_identifier_equals (token, "nurbs")
+      && !acis_token_identifier_equals (token, "nubs"))
+    return 0;
+  spline->rational = acis_token_identifier_equals (token, "nurbs");
+  if (!acis_token_number_at (
+          document, record, position++, &value)
+      || !acis_bounded_integer (
+          value, MAX_SPLINE_DEGREE, &degree)
+      || degree < 1u
+      || !acis_token_number_at (
+          document, record, position++, &value)
+      || !acis_bounded_integer (value, 2u, &closure)
+      || !acis_token_number_at (
+          document, record, position++, &value)
+      || !acis_bounded_integer (
+          value, MAX_ACIS_KNOTS, &unique_count)
+      || unique_count < 2u)
+    return 0;
+  unique_knots = (double *)malloc (
+      unique_count * sizeof (double));
+  multiplicities = (size_t *)malloc (
+      unique_count * sizeof (size_t));
+  if (!unique_knots || !multiplicities)
+    goto done;
+  for (index = 0; index < unique_count; index++)
+    {
+      if (!acis_token_number_at (
+              document, record, position++, &unique_knots[index])
+          || !isfinite (unique_knots[index])
+          || (index && unique_knots[index - 1u]
+                           > unique_knots[index])
+          || !acis_token_number_at (
+              document, record, position++, &value)
+          || !acis_bounded_integer (
+              value, MAX_ACIS_CONTROL_POINTS,
+              &multiplicities[index])
+          || !multiplicities[index]
+          || sum > MAX_ACIS_CONTROL_POINTS
+                       - multiplicities[index])
+        goto done;
+      sum += multiplicities[index];
+    }
+  if (sum <= degree - 1u)
+    goto done;
+  control_count = sum - (degree - 1u);
+  if (control_count <= degree
+      || control_count > MAX_ACIS_CONTROL_POINTS)
+    goto done;
+  multiplicities[0] = degree + 1u;
+  multiplicities[unique_count - 1u] = degree + 1u;
+  for (index = 0; index < unique_count; index++)
+    {
+      if (expanded > MAX_ACIS_CONTROL_POINTS
+                         + MAX_SPLINE_DEGREE + 1u
+                       - multiplicities[index])
+        goto done;
+      expanded += multiplicities[index];
+    }
+  knot_count = control_count + degree + 1u;
+  if (expanded != knot_count)
+    goto done;
+  spline->knots = (double *)malloc (
+      knot_count * sizeof (double));
+  spline->controls = (double *)malloc (
+      control_count * 3u * sizeof (double));
+  spline->weights = (double *)malloc (
+      control_count * sizeof (double));
+  if (!spline->knots || !spline->controls || !spline->weights)
+    goto done;
+  expanded = 0;
+  for (index = 0; index < unique_count; index++)
+    {
+      size_t repeat;
+      for (repeat = 0; repeat < multiplicities[index]; repeat++)
+        spline->knots[expanded++] = unique_knots[index];
+    }
+  for (index = 0; index < control_count; index++)
+    {
+      size_t axis;
+      for (axis = 0; axis < 3u; axis++)
+        if (!acis_token_number_at (
+                document, record, position++,
+                &spline->controls[index * 3u + axis])
+            || !isfinite (
+                spline->controls[index * 3u + axis]))
+          goto done;
+      spline->weights[index] = 1.0;
+      if (spline->rational
+          && (!acis_token_number_at (
+                  document, record, position++,
+                  &spline->weights[index])
+              || !isfinite (spline->weights[index])
+              || fabs (spline->weights[index]) <= CURVE_EPSILON))
+        goto done;
+    }
+  spline->degree = degree;
+  spline->control_count = control_count;
+  spline->knot_count = knot_count;
+  (void)closure;
+  success = 1;
+
+done:
+  free (unique_knots);
+  free (multiplicities);
+  if (!success)
+    free_acis_spline (spline);
+  return success;
+}
+
+static int
+evaluate_acis_spline (const AcisSpline *spline, double parameter,
+                      double point[3])
+{
+  double points[MAX_SPLINE_DEGREE + 1u][3];
+  double weights[MAX_SPLINE_DEGREE + 1u];
+  size_t span = SIZE_MAX;
+  size_t index;
+  size_t level;
+  size_t axis;
+  double domain_end;
+  if (!spline || !point || !isfinite (parameter)
+      || !spline->knots || !spline->controls || !spline->weights
+      || spline->degree > MAX_SPLINE_DEGREE
+      || spline->control_count <= spline->degree)
+    return 0;
+  domain_end = spline->knots[spline->control_count];
+  if (parameter >= domain_end - CURVE_EPSILON)
+    span = spline->control_count - 1u;
+  else
+    for (index = spline->degree;
+         index < spline->control_count; index++)
+      if (spline->knots[index] <= parameter
+          && parameter < spline->knots[index + 1u])
+        {
+          span = index;
+          break;
+        }
+  if (span == SIZE_MAX || span < spline->degree)
+    return 0;
+  for (index = 0; index <= spline->degree; index++)
+    {
+      size_t control_index = span - spline->degree + index;
+      double weight = spline->weights[control_index];
+      for (axis = 0; axis < 3u; axis++)
+        points[index][axis]
+            = spline->controls[control_index * 3u + axis] * weight;
+      weights[index] = weight;
+    }
+  for (level = 1; level <= spline->degree; level++)
+    for (index = spline->degree; index >= level; index--)
+      {
+        size_t knot_index = span - spline->degree + index;
+        double denominator
+            = spline->knots[knot_index + spline->degree - level + 1u]
+              - spline->knots[knot_index];
+        double alpha = fabs (denominator) <= CURVE_EPSILON
+                           ? 0.0
+                           : (parameter - spline->knots[knot_index])
+                                 / denominator;
+        if (alpha < 0.0)
+          alpha = 0.0;
+        else if (alpha > 1.0)
+          alpha = 1.0;
+        for (axis = 0; axis < 3u; axis++)
+          points[index][axis]
+              = points[index - 1u][axis] * (1.0 - alpha)
+                + points[index][axis] * alpha;
+        weights[index]
+            = weights[index - 1u] * (1.0 - alpha)
+              + weights[index] * alpha;
+      }
+  if (!isfinite (weights[spline->degree])
+      || fabs (weights[spline->degree]) <= CURVE_EPSILON)
+    return 0;
+  for (axis = 0; axis < 3u; axis++)
+    point[axis] = points[spline->degree][axis]
+                  / weights[spline->degree];
+  return 1;
+}
+
+static unsigned
+acis_spline_segment_count (const AcisSpline *spline,
+                           double start, double end)
+{
+  size_t index;
+  size_t spans = 0;
+  size_t requested;
+  if (!spline || !isfinite (start) || !isfinite (end)
+      || end - start <= CURVE_EPSILON)
+    return 0;
+  for (index = spline->degree;
+       index < spline->control_count; index++)
+    {
+      double span_start = fmax (start, spline->knots[index]);
+      double span_end = fmin (end, spline->knots[index + 1u]);
+      if (span_end - span_start > CURVE_EPSILON)
+        spans++;
+    }
+  if (!spans || spans > SIZE_MAX / HATCH_SPLINE_SEGMENTS_PER_SPAN)
+    return 0;
+  requested = spans * HATCH_SPLINE_SEGMENTS_PER_SPAN;
+  return requested > MAX_HATCH_SPLINE_SEGMENTS
+             ? MAX_HATCH_SPLINE_SEGMENTS
+             : (unsigned)requested;
+}
+
+static int
+emit_acis_spline_edge (const AcisDocument *document,
+                       const AcisRecord *edge,
+                       const AcisRecord *curve,
+                       const AcisTransform *transform,
+                       const LineSegment *base,
+                       SegmentIteration *iteration,
+                       uint64_t *generated, int *handled)
+{
+  AcisSpline spline;
+  double domain_start;
+  double domain_end;
+  double start;
+  double end;
+  unsigned segment_count;
+  unsigned index;
+  uint64_t generated_before = *generated;
+  *handled = 0;
+  if (!parse_acis_exact_spline (document, curve, &spline))
+    return 1;
+  domain_start = spline.knots[spline.degree];
+  domain_end = spline.knots[spline.control_count];
+  start = domain_start;
+  end = domain_end;
+  {
+    double edge_start;
+    double edge_end;
+    if (acis_record_number (document, edge, 0u, &edge_start)
+        && acis_record_number (document, edge, 1u, &edge_end)
+        && isfinite (edge_start) && isfinite (edge_end))
+      {
+        start = fmax (domain_start, fmin (edge_start, edge_end));
+        end = fmin (domain_end, fmax (edge_start, edge_end));
+      }
+  }
+  segment_count = acis_spline_segment_count (&spline, start, end);
+  if (!segment_count)
+    {
+      free_acis_spline (&spline);
+      return 1;
+    }
+  for (index = 0; index < segment_count; index++)
+    {
+      double local_start[3];
+      double local_end[3];
+      double first = start + (end - start) * (double)index
+                               / (double)segment_count;
+      double last = start + (end - start) * (double)(index + 1u)
+                              / (double)segment_count;
+      LineSegment segment = *base;
+      if (*generated >= MAX_ACIS_SEGMENTS_PER_ENTITY)
+        break;
+      if (!evaluate_acis_spline (&spline, first, local_start)
+          || !evaluate_acis_spline (&spline, last, local_end))
+        {
+          segment_iteration_reject (iteration);
+          continue;
+        }
+      apply_acis_transform (transform, local_start, segment.start);
+      apply_acis_transform (transform, local_end, segment.end);
+      segment.source_kind = 7u;
+      segment.approximated_curve = 1u;
+      if (!segment_iteration_emit (iteration, &segment))
+        {
+          free_acis_spline (&spline);
+          return 0;
+        }
+      (*generated)++;
+    }
+  *handled = *generated != generated_before;
+  free_acis_spline (&spline);
+  return 1;
+}
+
+static int
+emit_acis_ellipse_edge (const AcisDocument *document,
+                        const AcisRecord *edge,
+                        const AcisRecord *curve,
+                        const AcisTransform *transform,
+                        const double edge_start[3],
+                        const double edge_end[3],
+                        const LineSegment *base,
+                        SegmentIteration *iteration,
+                        uint64_t *generated, int *handled)
+{
+  double center[3];
+  double normal[3];
+  double major_axis[3];
+  double minor_axis[3];
+  double ratio;
+  double start;
+  double end;
+  double sweep;
+  double parameter_start;
+  double parameter_end;
+  double endpoint_distance_squared = 0.0;
+  unsigned segment_count;
+  unsigned index;
+  int reversed;
+  size_t axis;
+  *handled = 0;
+  for (axis = 0; axis < 3u; axis++)
+    {
+      if (!acis_record_number (document, curve, axis, &center[axis])
+          || !acis_record_number (
+              document, curve, 3u + axis, &normal[axis])
+          || !acis_record_number (
+              document, curve, 6u + axis, &major_axis[axis]))
+        return 1;
+      endpoint_distance_squared
+          += (edge_end[axis] - edge_start[axis])
+             * (edge_end[axis] - edge_start[axis]);
+    }
+  if (!acis_record_number (document, curve, 9u, &ratio)
+      || !ellipse_axes (major_axis, normal, ratio, minor_axis))
+    return 1;
+  reversed = acis_record_is_reversed (document, edge);
+  if (acis_record_number (document, edge, 0u, &start)
+      && acis_record_number (document, edge, 1u, &end)
+      && isfinite (start) && isfinite (end)
+      && fabs (end - start) > CURVE_EPSILON)
+    {
+      if (reversed)
+        {
+          if (!normalized_curve_sweep (end, start, &sweep))
+            return 1;
+          sweep = -sweep;
+        }
+      else if (!normalized_curve_sweep (start, end, &sweep))
+        return 1;
+      parameter_start = start;
+    }
+  else
+    {
+      start = acis_ellipse_parameter (
+          center, major_axis, minor_axis, edge_start);
+      end = acis_ellipse_parameter (
+          center, major_axis, minor_axis, edge_end);
+      if (!isfinite (start) || !isfinite (end))
+        return 1;
+      if (endpoint_distance_squared <= 1.0e-18)
+        sweep = reversed ? -CURVE_FULL_TURN_RADIANS
+                         : CURVE_FULL_TURN_RADIANS;
+      else if (reversed)
+        {
+          if (!normalized_curve_sweep (end, start, &sweep))
+            return 1;
+          sweep = -sweep;
+        }
+      else if (!normalized_curve_sweep (start, end, &sweep))
+        return 1;
+      parameter_start = start;
+    }
+  segment_count = curve_segment_count (sweep);
+  if (!segment_count)
+    return 1;
+  parameter_end = parameter_start + sweep;
+  for (index = 0; index < segment_count; index++)
+    {
+      double local_start[3];
+      double local_end[3];
+      double first
+          = parameter_start
+            + (parameter_end - parameter_start) * (double)index
+                  / (double)segment_count;
+      double last
+          = parameter_start
+            + (parameter_end - parameter_start) * (double)(index + 1u)
+                  / (double)segment_count;
+      LineSegment segment = *base;
+      if (*generated >= MAX_ACIS_SEGMENTS_PER_ENTITY)
+        break;
+      ellipse_point (
+          center, major_axis, minor_axis, first, local_start);
+      ellipse_point (
+          center, major_axis, minor_axis, last, local_end);
+      apply_acis_transform (transform, local_start, segment.start);
+      apply_acis_transform (transform, local_end, segment.end);
+      segment.source_kind = 6u;
+      segment.approximated_curve = 1u;
+      if (!segment_iteration_emit (iteration, &segment))
+        return 0;
+      (*generated)++;
+      *handled = 1;
+    }
+  return 1;
+}
+
+static int
+iterate_acis_segments (const Dwg_Object *object,
+                       const CacheTables *tables,
+                       SegmentIteration *iteration)
+{
+  AcisDocument document;
+  LineSegment base;
+  uint64_t generated = 0;
+  size_t record_index;
+  if (!object || !object->tio.entity
+      || (object->fixedtype != DWG_TYPE_REGION
+          && object->fixedtype != DWG_TYPE__3DSOLID
+          && object->fixedtype != DWG_TYPE_BODY))
+    return 1;
+  if (!initialize_entity_segment (object, tables, 0u, 0, &base))
+    return 1;
+  if (!parse_acis_entity_document (object, &document))
+    return 1;
+  for (record_index = 0; record_index < document.record_count;
+       record_index++)
+    {
+      const AcisRecord *edge = &document.records[record_index];
+      const AcisRecord *curve = NULL;
+      AcisTransform transform;
+      double local_start[3];
+      double local_end[3];
+      LineSegment segment = base;
+      int64_t curve_pointer;
+      int handled = 0;
+      if (edge->kind != ACIS_RECORD_EDGE
+          || generated >= MAX_ACIS_SEGMENTS_PER_ENTITY)
+        continue;
+      if (!acis_edge_endpoint (
+              &document, edge, 0, local_start)
+          || !acis_edge_endpoint (
+              &document, edge, 1, local_end))
+        {
+          segment_iteration_reject (iteration);
+          continue;
+        }
+      acis_edge_transform (&document, edge, &transform);
+      if (acis_record_pointer_from_end (
+              &document, edge, 0u, &curve_pointer))
+        curve = find_acis_record (&document, curve_pointer);
+      if (curve && curve->kind == ACIS_RECORD_ELLIPSE_CURVE)
+        {
+          if (!emit_acis_ellipse_edge (
+                  &document, edge, curve, &transform,
+                  local_start, local_end, &base, iteration,
+                  &generated, &handled))
+            {
+              free_acis_document (&document);
+              return 0;
+            }
+        }
+      else if (curve && curve->kind == ACIS_RECORD_INTCURVE_CURVE)
+        {
+          if (!emit_acis_spline_edge (
+                  &document, edge, curve, &transform, &base,
+                  iteration, &generated, &handled))
+            {
+              free_acis_document (&document);
+              return 0;
+            }
+        }
+      if (handled)
+        continue;
+      apply_acis_transform (&transform, local_start, segment.start);
+      apply_acis_transform (&transform, local_end, segment.end);
+      segment.source_kind
+          = curve && curve->kind == ACIS_RECORD_STRAIGHT_CURVE
+                ? 0u
+                : 7u;
+      segment.approximated_curve
+          = curve && curve->kind != ACIS_RECORD_STRAIGHT_CURVE;
+      if (!segment_iteration_emit (iteration, &segment))
+        {
+          free_acis_document (&document);
+          return 0;
+        }
+      generated++;
+    }
+  free_acis_document (&document);
   return 1;
 }
 
@@ -8400,7 +12650,7 @@ iterate_gpu_segments (const Dwg_Data *dwg, const CacheTables *tables,
       LineSegment segment;
       int status = line_segment_from_object (object, tables, &segment);
       if (status == 0)
-        status = xline_segment_from_object (
+        status = construction_line_segment_from_object (
             dwg, object, tables, &segment);
       if (status < 0)
         iteration.skipped++;
@@ -8413,11 +12663,26 @@ iterate_gpu_segments (const Dwg_Data *dwg, const CacheTables *tables,
                    object, tables, &iteration))
         return 0;
       if (status == 0
+          && !iterate_polyline_mesh_segments (
+              object, tables, &iteration))
+        return 0;
+      if (status == 0
+          && !iterate_mline_segments (object, tables, &iteration))
+        return 0;
+      if (status == 0
           && !iterate_analytic_curve_segments (
               object, tables, &iteration))
         return 0;
       if (status == 0
           && !iterate_spline_segments (
+              object, tables, &iteration))
+        return 0;
+      if (status == 0
+          && !iterate_proxy_graphic_segments (
+              object, tables, &iteration))
+        return 0;
+      if (status == 0
+          && !iterate_acis_segments (
               object, tables, &iteration))
         return 0;
       if (status == 0
@@ -9833,34 +14098,64 @@ write_solid_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
        object_index++)
     {
       const Dwg_Object *object = &dwg->object[object_index];
-      const Dwg_Entity_SOLID *solid;
+      const Dwg_Entity_SOLID *solid = NULL;
+      const Dwg_Entity_TRACE *trace = NULL;
       double corners[4][3];
       double normal[3];
+      double elevation;
+      double thickness;
       size_t corner_index;
-      if (object->fixedtype != DWG_TYPE_SOLID || !object->tio.entity
-          || !(solid = object->tio.entity->tio.SOLID))
+      if (!object->tio.entity)
         continue;
-      corners[0][0] = solid->corner1.x;
-      corners[0][1] = solid->corner1.y;
-      corners[1][0] = solid->corner2.x;
-      corners[1][1] = solid->corner2.y;
-      /*
-       * AutoCAD records the third SOLID corner opposite corner 2 and the
-       * fourth opposite corner 1.  Cache the quadrilateral in perimeter
-       * order so every consumer can triangulate, outline and hit-test it as
-       * 1-2-4-3.  A triangular SOLID remains 1-2-3-3 because corners 3 and 4
-       * are identical in that case.
-       */
-      corners[2][0] = solid->corner4.x;
-      corners[2][1] = solid->corner4.y;
-      corners[3][0] = solid->corner3.x;
-      corners[3][1] = solid->corner3.y;
-      for (corner_index = 0; corner_index < 4; corner_index++)
-        corners[corner_index][2] = solid->elevation;
-      if (!isfinite (solid->elevation)
-          || !isfinite (solid->thickness))
+      if (object->fixedtype == DWG_TYPE_SOLID
+          && (solid = object->tio.entity->tio.SOLID))
         {
-          set_error (writer, "SOLID source contains a non-finite value");
+          corners[0][0] = solid->corner1.x;
+          corners[0][1] = solid->corner1.y;
+          corners[1][0] = solid->corner2.x;
+          corners[1][1] = solid->corner2.y;
+          /*
+           * AutoCAD records the third SOLID corner opposite corner 2 and the
+           * fourth opposite corner 1.  Cache the quadrilateral in perimeter
+           * order so every consumer can triangulate, outline and hit-test it
+           * as 1-2-4-3.  A triangular SOLID remains 1-2-3-3 because corners
+           * 3 and 4 are identical in that case. TRACE uses the same ordering.
+           */
+          corners[2][0] = solid->corner4.x;
+          corners[2][1] = solid->corner4.y;
+          corners[3][0] = solid->corner3.x;
+          corners[3][1] = solid->corner3.y;
+          elevation = solid->elevation;
+          thickness = solid->thickness;
+          finite_normal_or_unit_z (
+              solid->extrusion.x, solid->extrusion.y,
+              solid->extrusion.z, normal);
+        }
+      else if (object->fixedtype == DWG_TYPE_TRACE
+               && (trace = object->tio.entity->tio.TRACE))
+        {
+          corners[0][0] = trace->corner1.x;
+          corners[0][1] = trace->corner1.y;
+          corners[1][0] = trace->corner2.x;
+          corners[1][1] = trace->corner2.y;
+          corners[2][0] = trace->corner4.x;
+          corners[2][1] = trace->corner4.y;
+          corners[3][0] = trace->corner3.x;
+          corners[3][1] = trace->corner3.y;
+          elevation = trace->elevation;
+          thickness = trace->thickness;
+          finite_normal_or_unit_z (
+              trace->extrusion.x, trace->extrusion.y,
+              trace->extrusion.z, normal);
+        }
+      else
+        continue;
+      for (corner_index = 0; corner_index < 4; corner_index++)
+        corners[corner_index][2] = elevation;
+      if (!isfinite (elevation) || !isfinite (thickness))
+        {
+          set_error (
+              writer, "SOLID/TRACE source contains a non-finite value");
           return 0;
         }
       for (corner_index = 0; corner_index < 4; corner_index++)
@@ -9869,13 +14164,11 @@ write_solid_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
               || !isfinite (corners[corner_index][1]))
             {
               set_error (
-                  writer, "SOLID source contains a non-finite corner");
+                  writer,
+                  "SOLID/TRACE source contains a non-finite corner");
               return 0;
             }
         }
-      finite_normal_or_unit_z (
-          solid->extrusion.x, solid->extrusion.y, solid->extrusion.z,
-          normal);
       if (!write_common (writer, object, tables)
           || !write_u32 (writer, dwg->header_vars.FILLMODE ? 1u : 0u)
           || !write_u32 (writer, 0))
@@ -9886,7 +14179,7 @@ write_solid_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
             return 0;
         }
       if (!write_vec3 (writer, normal)
-          || !write_f64 (writer, solid->thickness))
+          || !write_f64 (writer, thickness))
         return 0;
       count++;
     }
@@ -10291,6 +14584,7 @@ validate_image_source (CacheWriter *writer,
 static int
 write_image_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
                             const CacheTables *tables,
+                            const EmbeddedImageTable *embedded_images,
                             SectionEntry *entry)
 {
   uint64_t image_count = 0;
@@ -10310,6 +14604,16 @@ write_image_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
       if (object->fixedtype == DWG_TYPE_IMAGE && object->tio.entity
           && object->tio.entity->tio.IMAGE)
         image_count++;
+    }
+  if (embedded_images)
+    {
+      if (image_count != embedded_images->source_image_count
+          || embedded_images->count > UINT64_MAX - image_count)
+        {
+          set_error (writer, "embedded IMAGE source count is inconsistent");
+          return 0;
+        }
+      image_count += embedded_images->count;
     }
   if (image_count > MAX_IMAGE_SOURCE_RECORDS
       || image_count > UINT32_MAX
@@ -10351,6 +14655,39 @@ write_image_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
         }
       row++;
     }
+  if (embedded_images)
+    for (object_index = 0; object_index < embedded_images->count;
+         object_index++)
+      {
+        const EmbeddedImagePreview *preview
+            = &embedded_images->items[object_index];
+        char path[80];
+        int path_length = snprintf (
+            path, sizeof (path), "@embedded/ole-%" PRIx64 ".%s",
+            (uint64_t)preview->object->handle.value,
+            preview->mime_type == EMBEDDED_IMAGE_MIME_EMF ? "emf"
+                                                          : "bmp");
+        if (path_length <= 0 || (size_t)path_length >= sizeof (path))
+          {
+            set_error (writer, "embedded IMAGE path exceeds its limits");
+            goto done;
+          }
+        paths[row] = (char *)malloc ((size_t)path_length + 1u);
+        if (!paths[row])
+          {
+            set_error (writer, "cannot allocate embedded IMAGE path");
+            goto done;
+          }
+        memcpy (paths[row], path, (size_t)path_length + 1u);
+        if (!checked_string_layout (
+                &string_cursor, paths[row], &references[row * 2],
+                &references[row * 2 + 1]))
+          {
+            set_error (writer, "embedded IMAGE path table exceeds its limits");
+            goto done;
+          }
+        row++;
+      }
   string_offset
       = STRING_TABLE_HEADER_SIZE + image_count * IMAGE_ENTITY_RECORD_SIZE;
   if (!align_writer (writer, &offset)
@@ -10415,6 +14752,52 @@ write_image_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
       first_clip_vertex += clip_vertex_count;
       row++;
     }
+  if (embedded_images)
+    for (object_index = 0; object_index < embedded_images->count;
+         object_index++)
+      {
+        const EmbeddedImagePreview *preview
+            = &embedded_images->items[object_index];
+        const Dwg_Entity_OLE2FRAME *frame
+            = preview->object->tio.entity->tio.OLE2FRAME;
+        double points[4][3];
+        double insertion_point[3];
+        double u_vector[3];
+        double v_vector[3];
+        double width = preview->width ? (double)preview->width : 1.0;
+        double height = preview->height ? (double)preview->height : 1.0;
+        size_t axis;
+        if (!ole2frame_corners (frame, points))
+          {
+            set_error (writer, "embedded IMAGE placement became invalid");
+            goto done;
+          }
+        for (axis = 0; axis < 3; axis++)
+          {
+            u_vector[axis] = (points[1][axis] - points[0][axis]) / width;
+            v_vector[axis] = (points[0][axis] - points[3][axis]) / height;
+            insertion_point[axis]
+                = points[3][axis] + 0.5 * u_vector[axis]
+                  + 0.5 * v_vector[axis];
+          }
+        if (!write_common (writer, preview->object, tables)
+            || !write_u32 (writer, references[row * 2])
+            || !write_u32 (writer, references[row * 2 + 1])
+            || !write_i32 (writer, 0) || !write_u16 (writer, 3u)
+            || !write_u8 (writer, 0u) || !write_u8 (writer, 0u)
+            || !write_u8 (writer, 50u) || !write_u8 (writer, 50u)
+            || !write_u8 (writer, 0u) || !write_u8 (writer, 0u)
+            || !write_u32 (writer, 0u)
+            || !write_u64 (writer, first_clip_vertex)
+            || !write_u32 (writer, 0u) || !write_u32 (writer, 0u)
+            || !write_u64 (writer, 0u) || !write_u64 (writer, 0u)
+            || !write_vec3 (writer, insertion_point)
+            || !write_vec3 (writer, u_vector)
+            || !write_vec3 (writer, v_vector)
+            || !write_f64 (writer, width) || !write_f64 (writer, height))
+          goto done;
+        row++;
+      }
   for (row = 0; row < image_count; row++)
     if (!write_bytes (writer, paths[row], strlen (paths[row])))
       goto done;
@@ -10473,6 +14856,120 @@ write_image_clip_vertex_section (CacheWriter *writer,
       writer, entry, SECTION_IMAGE_CLIP_VERTICES,
       IMAGE_CLIP_VERTEX_RECORD_SIZE, "image_clip_vertices", offset,
       count);
+}
+
+static int
+write_embedded_image_record_section (
+    CacheWriter *writer, const EmbeddedImageTable *table,
+    SectionEntry *entry)
+{
+  uint64_t offset;
+  uint64_t count = 0;
+  size_t index;
+  if (!align_writer (writer, &offset))
+    return 0;
+  for (index = 0; index < table->count; index++)
+    {
+      const EmbeddedImagePreview *preview = &table->items[index];
+      uint64_t image_index = table->source_image_count + index;
+      if (!preview->payload_length)
+        continue;
+      if (image_index > UINT32_MAX
+          || !write_u32 (writer, (uint32_t)image_index)
+          || !write_u32 (writer, preview->mime_type)
+          || !write_u64 (writer, preview->payload_offset)
+          || !write_u64 (writer, preview->payload_length)
+          || !write_u32 (writer, preview->width)
+          || !write_u32 (writer, preview->height)
+          || !write_u32 (writer, preview->flags)
+          || !write_u32 (writer, 0u))
+        return 0;
+      count++;
+    }
+  if (count != table->available_count)
+    {
+      set_error (writer, "embedded IMAGE record count is inconsistent");
+      return 0;
+    }
+  return finish_fixed_section (
+      writer, entry, SECTION_EMBEDDED_IMAGE_RECORDS,
+      EMBEDDED_IMAGE_RECORD_SIZE, "embedded_image_records", offset,
+      count);
+}
+
+static int
+write_embedded_image_byte_section (
+    CacheWriter *writer, const EmbeddedImageTable *table,
+    SectionEntry *entry)
+{
+  uint64_t offset;
+  uint64_t cursor = 0;
+  size_t index;
+  if (!align_writer (writer, &offset))
+    return 0;
+  for (index = 0; index < table->count; index++)
+    {
+      const EmbeddedImagePreview *preview = &table->items[index];
+      if (!preview->payload_length)
+        continue;
+      if (preview->payload_offset != cursor)
+        {
+          set_error (writer, "embedded IMAGE byte ranges are inconsistent");
+          return 0;
+        }
+      if (preview->owned_payload)
+        {
+          if (preview->mime_type != EMBEDDED_IMAGE_MIME_EMF
+              || !write_bytes (
+                  writer, preview->owned_payload,
+                  (size_t)preview->payload_length))
+            return 0;
+        }
+      else if (preview->bmp)
+        {
+          if (preview->mime_type != EMBEDDED_IMAGE_MIME_BMP
+              || preview->bmp_length != preview->payload_length
+              || !write_bytes (
+                  writer, preview->bmp, preview->bmp_length))
+            return 0;
+        }
+      else
+        {
+          uint32_t file_size;
+          uint32_t pixel_offset;
+          if (preview->mime_type != EMBEDDED_IMAGE_MIME_BMP
+              || !preview->bmi || !preview->bits
+              || preview->bmi_length > UINT32_MAX - 14u
+              || preview->bits_length
+                     > UINT32_MAX - 14u - preview->bmi_length)
+            {
+              set_error (writer, "embedded IMAGE DIB range is invalid");
+              return 0;
+            }
+          pixel_offset = 14u + preview->bmi_length;
+          file_size = pixel_offset + preview->bits_length;
+          if (file_size != preview->payload_length
+              || !write_u16 (writer, 0x4d42u)
+              || !write_u32 (writer, file_size)
+              || !write_u32 (writer, 0u)
+              || !write_u32 (writer, pixel_offset)
+              || !write_bytes (
+                  writer, preview->bmi, preview->bmi_length)
+              || !write_bytes (
+                  writer, preview->bits, preview->bits_length))
+            return 0;
+        }
+      cursor += preview->payload_length;
+    }
+  if (cursor != table->byte_length)
+    {
+      set_error (writer, "embedded IMAGE byte count is inconsistent");
+      return 0;
+    }
+  return finish_fixed_section (
+      writer, entry, SECTION_EMBEDDED_IMAGE_BYTES,
+      EMBEDDED_IMAGE_BYTE_RECORD_SIZE, "embedded_image_bytes", offset,
+      cursor);
 }
 
 static int
@@ -11924,8 +16421,13 @@ write_section_group (SectionGroupTask *task)
                 &writer, task->dwg, &task->sections[35]);
       break;
     case 6:
-      success
-          = write_linetype_section (
+      {
+        EmbeddedImageTable embedded_images;
+        memset (&embedded_images, 0, sizeof (embedded_images));
+        success
+            = collect_embedded_image_table (
+                  &writer, task->dwg, &embedded_images)
+              && write_linetype_section (
                 &writer, task->tables, &task->sections[36])
             && write_linetype_dash_section (
                 &writer, task->dwg, task->tables, &task->sections[37])
@@ -11938,7 +16440,8 @@ write_section_group (SectionGroupTask *task)
             && write_viewport_clip_vertex_section (
                 &writer, task->dwg, task->tables, &task->sections[41])
             && write_image_entity_section (
-                &writer, task->dwg, task->tables, &task->sections[42])
+                &writer, task->dwg, task->tables, &embedded_images,
+                &task->sections[42])
             && write_image_clip_vertex_section (
                 &writer, task->dwg, &task->sections[43])
             && write_text_annotation_context_section (
@@ -11946,8 +16449,14 @@ write_section_group (SectionGroupTask *task)
             && write_text_annotation_column_height_section (
                 &writer, task->dwg, &task->sections[45])
             && write_viewport_layer_override_section (
-                &writer, task->dwg, task->tables, &task->sections[46]);
-      break;
+                &writer, task->dwg, task->tables, &task->sections[46])
+            && write_embedded_image_record_section (
+                &writer, &embedded_images, &task->sections[47])
+            && write_embedded_image_byte_section (
+                &writer, &embedded_images, &task->sections[48]);
+        free_embedded_image_table (&embedded_images);
+        break;
+      }
     default:
       set_error (&writer, "scene-cache section group is invalid");
       break;
@@ -12051,7 +16560,7 @@ write_section_groups (
   static const size_t first_sections[SECTION_GROUP_COUNT]
       = { 0, 4, 10, 18, 20, 27, 36 };
   static const size_t last_sections[SECTION_GROUP_COUNT]
-      = { 3, 9, 17, 19, 26, 35, 46 };
+      = { 3, 9, 17, 19, 26, 35, 48 };
   SectionGroupTask tasks[SECTION_GROUP_COUNT];
   SectionGroupQueue queue;
   uint8_t copy_buffer[64u * 1024u];
@@ -12294,7 +16803,9 @@ write_scene_preview (
       || !write_empty_fixed_section (&writer, &sections[44], 44)
       || !write_empty_fixed_section (&writer, &sections[45], 45)
       || !write_viewport_layer_override_section (
-          &writer, dwg, tables, &sections[46]))
+          &writer, dwg, tables, &sections[46])
+      || !write_empty_fixed_section (&writer, &sections[47], 47)
+      || !write_empty_fixed_section (&writer, &sections[48], 48))
     goto done;
   if (!position (&writer, &file_size)
       || !write_header (
@@ -12396,6 +16907,11 @@ libredwg_write_scene_cache (
                         "cannot prepare bounded scene-cache tables");
       return 0;
     }
+  report->source_linetypes = tables.source_linetype_count;
+  report->serialized_linetypes = tables.linetype_count;
+  report->referenced_linetypes = tables.referenced_linetype_count;
+  report->omitted_referenced_linetypes
+      = tables.omitted_referenced_linetype_count;
   report->performance.table_ms = milliseconds_from_nanoseconds (
       elapsed_nanoseconds (stage_started));
   stage_started = monotonic_nanoseconds ();

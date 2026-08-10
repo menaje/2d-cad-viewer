@@ -5,7 +5,7 @@ import {
   includePoint,
   transformPoint,
 } from "./math.mjs";
-import { effectiveClipBounds } from "./instance-graph.mjs?v=1.20.0";
+import { effectiveClipBounds } from "./instance-graph.mjs?v=1.21.0";
 import { decodeCadOpacity } from "./cad-color.mjs";
 import {
   indexDwgRenderDeltaStyles,
@@ -171,6 +171,7 @@ export class RasterImageAssetStore {
       "maximum image dimension",
     );
     this.references = new Map();
+    this.failures = new Map();
     this.resources = new Map();
     this.compressedBytes = 0;
     this.decodedPixels = 0;
@@ -195,7 +196,7 @@ export class RasterImageAssetStore {
       !Number.isSafeInteger(imageIndex) ||
       imageIndex < 0 ||
       !/^[a-f0-9]{64}$/u.test(resourceId) ||
-      !["image/jpeg", "image/png"].includes(mimeType) ||
+      !["image/jpeg", "image/png", "image/bmp"].includes(mimeType) ||
       !Number.isSafeInteger(width) ||
       width <= 0 ||
       !Number.isSafeInteger(height) ||
@@ -212,7 +213,7 @@ export class RasterImageAssetStore {
         throw new Error("raster image response references unknown content");
       }
       if (
-        bytes.byteLength > 32 * 1024 * 1024 ||
+        bytes.byteLength > 64 * 1024 * 1024 ||
         this.compressedBytes + bytes.byteLength >
           this.maximumCompressedBytes
       ) {
@@ -241,7 +242,9 @@ export class RasterImageAssetStore {
     ) {
       throw new Error("raster image resource metadata changed");
     }
-    this.references.set(referenceKey(cacheId, imageIndex), resourceId);
+    const key = referenceKey(cacheId, imageIndex);
+    this.references.set(key, resourceId);
+    this.failures.delete(key);
     resource.lastUsed = ++this.clock;
     return Object.freeze({
       resourceId,
@@ -258,9 +261,12 @@ export class RasterImageAssetStore {
     if (this.disposed) {
       return Object.freeze({ status: "missing" });
     }
-    const resourceId = this.references.get(
-      referenceKey(cacheId, imageIndex),
-    );
+    const key = referenceKey(cacheId, imageIndex);
+    const failure = this.failures.get(key);
+    if (failure) {
+      return Object.freeze({ status: "error", error: failure });
+    }
+    const resourceId = this.references.get(key);
     const resource = resourceId
       ? this.resources.get(resourceId)
       : undefined;
@@ -330,6 +336,27 @@ export class RasterImageAssetStore {
     return state;
   }
 
+  reject(cacheId, imageIndex, error) {
+    if (this.disposed) {
+      return;
+    }
+    if (
+      typeof cacheId !== "string" ||
+      cacheId.length === 0 ||
+      !Number.isSafeInteger(imageIndex) ||
+      imageIndex < 0
+    ) {
+      throw new TypeError("raster image reference is invalid");
+    }
+    const normalized =
+      error instanceof Error
+        ? error
+        : new Error("도면 이미지를 불러오지 못했습니다.");
+    const key = referenceKey(cacheId, imageIndex);
+    this.references.delete(key);
+    this.failures.set(key, normalized);
+  }
+
   snapshot() {
     let decodedResources = 0;
     for (const resource of this.resources.values()) {
@@ -339,6 +366,7 @@ export class RasterImageAssetStore {
       resources: this.resources.size,
       references: this.references.size,
       decodedResources,
+      failedReferences: this.failures.size,
       compressedBytes: this.compressedBytes,
       decodedPixels: this.decodedPixels,
       decodedBytes: this.decodedPixels * 4,
@@ -355,6 +383,7 @@ export class RasterImageAssetStore {
       resource.bitmap = null;
     }
     this.references.clear();
+    this.failures.clear();
     this.resources.clear();
     this.compressedBytes = 0;
     this.decodedPixels = 0;
@@ -611,6 +640,35 @@ function screenPolygonDistance(point, polygon) {
     );
   }
   return distance;
+}
+
+function drawUnavailableImage(context, polygon) {
+  if (
+    polygon.length !== 4 ||
+    !polygon.flat().every(Number.isFinite)
+  ) {
+    return;
+  }
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.globalAlpha = 0.8;
+  context.filter = "none";
+  context.strokeStyle = "#d88924";
+  context.lineWidth = Math.max(globalThis.devicePixelRatio ?? 1, 1);
+  context.setLineDash([6, 4]);
+  context.beginPath();
+  context.moveTo(polygon[0][0], polygon[0][1]);
+  for (let index = 1; index < polygon.length; index += 1) {
+    context.lineTo(polygon[index][0], polygon[index][1]);
+  }
+  context.closePath();
+  context.stroke();
+  context.setLineDash([]);
+  context.beginPath();
+  context.moveTo(polygon[0][0], polygon[0][1]);
+  context.lineTo(polygon[2][0], polygon[2][1]);
+  context.moveTo(polygon[1][0], polygon[1][1]);
+  context.lineTo(polygon[3][0], polygon[3][1]);
+  context.stroke();
 }
 
 function boundaryPoints(record, imageEntities) {
@@ -1409,6 +1467,29 @@ export class CanvasRasterImageOverlay {
         }
         if (asset.status === "error") {
           metrics.failedImages += 1;
+          context.save();
+          this.#applyXClip(
+            instances.clipIds?.[instanceIndex] ?? 0,
+            camera,
+            width,
+            height,
+            metrics,
+          );
+          this.#applyImageClip(
+            record,
+            matrix,
+            camera,
+            width,
+            height,
+            metrics,
+          );
+          drawUnavailableImage(context, [
+            topLeft,
+            topRight,
+            bottomRight,
+            bottomLeft,
+          ]);
+          context.restore();
           continue;
         }
         context.save();

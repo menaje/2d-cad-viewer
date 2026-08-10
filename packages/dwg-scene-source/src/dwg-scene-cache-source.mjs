@@ -16,7 +16,7 @@ import { SceneCacheReader } from "./scene-cache.mjs";
 
 export const DEFAULT_DWG_RANGE_REQUEST_BYTES = 8 * 1024 * 1024;
 export const DWG_SCENE_CACHE_MEDIA_TYPE =
-  "application/vnd.dwg-viewer.scene-cache.v1.20";
+  "application/vnd.dwg-viewer.scene-cache.v1.21";
 
 function protocolError(code, message, details = {}) {
   return new RenderProtocolError(code, message, details);

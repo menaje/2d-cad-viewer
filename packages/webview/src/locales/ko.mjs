@@ -7,7 +7,7 @@ export const KO_MESSAGES = Object.freeze({
   "common.noPath": "(경로 없음)",
   "common.unknownError": "알 수 없는 오류",
   "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.20",
+  "page.eyebrow": "DWG Viewer · Scene Cache v1.21",
   "page.heading": "대형 도면 첫 화면 검증기",
   "page.hostHeading": "DWG 도면 뷰어",
   "toolbar.more.open": "도면 도구 펼치기",
@@ -214,6 +214,10 @@ export const KO_MESSAGES = Object.freeze({
   "xrefs.imageConnectFailed": "이미지 파일을 연결하지 못했습니다.",
   "xrefs.imageDataUnsafe": "이미지 데이터를 안전하게 받을 수 없습니다.",
   "xrefs.imageDecodeFailed": "이미지를 화면용으로 해석하지 못했습니다.",
+  "xrefs.embeddedImageUnavailable":
+    "이 OLE 내장 미리보기는 안전하게 해석할 수 없습니다.",
+  "xrefs.embeddedImageHashUnavailable":
+    "현재 환경에서는 내장 이미지 검증을 사용할 수 없습니다.",
   "export.panel": "도면 PNG/PDF 출력",
   "export.heading": "도면 출력",
   "export.close": "도면 출력 닫기",
@@ -385,6 +389,8 @@ export const KO_MESSAGES = Object.freeze({
   "review.runtime.kind.viewportBoundary": "뷰포트 경계",
   "review.runtime.kind.leader": "지시선",
   "review.runtime.kind.oleBoundary": "OLE 경계",
+  "review.runtime.kind.polygonMesh": "폴리곤 메시",
+  "review.runtime.kind.multiline": "다중선",
   "review.runtime.kind.text": "문자",
   "review.runtime.kind.image": "이미지",
   "review.runtime.kind.blockReference": "블록 참조",

@@ -266,7 +266,7 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   );
   assert.match(
     template,
-    /"@menaje\/dwg-scene-source":\s*"\.\.\/dwg-scene-source\/src\/index\.mjs"/u,
+    /"@menaje\/dwg-scene-source":\s*"\.\.\/dwg-scene-source\/src\/index\.mjs\?v=1\.21\.0"/u,
   );
   assert.match(
     template,

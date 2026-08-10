@@ -108,6 +108,10 @@ docker run --rm --platform linux/amd64 \
     export PATH
 
     tar -xf "libredwg-$LIBREDWG_VERSION.tar.xz"
+    patch --batch --forward -d "libredwg-$LIBREDWG_VERSION" -p1 \
+      < /adapter/libredwg-acds-sab.patch
+    patch --batch --forward -d "libredwg-$LIBREDWG_VERSION" -p1 \
+      < /adapter/libredwg-r2007-high-compression.patch
     (
       cd "libredwg-$LIBREDWG_VERSION"
       PKG_CONFIG=/work/tools/bin/pkgconf emconfigure ./configure \

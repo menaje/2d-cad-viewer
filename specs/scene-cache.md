@@ -1,7 +1,7 @@
-# Scene Cache v1.20
+# Scene Cache v1.21
 
 Status: current and exclusive. Product writers and readers accept exactly
-major 1, minor 20. References to lower minor versions below describe the
+major 1, minor 21. References to lower minor versions below describe the
 additive format history only and do not define supported runtime inputs.
 The current implementation includes source geometry/text writing, resolved
 DIMENSION picture-block instances, bounded HATCH rings and asynchronous
@@ -11,8 +11,8 @@ wireframe paths, plus lossless WIPEOUT source, frame display and normalized
 draw-order tables, original XREF paths, INSERT/XREF spatial clips and
 external line/text composition, CAD linetypes, paper/model layout tabs,
 viewport layer/clip/annotation-scale state and the saved model-space view
-plus source IMAGE/IMAGEDEF paths, image bases and clip boundaries
-plus bounded MTEXT annotation-context representations implemented;
+plus source IMAGE/IMAGEDEF paths, image bases and clip boundaries, bounded
+OLE bitmap/EMF previews and bounded MTEXT annotation-context representations;
 expansion tracked by GitHub issues #3 and #9.
 
 The cache is a little-endian, versioned binary container designed for range
@@ -50,7 +50,7 @@ Header flag bit 0 (`0x00000001`) marks a display-only progressive preview.
 All other bits are reserved and must be zero; the Webview rejects a cache with
 an unknown header flag. A canonical full cache always writes flags as zero.
 
-A flagged preview is still an independently readable v1.20 container with the
+A flagged preview is still an independently readable v1.21 container with the
 complete section directory. It carries drawing, layer, block and INSERT
 metadata, layout/viewport state including viewport layer overrides, INSERT
 clip boundaries, plus only the LOD-0 GPU line batches and vertices needed for
@@ -124,6 +124,8 @@ Section kinds currently written:
 | 56 | MTEXT annotation-context representation records |
 | 57 | MTEXT annotation-context column-height pool |
 | 58 | sparse viewport-specific layer property overrides |
+| 59 | embedded OLE preview metadata |
+| 60 | embedded OLE preview byte pool |
 
 Version 1.0 contains kinds 1–3 and 10–13. Version 1.1 adds kinds 14–21.
 Version 1.2 adds kinds 30–31 for straight and polyline GPU lines. Version 1.3
@@ -154,9 +156,9 @@ IMAGEDEF paths and exact clip coordinates. Version 1.19 adds kinds 56–57 for
 MTEXT annotation-context representations and their column heights, and uses
 the final eight bytes of the unchanged kind-51 viewport record for its exact
 annotation scale. Version 1.20 adds kind 58 for viewport-specific layer color,
-transparency, linetype and lineweight overrides. A v1.20 writer always emits
-all 47 sections, including empty
-pools.
+transparency, linetype and lineweight overrides. Version 1.21 adds kinds 59–60
+for bounded OLE bitmap and reconstructed EMF previews. A v1.21 writer always
+emits all 49 sections, including empty pools.
 
 ## Shared primitive prefix
 
@@ -181,7 +183,7 @@ coordinates without replacing these source-precision records.
 
 ## Drawing record
 
-In v1.20, kind 1 contains one 160-byte record:
+In v1.20 and v1.21, kind 1 contains one 160-byte record:
 
 | Offset | Type | Field |
 | ---: | --- | --- |
@@ -208,7 +210,7 @@ Before v1.10, offset 12 is reserved and must be zero. Versions 1.10–1.13 use
 only its WIPEOUT value; v1.14 adds the three display bits. Versions before
 v1.15 end at byte 80, v1.15–v1.16 end at byte 104, and v1.17 adds the saved
 view suffix. Those shorter historical records are not accepted by the current
-reader, which requires the complete 160-byte v1.20 record.
+reader, which requires the complete 160-byte current record.
 
 ## String-table sections
 
@@ -820,6 +822,47 @@ the bitmap to `insertion + U*x + V*y`, applies rectangular or polygonal IMAGE
 clipping, brightness, contrast, fade and instance opacity, and keeps WebGL
 line/fill geometry above the raster plane.
 
+### Embedded OLE previews
+
+Scene Cache v1.21 appends one synthetic kind-54 IMAGE placement for each
+OLE2FRAME whose finite four-corner drawing-space preamble can be recovered.
+The placement uses the actual WCS quadrilateral rather than LibreDWG's
+natural-size fallback. Its internal path is `@embedded/ole-<handle>.bmp` or
+`.emf`; it is never passed to the host filesystem resolver. OLE preambles with
+either observed `0x5580` or `0x5581` marker are accepted after all twelve
+little-endian `f64` corner coordinates and the resulting area are validated.
+
+Kind 59 contains one 40-byte record for each available preview:
+
+| Offset | Type | Field |
+| ---: | --- | --- |
+| 0 | `u32` | corresponding kind-54 IMAGE index |
+| 4 | `u32` | MIME kind: 1 BMP, 2 EMF |
+| 8 | `u64` | byte offset in kind 60 |
+| 16 | `u64` | byte length in kind 60 |
+| 24 | `u32` | validated source width |
+| 28 | `u32` | validated source height |
+| 32 | `u32` | flags: bit 0 direct BMP, bit 1 reconstructed EMF |
+| 36 | `u32` | reserved; zero |
+
+Kind 60 is the contiguous byte pool with record size 1. Payload ranges are
+ordered, non-overlapping and cover the pool exactly. The complete pool is
+capped at 512 MiB, each preview at 64 MiB, the bounded source scan at 128 MiB
+and each validated image at 100 million pixels. A BMP file or DIB extracted
+from `EMR_STRETCHDIBITS` is normalized to BMP. Excel previews split across
+WMF `WMFC` comments are reassembled only when chunk count, total length,
+remaining length, fixed record spacing and every EMF record agree. The EMF
+must begin with a valid header/signature, end with `EMR_EOF`, contain no more
+than 200,000 aligned records and match its declared byte and record counts.
+
+The Webview range-reads a payload only when its placement becomes visible.
+BMP content follows the normal raster path. EMF content is replayed locally
+into a Canvas by the pinned Apache-2.0 `emf-converter` dependency, with a
+4,096-pixel dimension cap and the same 200,000-record cap, then validated as a
+PNG before entering the SHA-256-deduplicated raster cache. No source content is
+uploaded or interpreted as HTML. If an OLE frame has no supported preview, its
+placement remains visible as a crossed placeholder instead of disappearing.
+
 ## Viewport and LOD GPU lines
 
 LINE and normalized polyline segments are emitted as interleaved, GPU-ready
@@ -909,8 +952,8 @@ marks a curved or bounded fallback approximation. Source kinds are 0 LINE,
 1 LWPOLYLINE, 2 2D POLYLINE, 3 3D POLYLINE, 4 ARC, 5 CIRCLE, 6 ELLIPSE,
 7 SPLINE, 8 HATCH boundary, 9 XLINE, 10 MULTILEADER, 11 VIEWPORT frame,
 12 LEADER and 13 OLE2FRAME boundary. The OLE kind preserves the actual four
-WCS corners from AutoCAD's embedded preamble; it does not claim to decode the
-embedded compound-document body. Versions before v1.15 use 32-byte vertices
+WCS corners from AutoCAD's embedded preamble; kinds 54 and 59–60 independently
+carry a bounded presentation preview when available. Versions before v1.15 use 32-byte vertices
 without the pattern-distance field. Precise standalone curve parameters,
 bulges and OCS metadata remain available in the source sections for later
 high-zoom refinement.
@@ -930,7 +973,7 @@ generated artifacts and must not be committed.
 
 ## LibreDWG qualification writer
 
-The selected LibreDWG adapter writes a valid v1.20 cache
+The selected LibreDWG adapter writes a valid v1.21 cache
 to measure the direct object-to-cache boundary. It preserves layer/block UTF-8
 names and source records for LINE, ARC, CIRCLE, INSERT/MINSERT,
 LWPOLYLINE/2D/3D POLYLINE, ELLIPSE and SPLINE, including the four SPLINE value
@@ -947,7 +990,9 @@ frame setting, normalized draw-order tables and entries, bounded INSERT/XREF
 `SPATIAL_FILTER` boundaries, and IMAGE/IMAGEDEF paths, placement bases and
 clip vertices, MTEXT annotation contexts and exact viewport annotation scales.
 It also preserves sparse viewport layer color, transparency, linetype and
-lineweight overrides from LAYER extension dictionaries.
+lineweight overrides from LAYER extension dictionaries. Bounded OLE2FRAME
+bitmap previews and chunked WMF-carried EMF previews are stored in kinds
+59–60 and displayed at their recovered four-corner WCS placement.
 The Webview
 range-reads those sections after the first line
 frame, builds POINT markers, SOLID geometry, 3DFACE wireframe edges and safe
@@ -960,15 +1005,15 @@ caps are exposed in the conversion report rather than silently treated as
 supported.
 
 It also emits bounded classic LEADER polylines/arrows, MULTILEADER geometry,
-XLINE display chords, layout viewport frames and OLE2FRAME boundary
-placeholders. Embedded OLE compound-document contents remain a separately
-reported visual-fidelity limitation.
+XLINE display chords, layout viewport frames and OLE2FRAME boundaries. An OLE
+object without a validated bitmap or EMF presentation remains an explicit
+crossed placeholder rather than a silent omission.
 
 This qualification writer keeps the 4 MiB overview and 512 KiB detail
 limits and uses disk-backed group-local XY Morton ordering for detail batches.
 When the extension requests progressive publication, the writer emits the
 flagged overview-only sidecar before that detail sort, then continues to the
-full v1.20 cache.
+full v1.21 cache.
 LibreDWG is the selected primary engine path. The remaining unsupported source
 families and exact CAD text-layout fidelity must be closed before that path is
 release-ready.

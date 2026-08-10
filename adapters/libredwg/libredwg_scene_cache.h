@@ -11,8 +11,8 @@
 #include <stdint.h>
 
 #define LIBREDWG_SCENE_CACHE_VERSION_MAJOR 1u
-#define LIBREDWG_SCENE_CACHE_VERSION_MINOR 20u
-#define LIBREDWG_SCENE_SECTION_COUNT 47
+#define LIBREDWG_SCENE_CACHE_VERSION_MINOR 21u
+#define LIBREDWG_SCENE_SECTION_COUNT 49
 
 #if LIBREDWG_VERSION >= 14
 #define LIBREDWG_MAINTENANCE_VERSION(dwg_ptr) \
@@ -48,14 +48,22 @@ typedef struct
   uint64_t hatches;
   uint64_t points;
   uint64_t solids;
+  uint64_t traces;
+  uint64_t regions;
+  uint64_t solids_3d;
+  uint64_t bodies;
   uint64_t faces;
   uint64_t wipeouts;
   uint64_t images;
   uint64_t xlines;
+  uint64_t rays;
+  uint64_t mlines;
+  uint64_t polyline_meshes;
   uint64_t multileaders;
   uint64_t leaders;
   uint64_t ole2frames;
   uint64_t viewports;
+  uint64_t proxy_graphics;
 } LibreDwgPrimitiveCounts;
 
 typedef struct
@@ -131,6 +139,10 @@ typedef struct
 {
   uint64_t cache_size;
   uint64_t preview_size;
+  uint64_t source_linetypes;
+  uint64_t serialized_linetypes;
+  uint64_t referenced_linetypes;
+  uint64_t omitted_referenced_linetypes;
   LibreDwgPrimitiveCounts coverage;
   LibreDwgGpuLineSummary gpu_lines;
   LibreDwgHatchFillSummary hatch_fills;

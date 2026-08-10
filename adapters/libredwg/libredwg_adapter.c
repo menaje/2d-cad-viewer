@@ -114,6 +114,18 @@ typedef struct
   int present;
 } LargestBlock;
 
+typedef struct
+{
+  uint64_t entities;
+  uint64_t entities_with_wires;
+  uint64_t wires;
+  uint64_t wire_points;
+  uint64_t transformed_wires;
+  uint64_t sat_entities;
+  uint64_t sab_entities;
+  uint64_t acis_bytes;
+} AcisDisplaySummary;
+
 /*
  * LibreDWG 0.14 exports this helper but does not install its private
  * codepages.h header. Keep the adapter on the public Dwg_Data codepage field
@@ -198,6 +210,49 @@ inspect_style_fonts (const Dwg_Data *dwg, const Dwg_Object_STYLE *style,
     summary->bigfont_references++;
   free (font_file);
   free (bigfont_file);
+}
+
+static void
+inspect_acis_display (const Dwg_Object *object,
+                      AcisDisplaySummary *summary)
+{
+  const Dwg_Entity__3DSOLID *solid = NULL;
+  uint32_t wire_index;
+  if (!object || !object->tio.entity || !summary)
+    return;
+  if (object->fixedtype == DWG_TYPE__3DSOLID)
+    solid = object->tio.entity->tio._3DSOLID;
+  else if (object->fixedtype == DWG_TYPE_REGION)
+    solid = object->tio.entity->tio.REGION;
+  else if (object->fixedtype == DWG_TYPE_BODY)
+    solid = object->tio.entity->tio.BODY;
+  if (!solid)
+    return;
+  summary->entities++;
+  if (solid->version <= 1)
+    summary->sat_entities++;
+  else
+    summary->sab_entities++;
+  if (solid->version <= 1 && solid->block_size)
+    {
+      uint32_t block_index;
+      for (block_index = 0; block_index <= solid->num_blocks;
+           block_index++)
+        summary->acis_bytes += solid->block_size[block_index];
+    }
+  else
+    summary->acis_bytes += solid->sab_size;
+  if (!solid->wires || solid->num_wires == 0)
+    return;
+  summary->entities_with_wires++;
+  summary->wires += solid->num_wires;
+  for (wire_index = 0; wire_index < solid->num_wires; wire_index++)
+    {
+      const Dwg_3DSOLID_wire *wire = &solid->wires[wire_index];
+      summary->wire_points += wire->num_points;
+      if (wire->transform_present)
+        summary->transformed_wires++;
+    }
 }
 
 static void
@@ -657,6 +712,12 @@ is_structural_entity (Dwg_Object_Type type)
 static const char *
 logical_entity_name (const Dwg_Object *object)
 {
+  if (object
+      && (object->fixedtype == DWG_TYPE_UNKNOWN_ENT
+          || object->fixedtype == DWG_TYPE_PROXY_ENTITY)
+      && object->klass && object->klass->dxfname
+      && object->klass->dxfname[0])
+    return object->klass->dxfname;
   switch (object->fixedtype)
     {
     case DWG_TYPE_DIMENSION_ANG2LN:
@@ -810,6 +871,7 @@ inspect_dwg (const char *path)
   TextSummary text = { 0 };
   TextSummary embedded_text = { 0 };
   FontReferenceSummary font_references = { 0 };
+  AcisDisplaySummary acis_display = { 0 };
   LargestBlock largest_block = { 0, 0, 0 };
   Bounds bounds;
   char version_code[7];
@@ -821,6 +883,7 @@ inspect_dwg (const char *path)
   uint64_t table_objects = 0;
   uint64_t layers = 0;
   uint64_t text_styles = 0;
+  uint64_t linetypes = 0;
   uint64_t blocks = 0;
   uint64_t block_references = 0;
   uint64_t objects;
@@ -867,6 +930,11 @@ inspect_dwg (const char *path)
       fprintf (stderr, "LibreDWG parse failed (0x%x)\n", error);
       goto done;
     }
+  if (dwg.num_objects == 0)
+    {
+      fputs ("LibreDWG parse produced no drawing objects\n", stderr);
+      goto done;
+    }
 
   for (i = 0; i < (size_t)dwg.num_objects; i++)
     {
@@ -882,6 +950,8 @@ inspect_dwg (const char *path)
             inspect_style_fonts (&dwg, object->tio.object->tio.STYLE,
                                  &font_references);
         }
+      else if (object->fixedtype == DWG_TYPE_LTYPE)
+        linetypes++;
       else if (object->fixedtype == DWG_TYPE_BLOCK_HEADER)
         {
           Dwg_Object_BLOCK_HEADER *block = NULL;
@@ -920,6 +990,7 @@ inspect_dwg (const char *path)
         }
 
       entities++;
+      inspect_acis_display (object, &acis_display);
       name = logical_entity_name (object);
       if (!counter_add (&entity_types, name))
         {
@@ -979,6 +1050,7 @@ inspect_dwg (const char *path)
   printf (",\"table_objects\":%" PRIu64, table_objects);
   printf (",\"layers\":%" PRIu64, layers);
   printf (",\"text_styles\":%" PRIu64, text_styles);
+  printf (",\"linetypes\":%" PRIu64, linetypes);
   printf (",\"blocks\":%" PRIu64, blocks);
   printf (",\"block_references\":%" PRIu64, block_references);
   if (largest_block.present)
@@ -1010,6 +1082,19 @@ inspect_dwg (const char *path)
   printf (",\"bigfont\":%" PRIu64,
           font_references.bigfont_references);
   fputs ("}},", stdout);
+
+  fputs ("\"acis_display\":{", stdout);
+  printf ("\"entities\":%" PRIu64, acis_display.entities);
+  printf (",\"entities_with_wires\":%" PRIu64,
+          acis_display.entities_with_wires);
+  printf (",\"wires\":%" PRIu64, acis_display.wires);
+  printf (",\"wire_points\":%" PRIu64, acis_display.wire_points);
+  printf (",\"transformed_wires\":%" PRIu64,
+          acis_display.transformed_wires);
+  printf (",\"sat_entities\":%" PRIu64, acis_display.sat_entities);
+  printf (",\"sab_entities\":%" PRIu64, acis_display.sab_entities);
+  printf (",\"acis_bytes\":%" PRIu64, acis_display.acis_bytes);
+  fputs ("},", stdout);
 
   printf ("\"performance\":{\"parse_ms\":%" PRIu64
           ",\"analysis_ms\":%" PRIu64 ",\"total_ms\":%" PRIu64,
@@ -1101,14 +1186,24 @@ json_conversion_coverage (const LibreDwgPrimitiveCounts *counts)
   printf (",\"hatches\":%" PRIu64, counts->hatches);
   printf (",\"points\":%" PRIu64, counts->points);
   printf (",\"solids\":%" PRIu64, counts->solids);
+  printf (",\"traces\":%" PRIu64, counts->traces);
+  printf (",\"regions\":%" PRIu64, counts->regions);
+  printf (",\"solids_3d\":%" PRIu64, counts->solids_3d);
+  printf (",\"bodies\":%" PRIu64, counts->bodies);
   printf (",\"faces\":%" PRIu64, counts->faces);
   printf (",\"wipeouts\":%" PRIu64, counts->wipeouts);
   printf (",\"images\":%" PRIu64, counts->images);
   printf (",\"xlines\":%" PRIu64, counts->xlines);
+  printf (",\"rays\":%" PRIu64, counts->rays);
+  printf (",\"mlines\":%" PRIu64, counts->mlines);
+  printf (",\"polyline_meshes\":%" PRIu64,
+          counts->polyline_meshes);
   printf (",\"multileaders\":%" PRIu64, counts->multileaders);
   printf (",\"leaders\":%" PRIu64, counts->leaders);
   printf (",\"ole2frames\":%" PRIu64, counts->ole2frames);
   printf (",\"viewports\":%" PRIu64, counts->viewports);
+  printf (",\"proxy_graphics\":%" PRIu64,
+          counts->proxy_graphics);
   putchar ('}');
 }
 
@@ -1308,6 +1403,11 @@ convert_dwg (const char *path, const char *output_path)
       fprintf (stderr, "LibreDWG parse failed (0x%x)\n", error);
       goto done;
     }
+  if (dwg.num_objects == 0)
+    {
+      fputs ("LibreDWG parse produced no drawing objects\n", stderr);
+      goto done;
+    }
   if (!libredwg_write_scene_cache (
           &dwg, output_path,
           preview_path && preview_ready_path ? preview_path : NULL,
@@ -1349,6 +1449,13 @@ convert_dwg (const char *path, const char *output_path)
     }
   fputs ("]},\"coverage\":", stdout);
   json_conversion_coverage (&report.coverage);
+  printf (",\"tables\":{\"source_linetypes\":%" PRIu64
+          ",\"serialized_linetypes\":%" PRIu64
+          ",\"referenced_linetypes\":%" PRIu64
+          ",\"omitted_referenced_linetypes\":%" PRIu64 "}",
+          report.source_linetypes, report.serialized_linetypes,
+          report.referenced_linetypes,
+          report.omitted_referenced_linetypes);
   fputs (",\"gpu_lines\":", stdout);
   json_gpu_lines (&report.gpu_lines);
   fputs (",\"hatch_fills\":", stdout);

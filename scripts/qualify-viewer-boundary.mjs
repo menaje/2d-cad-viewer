@@ -495,6 +495,7 @@ async function validateProductEntrypoints() {
     "@menaje/viewer-render-protocol",
     "@menaje/viewer-core",
     "@menaje/viewer-ui",
+    "emf-converter",
   ]) {
     assert.ok(dependency in webviewPackage.dependencies);
   }

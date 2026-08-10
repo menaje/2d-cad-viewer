@@ -1,7 +1,7 @@
 // Canonical Scene Cache reader shared by DwgSceneCacheSource and legacy Webview imports.
 export const CACHE_MAGIC = new Uint8Array([68, 87, 71, 83, 67, 78, 49, 0]);
 export const CACHE_VERSION_MAJOR = 1;
-export const CACHE_VERSION_MINOR = 20;
+export const CACHE_VERSION_MINOR = 21;
 export const HEADER_SIZE = 64;
 export const DIRECTORY_ENTRY_SIZE = 40;
 export const CACHE_HEADER_FLAG_PREVIEW = 1;
@@ -46,6 +46,8 @@ export const IMAGE_CLIP_VERTEX_RECORD_SIZE = 16;
 export const TEXT_ANNOTATION_CONTEXT_RECORD_SIZE = 160;
 export const TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8;
 export const VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE = 24;
+export const EMBEDDED_IMAGE_RECORD_SIZE = 40;
+export const EMBEDDED_IMAGE_BYTE_RECORD_SIZE = 1;
 export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_RECORDS = 10_000;
 export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_BYTES = 8 * 1024 * 1024;
 
@@ -97,6 +99,8 @@ export const SectionKind = Object.freeze({
   TextAnnotationContexts: 56,
   TextAnnotationColumnHeights: 57,
   ViewportLayerOverrides: 58,
+  EmbeddedImageRecords: 59,
+  EmbeddedImageBytes: 60,
 });
 const CURRENT_SECTION_KINDS = Object.freeze(Object.values(SectionKind));
 
@@ -157,6 +161,8 @@ const FIXED_RECORD_SIZES = new Map([
     SectionKind.ViewportLayerOverrides,
     VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
   ],
+  [SectionKind.EmbeddedImageRecords, EMBEDDED_IMAGE_RECORD_SIZE],
+  [SectionKind.EmbeddedImageBytes, EMBEDDED_IMAGE_BYTE_RECORD_SIZE],
 ]);
 const MAX_METADATA_SECTION_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_STRING_BYTES = 1024 * 1024;
@@ -189,6 +195,9 @@ const MAX_VIEWPORT_CLIP_VERTICES_PER_BOUNDARY = 4_096;
 const MAX_VIEWPORT_LAYER_OVERRIDES = 1_048_576;
 const MAX_IMAGE_SOURCE_RECORDS = 65_536;
 const MAX_IMAGE_CLIP_VERTICES = 1_048_576;
+const MAX_EMBEDDED_IMAGE_BYTES = 512 * 1024 * 1024;
+const MAX_EMBEDDED_IMAGE_BYTES_PER_RECORD = 64 * 1024 * 1024;
+const MAX_EMBEDDED_IMAGE_PIXELS = 100_000_000;
 const MAX_TEXT_ANNOTATION_CONTEXTS = 262_144;
 const MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS = 1_048_576;
 const MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT = 64;
@@ -1517,6 +1526,45 @@ export class ImageSourceTable {
   }
 }
 
+export class EmbeddedImageSourceTable {
+  constructor(source, byteSection, records) {
+    this.source = source;
+    this.byteSection = byteSection;
+    this.records = records;
+    this.recordsByImageIndex = new Map(
+      records.map((record) => [record.imageIndex, record]),
+    );
+  }
+
+  get length() {
+    return this.records.length;
+  }
+
+  get(imageIndex) {
+    if (!Number.isSafeInteger(imageIndex) || imageIndex < 0) {
+      return undefined;
+    }
+    return this.recordsByImageIndex.get(imageIndex);
+  }
+
+  async readPayload(imageIndex) {
+    const record = this.get(imageIndex);
+    if (!record) {
+      throw new RangeError(
+        `embedded IMAGE index is unavailable: ${imageIndex}`,
+      );
+    }
+    return requireArrayBuffer(
+      await this.source.read(
+        this.byteSection.offset + record.payloadOffset,
+        record.payloadLength,
+      ),
+      record.payloadLength,
+      `embedded IMAGE ${imageIndex} payload`,
+    );
+  }
+}
+
 export class DrawOrderSourceTable {
   constructor(tableBuffer, tableCount, entryBuffer, entryCount) {
     this.tableBuffer = tableBuffer;
@@ -1724,7 +1772,7 @@ export class SceneCacheReader {
     }
     for (const kind of CURRENT_SECTION_KINDS) {
       if (!sections.has(kind)) {
-        throw new Error(`Scene Cache v1.20 is missing required section ${kind}`);
+        throw new Error(`Scene Cache v1.21 is missing required section ${kind}`);
       }
     }
 
@@ -1754,7 +1802,7 @@ export class SceneCacheReader {
         !annotationContexts ||
         !annotationColumnHeights
       ) {
-        throw new Error("Scene Cache v1.20 is missing required text sections");
+        throw new Error("Scene Cache v1.21 is missing required text sections");
       }
       validateStringTableDirectoryEntry(textStyles, TEXT_STYLE_RECORD_SIZE);
       validateStringTableDirectoryEntry(textEntities, TEXT_ENTITY_RECORD_SIZE);
@@ -1792,7 +1840,7 @@ export class SceneCacheReader {
         !hatchGradientColors ||
         !hatchSeedPoints
       ) {
-        throw new Error("Scene Cache v1.20 is missing required HATCH sections");
+        throw new Error("Scene Cache v1.21 is missing required HATCH sections");
       }
       validateStringTableDirectoryEntry(
         hatchEntities,
@@ -1818,7 +1866,7 @@ export class SceneCacheReader {
       );
       if (!hatchPatternLines || !hatchPatternDashes) {
         throw new Error(
-          "Scene Cache v1.20 is missing required HATCH pattern sections",
+          "Scene Cache v1.21 is missing required HATCH pattern sections",
         );
       }
       validateRecordSection(
@@ -1835,7 +1883,7 @@ export class SceneCacheReader {
       const solidEntities = sections.get(SectionKind.SolidEntities);
       if (!pointEntities || !solidEntities) {
         throw new Error(
-          "Scene Cache v1.20 is missing required POINT or SOLID sections",
+          "Scene Cache v1.21 is missing required POINT or SOLID sections",
         );
       }
       validateRecordSection(pointEntities, POINT_ENTITY_RECORD_SIZE);
@@ -1845,7 +1893,7 @@ export class SceneCacheReader {
       const faceEntities = sections.get(SectionKind.FaceEntities);
       if (!faceEntities) {
         throw new Error(
-          "Scene Cache v1.20 is missing the required 3DFACE section",
+          "Scene Cache v1.21 is missing the required 3DFACE section",
         );
       }
       validateRecordSection(faceEntities, FACE_ENTITY_RECORD_SIZE);
@@ -1857,7 +1905,7 @@ export class SceneCacheReader {
       );
       if (!wipeoutEntities || !wipeoutClipVertices) {
         throw new Error(
-          "Scene Cache v1.20 is missing required WIPEOUT sections",
+          "Scene Cache v1.21 is missing required WIPEOUT sections",
         );
       }
       validateRecordSection(wipeoutEntities, WIPEOUT_ENTITY_RECORD_SIZE);
@@ -1871,7 +1919,7 @@ export class SceneCacheReader {
       const drawOrderEntries = sections.get(SectionKind.DrawOrderEntries);
       if (!drawOrderTables || !drawOrderEntries) {
         throw new Error(
-          "Scene Cache v1.20 is missing required draw-order sections",
+          "Scene Cache v1.21 is missing required draw-order sections",
         );
       }
       validateRecordSection(
@@ -1890,7 +1938,7 @@ export class SceneCacheReader {
       );
       if (!insertClips || !insertClipVertices) {
         throw new Error(
-          "Scene Cache v1.20 is missing required INSERT XCLIP sections",
+          "Scene Cache v1.21 is missing required INSERT XCLIP sections",
         );
       }
       validateRecordSection(insertClips, INSERT_CLIP_RECORD_SIZE);
@@ -1904,7 +1952,7 @@ export class SceneCacheReader {
       const linetypeDashes = sections.get(SectionKind.LinetypeDashes);
       if (!linetypes || !linetypeDashes) {
         throw new Error(
-          "Scene Cache v1.20 is missing required linetype sections",
+          "Scene Cache v1.21 is missing required linetype sections",
         );
       }
       validateStringTableDirectoryEntry(linetypes, LINETYPE_RECORD_SIZE);
@@ -1939,7 +1987,7 @@ export class SceneCacheReader {
         !layerOverrides
       ) {
         throw new Error(
-          "Scene Cache v1.20 is missing required layout sections",
+          "Scene Cache v1.21 is missing required layout sections",
         );
       }
       validateStringTableDirectoryEntry(layouts, LAYOUT_RECORD_SIZE);
@@ -1973,7 +2021,7 @@ export class SceneCacheReader {
       );
       if (!imageEntities || !imageClipVertices) {
         throw new Error(
-          "Scene Cache v1.20 is missing required IMAGE sections",
+          "Scene Cache v1.21 is missing required IMAGE sections",
         );
       }
       validateStringTableDirectoryEntry(
@@ -1989,6 +2037,24 @@ export class SceneCacheReader {
         imageClipVertices.recordCount > MAX_IMAGE_CLIP_VERTICES
       ) {
         throw new Error("Scene Cache IMAGE metadata exceeds its limits");
+      }
+    }
+    {
+      const records = sections.get(SectionKind.EmbeddedImageRecords);
+      const bytes = sections.get(SectionKind.EmbeddedImageBytes);
+      const imageEntities = sections.get(SectionKind.ImageEntities);
+      if (!records || !bytes || !imageEntities) {
+        throw new Error(
+          "Scene Cache v1.21 is missing required embedded IMAGE sections",
+        );
+      }
+      validateRecordSection(records, EMBEDDED_IMAGE_RECORD_SIZE);
+      validateRecordSection(bytes, EMBEDDED_IMAGE_BYTE_RECORD_SIZE);
+      if (
+        records.recordCount > imageEntities.recordCount ||
+        bytes.recordCount > MAX_EMBEDDED_IMAGE_BYTES
+      ) {
+        throw new Error("Scene Cache embedded IMAGE data exceeds its limits");
       }
     }
 
@@ -3907,6 +3973,92 @@ export class SceneCacheReader {
         entities.recordCount,
         clipVertexBuffer,
         clipVertices.recordCount,
+      );
+    });
+  }
+
+  async readEmbeddedImages() {
+    return this.memoize("embedded-images", async () => {
+      const recordSection = this.getSection(
+        SectionKind.EmbeddedImageRecords,
+      );
+      const byteSection = this.getSection(SectionKind.EmbeddedImageBytes);
+      const imageSection = this.getSection(SectionKind.ImageEntities);
+      validateRecordSection(recordSection, EMBEDDED_IMAGE_RECORD_SIZE);
+      validateRecordSection(byteSection, EMBEDDED_IMAGE_BYTE_RECORD_SIZE);
+      if (recordSection.recordCount > imageSection.recordCount) {
+        throw new Error("embedded IMAGE records exceed the IMAGE table");
+      }
+      if (byteSection.byteLength > MAX_EMBEDDED_IMAGE_BYTES) {
+        throw new Error(
+          `embedded IMAGE bytes exceed the ${MAX_EMBEDDED_IMAGE_BYTES}-byte limit`,
+        );
+      }
+      const buffer = await this.readWholeMetadataSection(recordSection);
+      const view = new DataView(buffer);
+      const records = new Array(recordSection.recordCount);
+      let expectedPayloadOffset = 0;
+      let previousImageIndex = -1;
+      for (let index = 0; index < recordSection.recordCount; index += 1) {
+        const offset = index * EMBEDDED_IMAGE_RECORD_SIZE;
+        const imageIndex = view.getUint32(offset, true);
+        const mime = view.getUint32(offset + 4, true);
+        const payloadOffset = readSafeU64(
+          view,
+          offset + 8,
+          `embedded IMAGE ${index} payload offset`,
+        );
+        const payloadLength = readSafeU64(
+          view,
+          offset + 16,
+          `embedded IMAGE ${index} payload length`,
+        );
+        const width = view.getUint32(offset + 24, true);
+        const height = view.getUint32(offset + 28, true);
+        const flags = view.getUint32(offset + 32, true);
+        const pixels = width * height;
+        const payloadEnd = checkedAdd(
+          payloadOffset,
+          payloadLength,
+          `embedded IMAGE ${index} payload end`,
+        );
+        if (
+          imageIndex >= imageSection.recordCount ||
+          imageIndex <= previousImageIndex ||
+          (mime !== 1 && mime !== 2) ||
+          payloadOffset !== expectedPayloadOffset ||
+          payloadLength <= 0 ||
+          payloadLength > MAX_EMBEDDED_IMAGE_BYTES_PER_RECORD ||
+          payloadEnd > byteSection.byteLength ||
+          !Number.isSafeInteger(pixels) ||
+          pixels <= 0 ||
+          pixels > MAX_EMBEDDED_IMAGE_PIXELS ||
+          (mime === 1 && (flags & ~1) !== 0) ||
+          (mime === 2 && flags !== 2) ||
+          view.getUint32(offset + 36, true) !== 0
+        ) {
+          throw new Error(`embedded IMAGE record ${index} is invalid`);
+        }
+        records[index] = Object.freeze({
+          imageIndex,
+          mimeType: mime === 1 ? "image/bmp" : "application/x-emf",
+          payloadOffset,
+          payloadLength,
+          width,
+          height,
+          sourceBmp: Boolean(flags & 1),
+          sourceEmf: Boolean(flags & 2),
+        });
+        previousImageIndex = imageIndex;
+        expectedPayloadOffset = payloadEnd;
+      }
+      if (expectedPayloadOffset !== byteSection.byteLength) {
+        throw new Error("embedded IMAGE byte pool is not fully covered");
+      }
+      return new EmbeddedImageSourceTable(
+        this.source,
+        byteSection,
+        Object.freeze(records),
       );
     });
   }

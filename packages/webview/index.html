@@ -10,7 +10,7 @@
     <main>
       <header>
         <div>
-          <p class="eyebrow" data-i18n="page.eyebrow">DWG Viewer · Scene Cache v1.20</p>
+          <p class="eyebrow" data-i18n="page.eyebrow">DWG Viewer · Scene Cache v1.21</p>
           <h1 data-i18n="page.heading">Large drawing first-frame verifier</h1>
         </div>
         <button
@@ -551,9 +551,9 @@
     <script type="importmap">
       {
         "imports": {
-          "@menaje/dwg-scene-source": "../dwg-scene-source/src/index.mjs",
-          "@menaje/dwg-scene-source/range-source": "../dwg-scene-source/src/range-source.mjs",
-          "@menaje/dwg-scene-source/scene-cache": "../dwg-scene-source/src/scene-cache.mjs",
+          "@menaje/dwg-scene-source": "../dwg-scene-source/src/index.mjs?v=1.21.0",
+          "@menaje/dwg-scene-source/range-source": "../dwg-scene-source/src/range-source.mjs?v=1.21.0",
+          "@menaje/dwg-scene-source/scene-cache": "../dwg-scene-source/src/scene-cache.mjs?v=1.21.0",
           "@menaje/viewer-webgl": "./src/public-api.mjs",
           "@menaje/viewer-render-protocol": "../render-protocol/src/index.mjs",
           "@menaje/viewer-core": "../viewer-core/src/index.mjs",
@@ -564,10 +564,11 @@
           "@menaje/viewer-core/selection": "../viewer-core/src/selection-controller.mjs",
           "@menaje/viewer-ui": "../viewer-ui/src/index.mjs",
           "#shx-parser": "./node_modules/@mlightcad/shx-parser/dist/index.es.js",
-          "earcut": "./node_modules/earcut/src/earcut.js"
+          "earcut": "./node_modules/earcut/src/earcut.js",
+          "emf-converter": "./node_modules/emf-converter/dist/index.mjs"
         }
       }
     </script>
-    <script type="module" src="./src/main.mjs?v=1.20.4"></script>
+    <script type="module" src="./src/main.mjs?v=1.21.3"></script>
   </body>
 </html>

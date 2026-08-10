@@ -25,7 +25,7 @@ export const MPL_2_0_SHA256 =
 const PACKAGE_SCHEMA = "dwg-libredwg-package/1";
 const DOCTOR_SCHEMA = "dwg-engine-doctor/1";
 const ADAPTER_PROTOCOL = "dwg-engine-adapter/1";
-const CACHE_SCHEMA = "dwg-scene-cache/1.20";
+const CACHE_SCHEMA = "dwg-scene-cache/1.21";
 const MAX_ADAPTER_BYTES = 128 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 128 * 1024 * 1024;
 const MAX_DEPENDENCY_AUDIT_BYTES = 32 * 1024 * 1024;
@@ -38,6 +38,8 @@ const ADAPTER_SOURCE_FILES = Object.freeze([
   "build.sh",
   "prepare.sh",
   "package.mjs",
+  "libredwg-acds-sab.patch",
+  "libredwg-r2007-high-compression.patch",
   "libredwg_adapter.c",
   "libredwg_scene_cache.c",
   "libredwg_scene_cache.h",

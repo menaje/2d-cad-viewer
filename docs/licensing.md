@@ -31,13 +31,14 @@ terms control.
 | Component or artifact | License | Distribution policy |
 | --- | --- | --- |
 | Repository source and documentation, unless a file states otherwise | MPL-2.0 | `LICENSE` is the complete, unmodified official MPL 2.0 text; project copyright is in `NOTICE` |
-| `dwg-viewer-vscode-<version>.vsix` | MPL-2.0, plus bundled MIT and ISC components | Includes `LICENSE.txt`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, a source link, and the filenames, sizes, and SHA-256 digests of separately released converters and source archives; contains no GPL executable and declares no engine-extension dependency |
+| `dwg-viewer-vscode-<version>.vsix` | MPL-2.0, plus bundled MIT, ISC, and Apache-2.0 components | Includes `LICENSE.txt`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, a source link, and the filenames, sizes, and SHA-256 digests of separately released converters and source archives; contains no GPL executable and declares no engine-extension dependency |
 | `dwg-viewer-native-converter-<version>-<target>[.exe]` | GPL-3.0-or-later | Platform executable built from the verified source-complete package and published separately in the matching `v<version>` GitHub Release |
 | `dwg-viewer-libredwg-0.14-<target>.tar.gz` | GPL-3.0-or-later executable and LibreDWG source; adapter source retains MPL-2.0 notices | Complete corresponding source distribution containing the exact converter, LibreDWG source, adapter source, build scripts, unmodified GPLv3 and MPL 2.0 texts, manifest, and checksums |
 | `@menaje/viewer-core`, `@menaje/viewer-render-protocol`, `@menaje/viewer-ui` | MPL-2.0 | Current packages include the unmodified official MPL text, project `NOTICE`, README, and source modules |
-| `@menaje/viewer-webgl`, `@menaje/dwg-scene-source` | MPL-2.0, with MIT and ISC runtime dependencies used by WebGL | Public package archives include the unmodified official MPL text, project `NOTICE`, README, and source modules; dependency packages retain their own upstream licenses and notices |
+| `@menaje/viewer-webgl`, `@menaje/dwg-scene-source` | MPL-2.0, with MIT, ISC, and Apache-2.0 runtime dependencies used by WebGL | Public package archives include the unmodified official MPL text, project `NOTICE`, README, and source modules; dependency packages retain their own upstream licenses and notices |
 | `@mlightcad/shx-parser` 1.4.5 | MIT | Bundled into the Webview; its copyright and full MIT permission notice are included in `THIRD_PARTY_NOTICES.md` |
 | Earcut 3.2.3 | ISC | Bundled into the Webview; its copyright and full ISC permission notice are included in `THIRD_PARTY_NOTICES.md` |
+| emf-converter 2.0.2 | Apache-2.0 | Bundled into the Webview for local, bounded OLE EMF preview rendering; its complete unmodified Apache license text and attribution notice are included in `THIRD_PARTY_NOTICES.md` |
 | DWG Viewer LibreDWG adapter source | MPL-2.0 | Included as corresponding adapter source in the separate engine archive |
 | Linked LibreDWG adapter executable and GNU LibreDWG 0.14 | GPL-3.0-or-later | Published only in separate platform artifacts with the GPL text, exact LibreDWG source, adapter source, build scripts, manifest, and checksums |
 | ACadSharp benchmark adapter source | MPL-2.0 | Development and qualification only; not part of the selected viewer runtime |
@@ -85,7 +86,9 @@ for every platform and verifies its internal manifest, checksums, licenses, and
 same verified executable. Its complete corresponding source is offered through
 the target-matched archive in the same GitHub Release, using the same download
 mechanism. That archive contains the exact checksum-pinned LibreDWG source,
-adapter source and build scripts, license texts, notice, manifest, and
+the reviewed ACDS SAT/SAB and R2007 high-compression source patches, adapter
+source and build scripts,
+license texts, notice, manifest, and
 checksums. `GPL-3.0-or-later.txt` is byte-identical to the GPLv3 `COPYING` file
 conveyed in the pinned LibreDWG 0.14 source.
 

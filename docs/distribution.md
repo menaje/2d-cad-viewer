@@ -7,12 +7,12 @@ x64, and Windows x64.
 
 | Artifact | License | Purpose |
 | --- | --- | --- |
-| `dwg-viewer-vscode-<version>.vsix` | MPL-2.0, plus bundled MIT and ISC components | The only VS Code Marketplace product. It contains the Webview, notices, and a version-bound engine catalog, but no LibreDWG executable. |
+| `dwg-viewer-vscode-<version>.vsix` | MPL-2.0, plus bundled MIT, ISC and Apache-2.0 components | The only VS Code Marketplace product. It contains the Webview, notices, and a version-bound engine catalog, but no LibreDWG executable. |
 | `dwg-viewer-native-converter-<version>-linux-x64` | GPL-3.0-or-later | Exact converter selected by the same viewer version on Linux x64. |
 | `dwg-viewer-native-converter-<version>-darwin-arm64` | GPL-3.0-or-later | Exact converter selected by the same viewer version on Apple Silicon. |
 | `dwg-viewer-native-converter-<version>-darwin-x64` | GPL-3.0-or-later | Exact converter selected by the same viewer version on Intel macOS. |
 | `dwg-viewer-native-converter-<version>-win32-x64.exe` | GPL-3.0-or-later | Exact converter selected by the same viewer version on Windows x64. |
-| `dwg-viewer-libredwg-0.14-<target>.tar.gz` | GPL-3.0-or-later; adapter source retains MPL-2.0 notices | Complete corresponding source package for the converter of that target. It includes the binary, exact LibreDWG source, adapter source, build scripts, unmodified license texts, manifest, and checksums. |
+| `dwg-viewer-libredwg-0.14-<target>.tar.gz` | GPL-3.0-or-later; adapter source retains MPL-2.0 notices | Complete corresponding source package for the converter of that target. It includes the binary, exact LibreDWG source, reviewed ACDS SAT/SAB and R2007 high-compression patches, adapter source, build scripts, unmodified license texts, manifest, and checksums. |
 | `SHA256SUMS` | Not executable | Digests for the main VSIX, four converters, and four source-complete archives. |
 
 The release pipeline builds each converter from checksum-pinned official GNU
@@ -46,14 +46,14 @@ startup. The extension then:
 5. writes the executable under the extension's private global storage, keyed by
    viewer version, platform, and digest;
 6. runs `doctor` and requires the expected platform, architecture, adapter
-   protocol, and Scene Cache `dwg-scene-cache/1.20`; and
+   protocol, and Scene Cache `dwg-scene-cache/1.21`; and
 7. reuses the verified local executable on later starts.
 
 The converter runs as a separate operating-system process. Updating the viewer
 selects a new version-bound catalog and storage directory, so an independently
 updated or older converter cannot silently produce an incompatible cache. If a
 previous `1.18` cache is found, the cache header check removes and rebuilds it
-with the current `1.20` writer.
+with the current `1.21` writer.
 
 A configured adapter path, environment override, or historical engine
 extension is considered only when automatic installation is unavailable. Every

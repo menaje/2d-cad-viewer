@@ -53,6 +53,12 @@ test("handles absolute heights, paragraphs, percent codes and stacked text", () 
   assert.equal(lines[1][1].text, "±");
 });
 
+test("treats literal CRLF, CR and LF in MTEXT as line breaks", () => {
+  const lines = plainCadMTextLines("첫째\r\n둘째\r셋째\n넷째");
+
+  assert.deepEqual(lines, ["첫째", "둘째", "셋째", "넷째"]);
+});
+
 test("preserves horizontal, diagonal, tolerance and one-sided stacks", () => {
   const lines = parseCadMTextRuns(
     String.raw`\S1/2; \S3#4; \S+0.1^-0.2; \S^2; \S3^;`,

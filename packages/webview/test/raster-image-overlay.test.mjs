@@ -53,6 +53,8 @@ function fakeCanvas() {
     clips: [],
     clearRect: 0,
     drawImage: [],
+    lineDashes: [],
+    strokes: 0,
     transforms: [],
   };
   const context = {
@@ -79,8 +81,14 @@ function fakeCanvas() {
     rect() {},
     restore() {},
     save() {},
+    setLineDash(values) {
+      calls.lineDashes.push([...values]);
+    },
     setTransform(...values) {
       calls.transforms.push(values);
+    },
+    stroke() {
+      calls.strokes += 1;
     },
   };
   return {
@@ -257,6 +265,33 @@ test("deduplicates compressed images and evicts decoded bitmaps by budget", asyn
   store.dispose();
 });
 
+test("records a failed image reference until replacement content arrives", () => {
+  const store = new RasterImageAssetStore({
+    maximumCompressedBytes: 64,
+  });
+  const failure = new Error("missing image");
+  store.reject("root", 0, failure);
+
+  assert.deepEqual(store.lookup("root", 0), {
+    status: "error",
+    error: failure,
+  });
+  assert.equal(store.snapshot().failedReferences, 1);
+
+  store.accept({
+    cacheId: "root",
+    imageIndex: 0,
+    resourceId: "d".repeat(64),
+    mimeType: "image/png",
+    width: 2,
+    height: 2,
+    bytes: new Uint8Array([1, 2, 3]).buffer,
+  });
+  assert.notEqual(store.lookup("root", 0).status, "error");
+  assert.equal(store.snapshot().failedReferences, 0);
+  store.dispose();
+});
+
 test("requests only raster images that intersect the current screen", () => {
   const canvas = fakeCanvas();
   const requests = [];
@@ -287,6 +322,29 @@ test("requests only raster images that intersect the current screen", () => {
   );
   assert.equal(offscreen.visibleOccurrences, 0);
   assert.equal(offscreen.requestedImages, 0);
+});
+
+test("draws a clipped placeholder for an unavailable raster image", () => {
+  const canvas = fakeCanvas();
+  const overlay = new CanvasRasterImageOverlay(canvas, {
+    imageEntities: imageTable(visibleRecord),
+    blocks: [{ index: 0, handle: 100n }],
+    layers: [{ name: "0" }],
+    instanceGraph: modelGraph(),
+    cacheId: "root",
+    assetStore: {
+      lookup: () => ({ status: "error", error: new Error("missing") }),
+      snapshot: () => ({ failedReferences: 1 }),
+    },
+  });
+
+  const metrics = overlay.redraw(camera, [true]);
+
+  assert.equal(metrics.failedImages, 1);
+  assert.equal(metrics.loadedOccurrences, 0);
+  assert.equal(canvas.calls.strokes, 2);
+  assert.deepEqual(canvas.calls.lineDashes, [[6, 4], []]);
+  assert.deepEqual(canvas.calls.clips, ["nonzero"]);
 });
 
 test("uses the clipped IMAGE footprint as fitted drawing bounds", () => {

@@ -18,13 +18,13 @@ import {
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
-} from "./external-reference.mjs?v=1.20.0";
+} from "./external-reference.mjs?v=1.21.0";
 import {
   createVsCodeRangeSource,
   installWorkerRangeProxy,
   WORKER_RANGE_REQUEST,
 } from "./host-range-source.mjs";
-import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.20.0";
+import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.21.3";
 import {
   buildLayerGroups,
   isolateLayerGroup,
@@ -38,7 +38,11 @@ import {
 import { WebviewMemoryTelemetry } from "./memory-telemetry.mjs";
 import { normalizeInteractionRenderingMode } from "./interaction-rendering.mjs";
 import { normalizeRenderResolutionMode } from "./render-resolution.mjs";
-import { BlobRangeSource, TrackedRangeSource } from "./range-source.mjs";
+import {
+  BlobRangeSource,
+  HttpRangeSource,
+  TrackedRangeSource,
+} from "./range-source.mjs";
 import {
   calculateRasterImageBounds,
   CanvasRasterImageOverlay,
@@ -82,10 +86,10 @@ import {
   CompositeTextOverlay,
   registerLocalOutlineFont,
   unregisterLocalOutlineFont,
-} from "./text-overlay.mjs?v=1.20.0";
+} from "./text-overlay.mjs?v=1.21.0";
 import {
   loadExternalFirstFrame,
-} from "./viewer.mjs?v=1.20.0";
+} from "./viewer.mjs?v=1.21.3";
 import {
   addViewBookmark,
   CameraViewHistory,
@@ -99,6 +103,7 @@ import {
   environmentLocales,
   escapeHtmlText,
 } from "./i18n.mjs?v=1.0.0";
+import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.21.0";
 
 const standaloneQualificationParameters =
   typeof globalThis.acquireVsCodeApi === "function"
@@ -322,7 +327,8 @@ let nextHostFontRequestId = 1;
 const HATCH_PATTERN_DEBOUNCE_MS = 160;
 const CURVE_REFINEMENT_DEBOUNCE_MS = 80;
 const CURVE_REFINEMENT_ZOOM_THRESHOLD = 4;
-const MAX_STANDALONE_QUALIFICATION_CACHE_BYTES = 64 * 1024 * 1024;
+const MAX_STANDALONE_QUALIFICATION_BLOB_BYTES = 64 * 1024 * 1024;
+const MAX_STANDALONE_QUALIFICATION_RANGE_BYTES = 8 * 1024 * 1024 * 1024;
 const vscodeApi =
   typeof globalThis.acquireVsCodeApi === "function"
     ? globalThis.acquireVsCodeApi()
@@ -349,6 +355,7 @@ const externalAttachmentsByCache = new Map();
 const externalMaskCounts = new Map();
 const xrefDiagnostics = new Map();
 const pendingImageRequests = new Map();
+const pendingEmbeddedImageRequests = new Set();
 let nextImageRequestId = 1;
 const discoveredXrefCaches = new Set();
 const readyExternalMessages = new Map();
@@ -398,6 +405,28 @@ async function localCacheSessionDigest(file) {
   return bytesToHex(
     new Uint8Array(
       await globalThis.crypto.subtle.digest("SHA-256", fingerprint),
+    ),
+  );
+}
+
+async function standaloneRangeCacheSessionDigest(
+  cacheUrl,
+  { size, etag = "", lastModified = "" },
+) {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error(t("status.cacheFingerprintUnsupported"));
+  }
+  const identity = new TextEncoder().encode(
+    JSON.stringify([
+      cacheUrl.pathname.normalize("NFC").slice(0, 2_048),
+      size,
+      String(etag).slice(0, 512),
+      String(lastModified).slice(0, 512),
+    ]),
+  );
+  return bytesToHex(
+    new Uint8Array(
+      await globalThis.crypto.subtle.digest("SHA-256", identity),
     ),
   );
 }
@@ -2013,6 +2042,7 @@ function resetExternalReferences() {
   activeImageAssetStore?.dispose();
   activeImageAssetStore = undefined;
   pendingImageRequests.clear();
+  pendingEmbeddedImageRequests.clear();
   xrefsToggle.disabled = true;
   setViewerToolMessage(xrefsToggle, "toolbar.xrefs");
   xrefsToggle.setAttribute("aria-expanded", "false");
@@ -3127,6 +3157,93 @@ function requestRasterImage({ cacheId, imageIndex, path }) {
   return true;
 }
 
+function requestSceneRasterImage(scene, request) {
+  const { cacheId, imageIndex, path } = request ?? {};
+  const embedded = scene?.embeddedImages?.get?.(imageIndex);
+  if (!embedded) {
+    if (typeof path !== "string" || !path.startsWith("@embedded/")) {
+      return requestRasterImage(request);
+    }
+    activeImageAssetStore?.reject(
+      cacheId,
+      imageIndex,
+      new Error(t("xrefs.embeddedImageUnavailable")),
+    );
+    activeInteraction?.refresh();
+    return true;
+  }
+  if (
+    !activeImageAssetStore ||
+    typeof cacheId !== "string" ||
+    !Number.isSafeInteger(imageIndex) ||
+    imageIndex < 0
+  ) {
+    return false;
+  }
+  const key = imageRequestKey(cacheId, imageIndex);
+  if (pendingEmbeddedImageRequests.has(key)) {
+    return false;
+  }
+  const revision = openRevision;
+  const store = activeImageAssetStore;
+  pendingEmbeddedImageRequests.add(key);
+  void scene.embeddedImages
+    .readPayload(imageIndex)
+    .then(async (bytes) => {
+      if (!globalThis.crypto?.subtle) {
+        throw new Error(t("xrefs.embeddedImageHashUnavailable"));
+      }
+      if (
+        revision !== openRevision ||
+        activeImageAssetStore !== store
+      ) {
+        return;
+      }
+      const image =
+        embedded.mimeType === "application/x-emf"
+          ? await renderEmbeddedEmf(bytes)
+          : {
+              bytes,
+              mimeType: embedded.mimeType,
+              width: embedded.width,
+              height: embedded.height,
+            };
+      const digest = await globalThis.crypto.subtle.digest(
+        "SHA-256",
+        image.bytes,
+      );
+      if (
+        revision !== openRevision ||
+        activeImageAssetStore !== store
+      ) {
+        return;
+      }
+      store.accept({
+        cacheId,
+        imageIndex,
+        resourceId: bytesToHex(new Uint8Array(digest)),
+        mimeType: image.mimeType,
+        width: image.width,
+        height: image.height,
+        bytes: image.bytes,
+      });
+      activeInteraction?.refresh();
+    })
+    .catch((error) => {
+      if (
+        revision === openRevision &&
+        activeImageAssetStore === store
+      ) {
+        store.reject(cacheId, imageIndex, error);
+        activeInteraction?.refresh();
+      }
+    })
+    .finally(() => {
+      pendingEmbeddedImageRequests.delete(key);
+    });
+  return true;
+}
+
 function handleImageStatus(message) {
   if (
     typeof message?.cacheId !== "string" ||
@@ -3200,6 +3317,15 @@ function handleImageResponse(message) {
     const state = knownStates.has(message.status)
       ? message.status
       : "error";
+    const failureMessage =
+      typeof message.message === "string"
+        ? message.message.slice(0, 240)
+        : t("xrefs.imageConnectFailed");
+    activeImageAssetStore.reject(
+      message.cacheId,
+      message.imageIndex,
+      new Error(failureMessage),
+    );
     xrefDiagnostics.set(diagnosticKey, {
       ...existing,
       kind: "image",
@@ -3210,21 +3336,24 @@ function handleImageResponse(message) {
       name: existing?.name ?? t("common.image"),
       storedPath: existing?.storedPath ?? pending?.path ?? "",
       status: state,
-      message:
-        typeof message.message === "string"
-          ? message.message.slice(0, 240)
-          : t("xrefs.imageConnectFailed"),
+      message: failureMessage,
       canSelect: Boolean(message.canSelect),
     });
     if (!message.canSelect) {
       pendingImageRequests.delete(requestKey);
     }
     renderXrefDiagnostics();
+    activeInteraction?.refresh();
     return;
   }
   try {
     activeImageAssetStore.accept(message);
   } catch (error) {
+    activeImageAssetStore.reject(
+      message.cacheId,
+      message.imageIndex,
+      error,
+    );
     pendingImageRequests.delete(requestKey);
     xrefDiagnostics.set(diagnosticKey, {
       ...existing,
@@ -3236,6 +3365,7 @@ function handleImageResponse(message) {
           : t("xrefs.imageDataUnsafe"),
     });
     renderXrefDiagnostics();
+    activeInteraction?.refresh();
     return;
   }
   pendingImageRequests.delete(requestKey);
@@ -3294,7 +3424,7 @@ async function initializeImageOverlay(
       instanceGraph,
       cacheId,
       assetStore: activeImageAssetStore,
-      requestAsset: requestRasterImage,
+      requestAsset: (request) => requestSceneRasterImage(scene, request),
       maskOrder: activeMaskOrder,
       sourceId: "root",
       sourceLabel: t("common.currentDrawing"),
@@ -3475,15 +3605,11 @@ async function initializeMaskComposition(scene, revision) {
   }
   let instanceGraph = scene.instanceGraph;
   if (maskOrder.enabled) {
-    instanceGraph =
-      scene.activeView?.kind !== "model" &&
-      typeof scene.buildViewInstanceGraph === "function"
-        ? scene.buildViewInstanceGraph(scene.activeView, { maskOrder })
-        : applyMaskOrderToInstanceGraph(
-            scene.instanceGraph,
-            scene.metadata.blocks,
-            maskOrder,
-          );
+    instanceGraph = applyMaskOrderToInstanceGraph(
+      scene.instanceGraph,
+      scene.metadata.blocks,
+      maskOrder,
+    );
   }
   const enabled =
     maskOrder.enabled && instanceGraph.maskOrderEnabled;
@@ -5290,7 +5416,8 @@ async function addExternalImages(
       instanceGraph: composedInstanceGraph,
       cacheId,
       assetStore: store,
-      requestAsset: requestRasterImage,
+      requestAsset: (request) =>
+        requestSceneRasterImage(externalScene, request),
       maskOrder,
       orderCompositionEnabled: Boolean(
         activeMaskOrder?.generalOrderEnabled,
@@ -6314,27 +6441,83 @@ async function openStandaloneQualificationCache() {
     );
   }
   status.textContent = t("status.qualification.loading");
+  const metadataResponse = await fetch(cacheUrl, {
+    method: "HEAD",
+    credentials: "same-origin",
+  });
+  if (!metadataResponse.ok) {
+    throw new Error(
+      `qualification cache request failed: ${metadataResponse.status}`,
+    );
+  }
+  const declaredLength = Number(
+    metadataResponse.headers.get("content-length"),
+  );
+  if (
+    !Number.isSafeInteger(declaredLength) ||
+    declaredLength <= 0 ||
+    declaredLength > MAX_STANDALONE_QUALIFICATION_RANGE_BYTES
+  ) {
+    throw new Error("qualification cache exceeds its byte limit");
+  }
+  const acceptsRanges = /(?:^|,)\s*bytes\s*(?:,|$)/iu.test(
+    metadataResponse.headers.get("accept-ranges") ?? "",
+  );
+  const encodedName = cacheUrl.pathname.split("/").pop();
+  const fileName = encodedName
+    ? decodeURIComponent(encodedName).normalize("NFC").slice(0, 120)
+    : "qualification.cache";
+  if (acceptsRanges) {
+    const requestRevision = ++sourceOpenRequestRevision;
+    const cacheSha256 = await standaloneRangeCacheSessionDigest(cacheUrl, {
+      size: declaredLength,
+      etag: metadataResponse.headers.get("etag") ?? "",
+      lastModified:
+        metadataResponse.headers.get("last-modified") ?? "",
+    });
+    if (requestRevision !== sourceOpenRequestRevision) {
+      return;
+    }
+    activeHostCacheId = undefined;
+    activeDocumentName = fileName;
+    activeViewDocumentKey = `qualification:${cacheSha256}`;
+    glyphCache.configureLegacyEncodings({});
+    const source = new TrackedRangeSource(
+      new HttpRangeSource(cacheUrl, {
+        size: declaredLength,
+        fetchImpl(url, options) {
+          return fetch(url, {
+            ...options,
+            credentials: "same-origin",
+          });
+        },
+      }),
+    );
+    await openCache(
+      source,
+      { kind: "host", source },
+      cacheSha256,
+    );
+    return;
+  }
+  if (declaredLength > MAX_STANDALONE_QUALIFICATION_BLOB_BYTES) {
+    throw new Error(
+      "qualification cache server does not support byte ranges",
+    );
+  }
   const response = await fetch(cacheUrl, {
     credentials: "same-origin",
   });
   if (!response.ok) {
     throw new Error(`qualification cache request failed: ${response.status}`);
   }
-  const declaredLength = Number(response.headers.get("content-length"));
+  const blob = await response.blob();
   if (
-    Number.isFinite(declaredLength) &&
-    declaredLength > MAX_STANDALONE_QUALIFICATION_CACHE_BYTES
+    blob.size !== declaredLength ||
+    blob.size > MAX_STANDALONE_QUALIFICATION_BLOB_BYTES
   ) {
     throw new Error("qualification cache exceeds its byte limit");
   }
-  const blob = await response.blob();
-  if (blob.size > MAX_STANDALONE_QUALIFICATION_CACHE_BYTES) {
-    throw new Error("qualification cache exceeds its byte limit");
-  }
-  const encodedName = cacheUrl.pathname.split("/").pop();
-  const fileName = encodedName
-    ? decodeURIComponent(encodedName).normalize("NFC").slice(0, 120)
-    : "qualification.cache";
   await openFile(
     new File([blob], fileName, {
       type: "application/vnd.dwg-scene-cache",

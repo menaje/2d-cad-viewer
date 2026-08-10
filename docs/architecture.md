@@ -266,7 +266,7 @@ exercises intended-versus-reopened-observed receipt validation. The rejected
 WASM MEMFS candidate remains outside settings and the VSIX.
 
 The product writer, preview writer, benchmark validator and Webview reader now
-accept only Scene Cache v1.20. Lower version numbers in the milestone evidence
+accept only Scene Cache v1.21. Lower version numbers in the milestone evidence
 below are historical development records, not supported runtime formats.
 
 LibreDWG passes the conversion time and memory targets and matches the
@@ -311,7 +311,9 @@ LRU below the transparent WebGL drawing plane. Scene Cache v1.19 added bounded
 MTEXT annotation contexts and exact viewport annotation scales, so layout
 viewports select stored representations instead of multiplying text by a
 geometric viewport ratio. Scene Cache v1.20 adds viewport-specific layer color,
-transparency, linetype and lineweight across WebGL and Canvas overlays.
+transparency, linetype and lineweight across WebGL and Canvas overlays. Scene
+Cache v1.21 adds bounded embedded OLE bitmap and EMF presentation previews,
+including recovered four-corner placement and an explicit unavailable marker.
 Remaining exact CAD text layout and draw-order work are product-completeness
 gates on this selected engine, not an open parser choice.
 
@@ -903,6 +905,12 @@ chosen by traversal order. User mappings or the font-panel picker can bind a
 requested name to an explicit local file for the current drawing. Files are
 transferred one at a time, and the Webview receives no resolved host filesystem
 path beyond any original reference already embedded in the DWG style table.
+
+The Apache-2.0 `emf-converter` dependency is bundled into the Webview only for
+validated OLE presentation streams. It has no runtime dependencies or network
+path. The native converter first bounds the embedded byte stream and EMF record
+graph; the Webview then limits replay to 200,000 records and a 4,096-pixel
+Canvas before validating the PNG and admitting it to the normal raster LRU.
 
 Layout CTB discovery uses the same stored, drawing, bounded project and
 configured fallback order. Its manual picker installs a session mapping after

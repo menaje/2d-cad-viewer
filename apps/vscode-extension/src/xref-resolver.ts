@@ -1,5 +1,6 @@
 import {
   opendir,
+  realpath,
   stat,
 } from "node:fs/promises";
 import path from "node:path";
@@ -237,7 +238,13 @@ async function searchByBasename(
     ) {
       return;
     }
-    const directoryKey = localPathKey(directory);
+    let canonicalDirectory;
+    try {
+      canonicalDirectory = await realpath(directory);
+    } catch {
+      return;
+    }
+    const directoryKey = localPathKey(canonicalDirectory);
     if (seenDirectories.has(directoryKey)) {
       return;
     }
@@ -310,10 +317,22 @@ async function nearbyBasenameCandidates(
   const targetName = xrefBasename(storedPath);
   const candidates: XrefCandidate[] = [];
   const seenFiles = new Set<string>();
+  const seenDirectories = new Set<string>();
   for (const directory of deduplicateRoots(directories)) {
     if (signal?.aborted) {
       break;
     }
+    let canonicalDirectory;
+    try {
+      canonicalDirectory = await realpath(directory);
+    } catch {
+      continue;
+    }
+    const directoryKey = localPathKey(canonicalDirectory);
+    if (seenDirectories.has(directoryKey)) {
+      continue;
+    }
+    seenDirectories.add(directoryKey);
     let handle;
     try {
       handle = await opendir(directory);
