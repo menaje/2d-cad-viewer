@@ -97,6 +97,12 @@ test("release automation publishes every GPL target before the MPL viewer", asyn
     releaseWorkflow,
     /if: needs\.context\.outputs\.publish == 'true'/u,
   );
+  assert.equal(
+    (releaseWorkflow.match(/package_flags\+=\(--pre-release\)/gu) ?? [])
+      .length,
+    2,
+  );
+  assert.match(releaseWorkflow, /\$packageFlags \+= "--pre-release"/u);
   assert.match(releaseWorkflow, /--pre-release/u);
   assert.ok(
     releaseWorkflow.indexOf("for target in linux-x64 darwin-arm64 win32-x64") <

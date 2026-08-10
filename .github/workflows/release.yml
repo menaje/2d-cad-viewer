@@ -133,13 +133,17 @@ jobs:
         run: |
           release_directory="$RUNNER_TEMP/release"
           package_name="dwg-viewer-vscode-${{ steps.version.outputs.version }}.vsix"
+          package_flags=(--no-dependencies)
+          if [[ "${{ needs.context.outputs.channel }}" == "prerelease" ]]; then
+            package_flags+=(--pre-release)
+          fi
           mkdir "$release_directory"
           pnpm --dir apps/vscode-extension run build
           pnpm --dir apps/vscode-extension exec vsce package \
-            --no-dependencies \
+            "${package_flags[@]}" \
             --out "$release_directory/$package_name"
           pnpm --dir apps/vscode-extension exec vsce package \
-            --no-dependencies \
+            "${package_flags[@]}" \
             --out "$release_directory/repeated.vsix"
           node scripts/normalize-vsix-archive.mjs \
             "$release_directory/$package_name" \
@@ -318,16 +322,18 @@ jobs:
           package_root=$(find "$RUNNER_TEMP/extracted" -mindepth 1 -maxdepth 1 -type d)
           companion_path="$RUNNER_TEMP/dwg-viewer-libredwg-$extension_version-${{ matrix.target }}.vsix"
           repeated_path="$RUNNER_TEMP/dwg-viewer-libredwg-$extension_version-${{ matrix.target }}-repeated.vsix"
+          package_flags=(--target "${{ matrix.target }}" --no-dependencies)
+          if [[ "${{ needs.context.outputs.channel }}" == "prerelease" ]]; then
+            package_flags+=(--pre-release)
+          fi
           pnpm --dir apps/vscode-libredwg-adapter run prepare:package -- \
             --package-root "$package_root" \
             --target "${{ matrix.target }}"
           pnpm --dir apps/vscode-libredwg-adapter exec vsce package \
-            --target "${{ matrix.target }}" \
-            --no-dependencies \
+            "${package_flags[@]}" \
             --out "$companion_path"
           pnpm --dir apps/vscode-libredwg-adapter exec vsce package \
-            --target "${{ matrix.target }}" \
-            --no-dependencies \
+            "${package_flags[@]}" \
             --out "$repeated_path"
           node scripts/normalize-vsix-archive.mjs \
             "$companion_path" \
@@ -368,16 +374,22 @@ jobs:
           $repeatedPath = Join-Path `
             $env:RUNNER_TEMP `
             "dwg-viewer-libredwg-$extensionVersion-${{ matrix.target }}-repeated.vsix"
+          $packageFlags = @(
+            "--target",
+            "${{ matrix.target }}",
+            "--no-dependencies"
+          )
+          if ("${{ needs.context.outputs.channel }}" -eq "prerelease") {
+            $packageFlags += "--pre-release"
+          }
           pnpm --dir apps/vscode-libredwg-adapter run prepare:package -- `
             --package-root $packageRoot.FullName `
             --target "${{ matrix.target }}"
           pnpm --dir apps/vscode-libredwg-adapter exec vsce package `
-            --target "${{ matrix.target }}" `
-            --no-dependencies `
+            @packageFlags `
             --out $companionPath
           pnpm --dir apps/vscode-libredwg-adapter exec vsce package `
-            --target "${{ matrix.target }}" `
-            --no-dependencies `
+            @packageFlags `
             --out $repeatedPath
           node scripts/normalize-vsix-archive.mjs `
             $companionPath `
