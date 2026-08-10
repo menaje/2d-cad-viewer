@@ -128,14 +128,11 @@ export function parseQualificationArgs(arguments_) {
   if (
     !options.codePath ||
     !options.runtimePath ||
-    !options.adapterPath ||
-    !options.drawingPath ||
     !options.vsixPath ||
-    !options.companionVsixPath ||
     !options.outputPath
   ) {
     throw new Error(
-      "--code, --runtime, --adapter, --drawing, --vsix, --companion-vsix and --output are required",
+      "--code, --runtime, --vsix and --output are required",
     );
   }
   if (
@@ -147,6 +144,14 @@ export function parseQualificationArgs(arguments_) {
       "--scenario must be all, full, cancel or comparison",
     );
   }
+  if (
+    options.scenario !== "comparison" &&
+    (!options.adapterPath || !options.drawingPath)
+  ) {
+    throw new Error(
+      "--adapter and --drawing are required for drawing qualification",
+    );
+  }
   for (const key of [
     "codePath",
     "runtimePath",
@@ -156,7 +161,9 @@ export function parseQualificationArgs(arguments_) {
     "companionVsixPath",
     "outputPath",
   ]) {
-    options[key] = path.resolve(options[key]);
+    if (options[key]) {
+      options[key] = path.resolve(options[key]);
+    }
   }
   return Object.freeze(options);
 }
@@ -171,6 +178,7 @@ export function classifyProcess(
 ) {
   const text = process_.command;
   if (
+    typeof adapterPath === "string" &&
     text.includes(adapterPath) &&
     /(?:^|\s)convert(?:\s|$)/u.test(text)
   ) {
@@ -515,10 +523,10 @@ exports.activate = async function activate() {
   const token = process.env.DWG_VIEWER_QUALIFICATION_TOKEN;
   const mode = process.env.DWG_VIEWER_QUALIFICATION_MODE;
   if (
-    !drawing ||
-    !path.isAbsolute(drawing) ||
     !token ||
-    !/^[a-f0-9]{64}$/u.test(token)
+    !/^[a-f0-9]{64}$/u.test(token) ||
+    (mode !== "comparison" &&
+      (!drawing || !path.isAbsolute(drawing)))
   ) {
     return;
   }
@@ -663,32 +671,38 @@ async function runScenario(options, scenario) {
       : "full";
   const environment = { ...process.env };
   delete environment.ELECTRON_RUN_AS_NODE;
-  environment.DWG_VIEWER_LIBREDWG_ADAPTER = options.adapterPath;
+  if (options.adapterPath) {
+    environment.DWG_VIEWER_LIBREDWG_ADAPTER = options.adapterPath;
+  }
   environment.DWG_VIEWER_QUALIFICATION_REPORT = eventPath;
   const qualificationToken = randomBytes(32).toString("hex");
   environment.DWG_VIEWER_QUALIFICATION_TOKEN = qualificationToken;
-  environment.DWG_VIEWER_QUALIFICATION_DRAWING =
-    options.drawingPath;
+  if (options.drawingPath) {
+    environment.DWG_VIEWER_QUALIFICATION_DRAWING =
+      options.drawingPath;
+  }
   environment.DWG_VIEWER_QUALIFICATION_CLOSE_AFTER = closeAfter;
   environment.DWG_VIEWER_QUALIFICATION_MODE =
     scenario === "webgl-comparison" ? "comparison" : "drawing";
   try {
-    await execFile(
-      options.codePath,
-      [
-        "--user-data-dir",
-        userData,
-        "--extensions-dir",
-        extensions,
-        "--install-extension",
-        options.companionVsixPath,
-        "--force",
-      ],
-      {
-        env: environment,
-        maxBuffer: MAX_CAPTURE_BYTES,
-      },
-    );
+    if (options.companionVsixPath) {
+      await execFile(
+        options.codePath,
+        [
+          "--user-data-dir",
+          userData,
+          "--extensions-dir",
+          extensions,
+          "--install-extension",
+          options.companionVsixPath,
+          "--force",
+        ],
+        {
+          env: environment,
+          maxBuffer: MAX_CAPTURE_BYTES,
+        },
+      );
+    }
     await execFile(
       options.codePath,
       [
@@ -1114,10 +1128,16 @@ export async function qualifyExtensionHost(options) {
   ] = await Promise.all([
     ensureInputFile(options.codePath, true),
     ensureInputFile(options.runtimePath, true),
-    ensureInputFile(options.adapterPath, true),
-    ensureInputFile(options.drawingPath),
+    options.adapterPath
+      ? ensureInputFile(options.adapterPath, true)
+      : Promise.resolve(null),
+    options.drawingPath
+      ? ensureInputFile(options.drawingPath)
+      : Promise.resolve(null),
     ensureInputFile(options.vsixPath),
-    ensureInputFile(options.companionVsixPath),
+    options.companionVsixPath
+      ? ensureInputFile(options.companionVsixPath)
+      : Promise.resolve(null),
   ]);
   void codeMetadata;
   void runtimeMetadata;
@@ -1125,12 +1145,15 @@ export async function qualifyExtensionHost(options) {
   void vsixMetadata;
   void companionVsixMetadata;
   if (
-    [options.vsixPath, options.companionVsixPath].some(
-      (item) => path.extname(item).toLocaleLowerCase("en-US") !== ".vsix",
-    )
+    path.extname(options.vsixPath).toLocaleLowerCase("en-US") !==
+      ".vsix" ||
+    (options.companionVsixPath &&
+      path
+        .extname(options.companionVsixPath)
+        .toLocaleLowerCase("en-US") !== ".vsix")
   ) {
     throw new Error(
-      "qualification requires packaged main and companion VSIX files",
+      "qualification requires packaged VSIX files",
     );
   }
   try {
@@ -1180,7 +1203,7 @@ export async function qualifyExtensionHost(options) {
     platform: process.platform,
     architecture: process.arch,
     progressive_preview: options.progressivePreview,
-    source_size_bytes: drawingMetadata.size,
+    source_size_bytes: drawingMetadata?.size ?? null,
     runs,
     gates: Object.freeze({
       first_usable_frame: evaluateGate(

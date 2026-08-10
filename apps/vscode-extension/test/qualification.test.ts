@@ -14,6 +14,7 @@ import {
   QUALIFICATION_CLOSE_AFTER_ENV,
   QUALIFICATION_DRAWING_ENV,
   QUALIFICATION_EVENT_SCHEMA,
+  QUALIFICATION_MODE_ENV,
   QUALIFICATION_REPORT_ENV,
   QUALIFICATION_TOKEN_ENV,
   QualificationReporter,
@@ -45,6 +46,23 @@ test("enables qualification only for a private absolute target and token", () =>
     ),
     undefined,
   );
+});
+
+test("allows comparison-only qualification without a drawing path", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dwg-comparison-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const reporter = createQualificationReporter(
+    {
+      [QUALIFICATION_REPORT_ENV]: path.join(root, "events.jsonl"),
+      [QUALIFICATION_TOKEN_ENV]: TOKEN,
+      [QUALIFICATION_CLOSE_AFTER_ENV]: "full",
+      [QUALIFICATION_MODE_ENV]: "comparison",
+    },
+    42,
+  );
+
+  assert.ok(reporter);
+  await reporter.close();
 });
 
 test("writes bounded path-free events and claims one close stage", async (context) => {

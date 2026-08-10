@@ -114,13 +114,14 @@ canvas의 DOM/접근성 상태를 복원합니다. 호출자가 주입한 비교
 소유권은 호출자에게 남으므로 source switch나 host 종료 때는 comparison을
 먼저 닫은 뒤 adapter와 presentation을 각각 dispose해야 합니다.
 
-2026-08-09 qualification은 640×360 current/candidate RGBA surface 두 개에
+2026-08-10 qualification은 640×360 current/candidate RGBA surface 두 개에
 1,843,200 bytes를 유지했고, 독립 Browser의 actual WebGL2 첫 비교 frame은
-43 ms, 패키징된 VS Code 1.131.0 Webview는 74 ms였습니다. actual pixel,
+24 ms, 패키징된 VS Code 1.132.0 Webview는 40 ms였습니다. 패키징 검증은
+동반 엔진 확장 없이 main VSIX만 설치해 수행했습니다. actual pixel,
 camera rollback, stale selection, corresponding highlight, visibility와 8회
 반복 mount/close 후 Canvas/GPU delta 기준선 회귀를 모두 확인했습니다.
 경로 없는 결과는
-[`compatibility/evidence/viewer-webgl-comparison-2026-08-09.json`](../../compatibility/evidence/viewer-webgl-comparison-2026-08-09.json)에
+[`compatibility/evidence/viewer-webgl-comparison-2026-08-10.json`](../../compatibility/evidence/viewer-webgl-comparison-2026-08-10.json)에
 기록됩니다.
 
 The current decoded v6 packet is private to this package:

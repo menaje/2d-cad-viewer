@@ -209,7 +209,7 @@ adapter/presentation disposal to their owner. Browser and packaged VS Code
 actual-pixel qualification repeat this
 lifecycle eight times and end with zero allocated delta bytes. The development
 evidence is
-[`viewer-webgl-comparison-2026-08-09.json`](../compatibility/evidence/viewer-webgl-comparison-2026-08-09.json).
+[`viewer-webgl-comparison-2026-08-10.json`](../compatibility/evidence/viewer-webgl-comparison-2026-08-10.json).
 `ViewerDiffSemanticController` projects only identity/dependency changes and
 bounded invalidation IDs into the revision-bound `diff.open` Host event, so an
 external semantic panel does not require the visual geometry list or an

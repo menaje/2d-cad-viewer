@@ -93,14 +93,8 @@ test("accepts the isolated packaged comparison scenario", () => {
     "./code",
     "--runtime",
     "./runtime",
-    "--adapter",
-    "./adapter",
-    "--drawing",
-    "./drawing.dwg",
     "--vsix",
     "./extension.vsix",
-    "--companion-vsix",
-    "./companion.vsix",
     "--output",
     "./report.json",
     "--scenario",
@@ -108,6 +102,28 @@ test("accepts the isolated packaged comparison scenario", () => {
   ]);
 
   assert.equal(options.scenario, "comparison");
+  assert.equal(options.adapterPath, undefined);
+  assert.equal(options.drawingPath, undefined);
+  assert.equal(options.companionVsixPath, undefined);
+});
+
+test("requires drawing inputs outside the comparison-only scenario", () => {
+  assert.throws(
+    () =>
+      parseQualificationArgs([
+        "--code",
+        "./code",
+        "--runtime",
+        "./runtime",
+        "--vsix",
+        "./extension.vsix",
+        "--output",
+        "./report.json",
+        "--scenario",
+        "full",
+      ]),
+    /--adapter and --drawing are required/u,
+  );
 });
 
 test("classifies only the adapter convert process as the converter", () => {
