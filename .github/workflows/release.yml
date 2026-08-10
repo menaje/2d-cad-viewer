@@ -247,6 +247,7 @@ jobs:
           install: >-
             diffutils
             make
+            patch
             tar
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-pkgconf
@@ -310,8 +311,10 @@ jobs:
           repeated_path="$runner_temp/dwg-viewer-libredwg-0.14-${{ matrix.target }}-repeated.tar.gz"
           export DWG_VIEWER_TAR
           export DWG_VIEWER_OBJDUMP
+          export DWG_VIEWER_PATCH
           DWG_VIEWER_TAR=$(cygpath -w /usr/bin/tar.exe)
           DWG_VIEWER_OBJDUMP=$(cygpath -w /ucrt64/bin/objdump.exe)
+          DWG_VIEWER_PATCH=/usr/bin/patch.exe
           adapters/libredwg/prepare.sh "$build_root" "$adapter_path"
           DWG_VIEWER_ADAPTER_PROTOCOL=dwg-engine-adapter/1 \
           DWG_VIEWER_BENCHMARK_PHASE=doctor \
