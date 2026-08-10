@@ -26,6 +26,10 @@ import {
   GpuLineBatchKind,
   GPU_LINE_VERTEX_RECORD_SIZE,
 } from "./scene-cache.mjs";
+import {
+  POLYLINE_FLAG_CONTINUOUS_LINETYPE,
+  readPolylineDisplayVertices,
+} from "./polyline-source.mjs";
 
 const CURVE_EPSILON = 1e-12;
 const MAX_SPLINE_DEGREE = 15;
@@ -793,36 +797,32 @@ function makeEllipseSegments(entity, basis, pixelsPerLocalUnit) {
 }
 
 function readPolylineGeometry(source, entity) {
+  const vertices = readPolylineDisplayVertices(
+    source?.polylineVertices,
+    entity,
+    { maximumVertices: MAX_SPLINE_CONTROL_POINTS },
+  );
   if (
-    !Number.isSafeInteger(entity.firstVertex) ||
-    !Number.isSafeInteger(entity.vertexCount) ||
-    entity.vertexCount < 2 ||
-    entity.vertexCount > MAX_SPLINE_CONTROL_POINTS ||
-    entity.firstVertex + entity.vertexCount >
-      source.polylineVertices.length ||
+    !vertices ||
     (entity.polylineKind !== 1 && entity.polylineKind !== 2) ||
     !finitePoint(entity.normal) ||
     Math.hypot(...entity.normal) <= CURVE_EPSILON
   ) {
     return null;
   }
-  const values = new Float64Array(entity.vertexCount * 4);
-  const target = { position: [0, 0, 0] };
+  const values = new Float64Array(vertices.length * 4);
   let curved = false;
-  for (let index = 0; index < entity.vertexCount; index += 1) {
-    source.polylineVertices.readVertex(
-      entity.firstVertex + index,
-      target,
-    );
-    if (!finitePoint(target.position) || !Number.isFinite(target.bulge)) {
+  for (let index = 0; index < vertices.length; index += 1) {
+    const vertex = vertices[index];
+    if (!finitePoint(vertex.position) || !Number.isFinite(vertex.bulge)) {
       return null;
     }
     const offset = index * 4;
-    values[offset] = target.position[0];
-    values[offset + 1] = target.position[1];
+    values[offset] = vertex.position[0];
+    values[offset + 1] = vertex.position[1];
     values[offset + 2] = entity.elevation;
-    values[offset + 3] = target.bulge;
-    curved ||= Math.abs(target.bulge) > CURVE_EPSILON;
+    values[offset + 3] = vertex.bulge;
+    curved ||= Math.abs(vertex.bulge) > CURVE_EPSILON;
   }
   if (!curved) {
     return { curved: false };
@@ -830,10 +830,10 @@ function readPolylineGeometry(source, entity) {
   const matrix = arbitraryAxisMat4(entity.normal);
   const closed = Boolean(entity.polylineFlags & 1);
   const sourceSegmentCount =
-    entity.vertexCount - 1 + Number(closed);
+    vertices.length - 1 + Number(closed);
   const bounds = emptyBounds3();
   for (let index = 0; index < sourceSegmentCount; index += 1) {
-    const next = (index + 1) % entity.vertexCount;
+    const next = (index + 1) % vertices.length;
     const startOffset = index * 4;
     const endOffset = next * 4;
     const start = [
@@ -893,6 +893,9 @@ function readPolylineGeometry(source, entity) {
     values,
     matrix,
     closed,
+    continuousLinetype: Boolean(
+      entity.polylineFlags & POLYLINE_FLAG_CONTINUOUS_LINETYPE,
+    ),
     sourceSegmentCount,
     bounds,
   };
@@ -904,6 +907,9 @@ function makeBulgeSegments(geometry, pixelsPerLocalUnit) {
   let segmentTotal = 0;
   const vertexCount = geometry.values.length / 4;
   for (let index = 0; index < geometry.sourceSegmentCount; index += 1) {
+    if (!geometry.continuousLinetype) {
+      patternDistance = 0;
+    }
     const next = (index + 1) % vertexCount;
     const startOffset = index * 4;
     const endOffset = next * 4;
@@ -1103,6 +1109,394 @@ function readSplineGeometry(source, entity) {
     intervals,
     bounds,
   };
+}
+
+function solveTridiagonal(lower, diagonal, upper, rightHandSide) {
+  const count = diagonal.length;
+  if (
+    count === 0 ||
+    lower.length !== count ||
+    upper.length !== count ||
+    rightHandSide.length !== count
+  ) {
+    return null;
+  }
+  const modifiedUpper = new Float64Array(count);
+  const solution = new Float64Array(count);
+  let pivot = diagonal[0];
+  if (!Number.isFinite(pivot) || Math.abs(pivot) <= CURVE_EPSILON) {
+    return null;
+  }
+  modifiedUpper[0] = upper[0] / pivot;
+  solution[0] = rightHandSide[0] / pivot;
+  for (let index = 1; index < count; index += 1) {
+    pivot = diagonal[index] - lower[index] * modifiedUpper[index - 1];
+    if (!Number.isFinite(pivot) || Math.abs(pivot) <= CURVE_EPSILON) {
+      return null;
+    }
+    modifiedUpper[index] =
+      index + 1 < count ? upper[index] / pivot : 0;
+    solution[index] =
+      (rightHandSide[index] - lower[index] * solution[index - 1]) /
+      pivot;
+  }
+  for (let index = count - 2; index >= 0; index -= 1) {
+    solution[index] -= modifiedUpper[index] * solution[index + 1];
+  }
+  return Array.from(solution).every(Number.isFinite) ? solution : null;
+}
+
+function solveCyclicTridiagonal(
+  lower,
+  diagonal,
+  upper,
+  upperRight,
+  lowerLeft,
+  rightHandSide,
+) {
+  const count = diagonal.length;
+  if (count < 3) {
+    return null;
+  }
+  const gamma = -diagonal[0];
+  if (!Number.isFinite(gamma) || Math.abs(gamma) <= CURVE_EPSILON) {
+    return null;
+  }
+  const adjustedDiagonal = Float64Array.from(diagonal);
+  adjustedDiagonal[0] -= gamma;
+  adjustedDiagonal[count - 1] -= (upperRight * lowerLeft) / gamma;
+  const solution = solveTridiagonal(
+    lower,
+    adjustedDiagonal,
+    upper,
+    rightHandSide,
+  );
+  if (!solution) {
+    return null;
+  }
+  const correctionRightHandSide = new Float64Array(count);
+  correctionRightHandSide[0] = gamma;
+  correctionRightHandSide[count - 1] = upperRight;
+  const correction = solveTridiagonal(
+    lower,
+    adjustedDiagonal,
+    upper,
+    correctionRightHandSide,
+  );
+  if (!correction) {
+    return null;
+  }
+  const denominator =
+    1 +
+    correction[0] +
+    (lowerLeft * correction[count - 1]) / gamma;
+  if (
+    !Number.isFinite(denominator) ||
+    Math.abs(denominator) <= CURVE_EPSILON
+  ) {
+    return null;
+  }
+  const scale =
+    (solution[0] + (lowerLeft * solution[count - 1]) / gamma) /
+    denominator;
+  for (let index = 0; index < count; index += 1) {
+    solution[index] -= scale * correction[index];
+  }
+  return Array.from(solution).every(Number.isFinite) ? solution : null;
+}
+
+function fitPointIntervalLength(start, end, knotParameterization) {
+  if (knotParameterization === 2) {
+    return 1;
+  }
+  const distance = pointDistance(start, end);
+  if (!Number.isFinite(distance) || distance <= CURVE_EPSILON) {
+    return null;
+  }
+  return knotParameterization === 1 ? Math.sqrt(distance) : distance;
+}
+
+function explicitSplineTangent(tangent) {
+  return finitePoint(tangent) && Math.hypot(...tangent) > CURVE_EPSILON
+    ? tangent
+    : null;
+}
+
+function solveOpenFitPointTangents(points, intervals, startTangent, endTangent) {
+  const pointCount = points.length;
+  const lower = new Float64Array(pointCount);
+  const diagonal = new Float64Array(pointCount);
+  const upper = new Float64Array(pointCount);
+  const rightHandSides = Array.from(
+    { length: 3 },
+    () => new Float64Array(pointCount),
+  );
+  if (startTangent) {
+    diagonal[0] = 1;
+    for (let axis = 0; axis < 3; axis += 1) {
+      rightHandSides[axis][0] = startTangent[axis];
+    }
+  } else {
+    diagonal[0] = 2;
+    upper[0] = 1;
+    for (let axis = 0; axis < 3; axis += 1) {
+      rightHandSides[axis][0] =
+        (3 * (points[1][axis] - points[0][axis])) / intervals[0];
+    }
+  }
+  for (let index = 1; index + 1 < pointCount; index += 1) {
+    const previousInterval = intervals[index - 1];
+    const nextInterval = intervals[index];
+    lower[index] = nextInterval;
+    diagonal[index] = 2 * (previousInterval + nextInterval);
+    upper[index] = previousInterval;
+    for (let axis = 0; axis < 3; axis += 1) {
+      const previousSlope =
+        (points[index][axis] - points[index - 1][axis]) /
+        previousInterval;
+      const nextSlope =
+        (points[index + 1][axis] - points[index][axis]) /
+        nextInterval;
+      rightHandSides[axis][index] =
+        3 *
+        (previousSlope * nextInterval + nextSlope * previousInterval);
+    }
+  }
+  const last = pointCount - 1;
+  if (endTangent) {
+    diagonal[last] = 1;
+    for (let axis = 0; axis < 3; axis += 1) {
+      rightHandSides[axis][last] = endTangent[axis];
+    }
+  } else {
+    lower[last] = 1;
+    diagonal[last] = 2;
+    for (let axis = 0; axis < 3; axis += 1) {
+      rightHandSides[axis][last] =
+        (3 * (points[last][axis] - points[last - 1][axis])) /
+        intervals[last - 1];
+    }
+  }
+  const axisSolutions = rightHandSides.map((rightHandSide) =>
+    solveTridiagonal(lower, diagonal, upper, rightHandSide),
+  );
+  if (axisSolutions.some((solution) => !solution)) {
+    return null;
+  }
+  const tangents = new Float64Array(pointCount * 3);
+  for (let index = 0; index < pointCount; index += 1) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      tangents[index * 3 + axis] = axisSolutions[axis][index];
+    }
+  }
+  return tangents;
+}
+
+function solvePeriodicFitPointTangents(points, intervals) {
+  const pointCount = points.length;
+  if (pointCount < 3 || intervals.length !== pointCount) {
+    return null;
+  }
+  const lower = new Float64Array(pointCount);
+  const diagonal = new Float64Array(pointCount);
+  const upper = new Float64Array(pointCount);
+  const rightHandSides = Array.from(
+    { length: 3 },
+    () => new Float64Array(pointCount),
+  );
+  for (let index = 0; index < pointCount; index += 1) {
+    const previous = (index + pointCount - 1) % pointCount;
+    const next = (index + 1) % pointCount;
+    const previousInterval = intervals[previous];
+    const nextInterval = intervals[index];
+    if (index > 0) {
+      lower[index] = nextInterval;
+    }
+    diagonal[index] = 2 * (previousInterval + nextInterval);
+    if (index + 1 < pointCount) {
+      upper[index] = previousInterval;
+    }
+    for (let axis = 0; axis < 3; axis += 1) {
+      const previousSlope =
+        (points[index][axis] - points[previous][axis]) /
+        previousInterval;
+      const nextSlope =
+        (points[next][axis] - points[index][axis]) / nextInterval;
+      rightHandSides[axis][index] =
+        3 *
+        (previousSlope * nextInterval + nextSlope * previousInterval);
+    }
+  }
+  const upperRight = intervals[0];
+  const lowerLeft = intervals[pointCount - 2];
+  const axisSolutions = rightHandSides.map((rightHandSide) =>
+    solveCyclicTridiagonal(
+      lower,
+      diagonal,
+      upper,
+      upperRight,
+      lowerLeft,
+      rightHandSide,
+    ),
+  );
+  if (axisSolutions.some((solution) => !solution)) {
+    return null;
+  }
+  const tangents = new Float64Array(pointCount * 3);
+  for (let index = 0; index < pointCount; index += 1) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      tangents[index * 3 + axis] = axisSolutions[axis][index];
+    }
+  }
+  return tangents;
+}
+
+function readFitPointSplineGeometry(source, entity) {
+  let fitPointCount = entity.fitPointCount;
+  if (
+    !source.splineFitPoints ||
+    !Number.isSafeInteger(fitPointCount) ||
+    fitPointCount < 2 ||
+    fitPointCount > MAX_CURVE_SEGMENTS_PER_ENTITY + 1 ||
+    !Number.isSafeInteger(entity.firstFitPoint) ||
+    entity.firstFitPoint + fitPointCount > source.splineFitPoints.length
+  ) {
+    return null;
+  }
+  const points = new Array(fitPointCount);
+  const point = [0, 0, 0];
+  for (let index = 0; index < fitPointCount; index += 1) {
+    source.splineFitPoints.readPoint(entity.firstFitPoint + index, point);
+    if (!finitePoint(point)) {
+      return null;
+    }
+    points[index] = [...point];
+  }
+  const closed = Boolean(entity.splineFlags & 1);
+  const periodic = closed && Boolean(entity.splineFlags & 2);
+  const endpointsCoincide =
+    pointDistance(points[0], points[points.length - 1]) <= CURVE_EPSILON;
+  if (periodic && endpointsCoincide) {
+    points.pop();
+    fitPointCount -= 1;
+  } else if (closed && !periodic && !endpointsCoincide) {
+    points.push([...points[0]]);
+    fitPointCount += 1;
+  }
+  if (
+    fitPointCount < 2 ||
+    fitPointCount - 1 + Number(periodic) > MAX_CURVE_SEGMENTS_PER_ENTITY
+  ) {
+    return null;
+  }
+  const segmentCount = fitPointCount - 1 + Number(periodic);
+  const intervalLengths = new Float64Array(segmentCount);
+  const parameters = new Float64Array(segmentCount + 1);
+  for (let index = 0; index < segmentCount; index += 1) {
+    const length = fitPointIntervalLength(
+      points[index],
+      points[(index + 1) % fitPointCount],
+      entity.knotParameterization,
+    );
+    if (!length) {
+      return null;
+    }
+    intervalLengths[index] = length;
+    parameters[index + 1] = parameters[index] + length;
+  }
+  const tangents = periodic
+    ? solvePeriodicFitPointTangents(points, intervalLengths)
+    : solveOpenFitPointTangents(
+        points,
+        intervalLengths,
+        explicitSplineTangent(entity.beginTangent),
+        explicitSplineTangent(entity.endTangent),
+      );
+  if (!tangents) {
+    return null;
+  }
+  const bounds = emptyBounds3();
+  const intervals = new Array(segmentCount);
+  for (let index = 0; index < segmentCount; index += 1) {
+    const next = (index + 1) % fitPointCount;
+    const intervalLength = intervalLengths[index];
+    intervals[index] = [parameters[index], parameters[index + 1]];
+    includePoint(bounds, points[index]);
+    includePoint(bounds, points[next]);
+    for (let axis = 0; axis < 3; axis += 1) {
+      const firstControl =
+        points[index][axis] +
+        (tangents[index * 3 + axis] * intervalLength) / 3;
+      const secondControl =
+        points[next][axis] -
+        (tangents[next * 3 + axis] * intervalLength) / 3;
+      bounds.min[axis] = Math.min(
+        bounds.min[axis],
+        firstControl,
+        secondControl,
+      );
+      bounds.max[axis] = Math.max(
+        bounds.max[axis],
+        firstControl,
+        secondControl,
+      );
+    }
+  }
+  if (!boundsAreFinite(bounds)) {
+    return null;
+  }
+  return {
+    fitPoints: points,
+    tangents,
+    parameters,
+    intervalLengths,
+    segmentCount,
+    intervals,
+    bounds,
+  };
+}
+
+function evaluateFitPointSpline(geometry, parameter) {
+  if (!Number.isFinite(parameter)) {
+    return null;
+  }
+  const { parameters, segmentCount, fitPoints, tangents } = geometry;
+  let segment = segmentCount - 1;
+  if (parameter < parameters[segmentCount] - CURVE_EPSILON) {
+    let lower = 0;
+    let upper = segmentCount;
+    while (lower + 1 < upper) {
+      const middle = Math.floor((lower + upper) / 2);
+      if (parameters[middle] <= parameter) {
+        lower = middle;
+      } else {
+        upper = middle;
+      }
+    }
+    segment = lower;
+  }
+  const intervalLength = geometry.intervalLengths[segment];
+  const localParameter = Math.max(
+    0,
+    Math.min(1, (parameter - parameters[segment]) / intervalLength),
+  );
+  const next = (segment + 1) % fitPoints.length;
+  const inverse = 1 - localParameter;
+  const startBasis = inverse * inverse * (1 + 2 * localParameter);
+  const startTangentBasis =
+    localParameter * inverse * inverse * intervalLength;
+  const endBasis = localParameter * localParameter * (3 - 2 * localParameter);
+  const endTangentBasis =
+    localParameter * localParameter * (localParameter - 1) * intervalLength;
+  const result = [0, 0, 0];
+  for (let axis = 0; axis < 3; axis += 1) {
+    result[axis] =
+      startBasis * fitPoints[segment][axis] +
+      startTangentBasis * tangents[segment * 3 + axis] +
+      endBasis * fitPoints[next][axis] +
+      endTangentBasis * tangents[next * 3 + axis];
+  }
+  return finitePoint(result) ? result : null;
 }
 
 function evaluateSpline(geometry, parameter) {
@@ -1464,7 +1858,9 @@ export function buildCurveRefinementMesh(
       metrics.skippedLinear += 1;
       continue;
     }
-    const geometry = readSplineGeometry(source, splineTarget);
+    const geometry =
+      readSplineGeometry(source, splineTarget) ??
+      readFitPointSplineGeometry(source, splineTarget);
     if (!geometry) {
       metrics.skippedInvalid += 1;
       continue;
@@ -1486,7 +1882,10 @@ export function buildCurveRefinementMesh(
       owner,
       visibility,
       adaptiveParametricSegments(
-        (parameter) => evaluateSpline(geometry, parameter),
+        (parameter) =>
+          geometry.fitPoints
+            ? evaluateFitPointSpline(geometry, parameter)
+            : evaluateSpline(geometry, parameter),
         geometry.intervals,
         visibility.maximumPixelsPerLocalUnit,
       ),
@@ -1525,6 +1924,8 @@ export {
   CURVE_PIXEL_ERROR,
   CURVE_POSITION_PIXEL_ERROR,
   evaluateSpline,
+  evaluateFitPointSpline,
+  readFitPointSplineGeometry,
   MAX_CURVE_REFINEMENT_BATCH_BYTES,
   MAX_CURVE_REFINEMENT_GPU_BYTES,
   MAX_CURVE_SEGMENTS_PER_ENTITY,

@@ -13,6 +13,19 @@ const ATTRIBUTE_BINDINGS = Object.freeze([
   Object.freeze(["data-i18n-aria-label", "aria-label"]),
   Object.freeze(["data-i18n-placeholder", "placeholder"]),
 ]);
+const HTML_TEXT_ENTITIES = Object.freeze({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+});
+
+export function escapeHtmlText(value) {
+  return String(value).replace(/[&<>"']/gu, (character) =>
+    HTML_TEXT_ENTITIES[character],
+  );
+}
 
 function canonicalLocale(value) {
   if (
@@ -100,11 +113,12 @@ export function createI18n({
   const fallbackMessages = catalogs[fallbackLocale] ?? {};
   const language = locale.split("-")[0];
 
-  function t(key, values) {
+  function t(key, values, fallbackTemplate) {
     const normalizedKey = normalizedMessageKey(key);
     const template =
       messages[normalizedKey] ??
       fallbackMessages[normalizedKey] ??
+      (typeof fallbackTemplate === "string" ? fallbackTemplate : undefined) ??
       normalizedKey;
     return interpolate(template, values);
   }

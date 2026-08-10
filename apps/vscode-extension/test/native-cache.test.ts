@@ -118,7 +118,7 @@ test("doctor report requires the adapter, cache, engine, and license contract", 
       license: "GPL-3.0-or-later",
       linkage: "static",
     },
-    cache: { schema: "dwg-scene-cache/1.18" },
+    cache: { schema: "dwg-scene-cache/1.20" },
     target: { platform: "darwin", architecture: "arm64" },
   };
   assert.deepEqual(
@@ -189,7 +189,7 @@ if (process.env.DWG_DOCTOR_TEST_MODE === "slow") {
       license: "GPL-3.0-or-later",
       linkage: "static"
     },
-    cache: { schema: "dwg-scene-cache/1.18" },
+    cache: { schema: "dwg-scene-cache/1.20" },
     target: { platform: "test", architecture: "test" }
   }) + "\\n");
 }
@@ -237,6 +237,34 @@ test("resolves only an absolute executable adapter path", async (context) => {
       extensionPath: root,
     }),
     /ADAPTER_PATH_NOT_ABSOLUTE/u,
+  );
+});
+
+test("resolves the adapter from the GPL companion extension", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dwg-companion-path-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const mainExtensionRoot = path.join(root, "main");
+  const companionRoot = path.join(root, "companion");
+  const adapterPath = path.join(
+    companionRoot,
+    "native",
+    `${process.platform}-${process.arch}`,
+    process.platform === "win32"
+      ? "libredwg-adapter.exe"
+      : "libredwg-adapter",
+  );
+  await mkdir(path.dirname(adapterPath), { recursive: true });
+  await writeFile(adapterPath, "#!/bin/sh\nexit 0\n");
+  if (process.platform !== "win32") {
+    await chmod(adapterPath, 0o700);
+  }
+
+  assert.equal(
+    await resolveLibreDwgAdapter({
+      extensionPath: mainExtensionRoot,
+      bundledExtensionPath: companionRoot,
+    }),
+    adapterPath,
   );
 });
 

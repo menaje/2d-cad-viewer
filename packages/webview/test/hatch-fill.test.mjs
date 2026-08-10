@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   buildHatchFillMesh,
+  hatchGradientMix,
+  HatchGradientKind,
   HATCH_FILL_VERTEX_STRIDE,
 } from "../src/hatch-fill.mjs";
 import { buildInstanceGraph } from "../src/instance-graph.mjs";
@@ -125,6 +127,94 @@ test("selects gradient endpoints by stop value without sorting source objects", 
 
   assert.equal(view.getUint32(16, true), ((3 << 30) | (255 << 16)) >>> 0);
   assert.equal(view.getUint32(20, true), ((3 << 30) | 255) >>> 0);
+});
+
+test("preserves all named AutoCAD gradient profiles for fragment evaluation", async () => {
+  const { metadata, source, instanceGraph } = await hatchFixture();
+  const pairs = [
+    [
+      "CYLINDER",
+      "INVCYLINDER",
+      HatchGradientKind.Cylinder,
+      HatchGradientKind.InverseCylinder,
+    ],
+    [
+      "SPHERICAL",
+      "INVSPHERICAL",
+      HatchGradientKind.Spherical,
+      HatchGradientKind.InverseSpherical,
+    ],
+    [
+      "HEMISPHERICAL",
+      "INVHEMISPHERICAL",
+      HatchGradientKind.Hemispherical,
+      HatchGradientKind.InverseHemispherical,
+    ],
+    [
+      "CURVED",
+      "INVCURVED",
+      HatchGradientKind.Curved,
+      HatchGradientKind.InverseCurved,
+    ],
+  ];
+  const build = (name) =>
+    buildHatchFillMesh(
+      {
+        length: source.length,
+        readEntity(index, target) {
+          source.readEntity(index, target);
+          target.gradientShift = 1;
+          return target;
+        },
+        readLoop: source.readLoop.bind(source),
+        readVertex: source.readVertex.bind(source),
+        readGradientColor: source.readGradientColor.bind(source),
+        readGradientName() {
+          return name;
+        },
+      },
+      metadata.blocks,
+      instanceGraph,
+    );
+
+  for (const [name, inverseName, kind, inverseKind] of pairs) {
+    const normal = build(name);
+    const inverse = build(inverseName);
+    assert.equal(normal.batches[0].gradient.kind, kind);
+    assert.equal(inverse.batches[0].gradient.kind, inverseKind);
+    for (const point of [
+      [0, 0, 0],
+      [5, 5, 0],
+      [10, 10, 0],
+    ]) {
+      const sum =
+        hatchGradientMix(point, normal.batches[0].gradient) +
+        hatchGradientMix(point, inverse.batches[0].gradient);
+      assert.ok(Math.abs(sum - 1) <= 1e-12);
+    }
+  }
+});
+
+test("falls back to LINEAR for an unknown gradient name with diagnostics", async () => {
+  const { metadata, source, instanceGraph } = await hatchFixture();
+  const result = buildHatchFillMesh(
+    {
+      length: source.length,
+      readEntity: source.readEntity.bind(source),
+      readLoop: source.readLoop.bind(source),
+      readVertex: source.readVertex.bind(source),
+      readGradientColor: source.readGradientColor.bind(source),
+      readGradientName() {
+        return "FUTURE_GRADIENT";
+      },
+    },
+    metadata.blocks,
+    instanceGraph,
+  );
+
+  assert.equal(result.batches[0].gradient.kind, HatchGradientKind.Linear);
+  assert.equal(result.batches[0].gradient.name, "LINEAR");
+  assert.equal(result.metrics.unsupportedGradientNames, 1);
 });
 
 test("packs a HATCH local mask bucket into existing fill vertices", async () => {

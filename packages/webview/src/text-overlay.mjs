@@ -1,6 +1,6 @@
 import {
   TextEntityKind,
-} from "./scene-cache.mjs?v=1.18.8";
+} from "./scene-cache.mjs?v=1.20.0";
 import {
   decodeCadColor,
   decodeCadOpacity,
@@ -17,9 +17,18 @@ import {
 } from "./math.mjs";
 import { maskBucketFor } from "./mask-order.mjs";
 import {
+  createDrawOrderScratch,
+  drawOrderSurfaceFor,
+  resizeDrawOrderSurface,
+} from "./draw-order-overlay.mjs";
+import {
   indexDwgRenderDeltaStyles,
   renderDeltaInstanceStyle,
 } from "./render-delta-style.mjs";
+import {
+  viewportLayerColor,
+  viewportStyleRow,
+} from "./viewport-layer-state.mjs";
 import {
   cadMTextParagraphStart,
   DEFAULT_MTEXT_PARAGRAPH,
@@ -48,8 +57,10 @@ const DEFAULT_MAXIMUM_MASK_OCCURRENCES = 10_000;
 const MAXIMUM_CODE_POINTS_PER_ENTITY = 4_096;
 const MAXIMUM_MTEXT_COLUMNS = 64;
 const STACK_TEXT_SCALE = 0.7;
+const TEXT_FLAG_ANNOTATIVE = 1 << 2;
 const DEFAULT_DRAWING_BACKGROUND = "rgb(14, 16, 19)";
 const LOCAL_OUTLINE_FONTS = new Map();
+const SHX_GLYPH_BOUNDS = new WeakMap();
 const IDENTITY_INSTANCES = Object.freeze({
   data: identityMat4(),
   maskBases: new Uint32Array([0]),
@@ -437,6 +448,53 @@ function mtextWorldBasisMat4(record, normal) {
   ]);
 }
 
+function finiteCadPoint(point) {
+  return (
+    (Array.isArray(point) || ArrayBuffer.isView(point)) &&
+    point.length >= 3 &&
+    [point[0], point[1], point[2]].every(Number.isFinite)
+  );
+}
+
+function cadTextUsesEndpointSpan(record) {
+  return (
+    !isMTextRecord(record) &&
+    record.verticalAlignment === 0 &&
+    (record.horizontalAlignment === 3 ||
+      record.horizontalAlignment === 5) &&
+    finiteCadPoint(record.insertionPoint) &&
+    finiteCadPoint(record.alignmentPoint)
+  );
+}
+
+function cadTextPlacementPoint(record) {
+  const horizontalAlignment = Number.isInteger(record.horizontalAlignment)
+    ? record.horizontalAlignment
+    : 0;
+  const verticalAlignment = Number.isInteger(record.verticalAlignment)
+    ? record.verticalAlignment
+    : 0;
+  const usesAlignmentPoint =
+    !isMTextRecord(record) &&
+    !cadTextUsesEndpointSpan(record) &&
+    (horizontalAlignment !== 0 || verticalAlignment !== 0) &&
+    finiteCadPoint(record.alignmentPoint);
+  return usesAlignmentPoint
+    ? record.alignmentPoint
+    : record.insertionPoint;
+}
+
+function cadTextRotation(record) {
+  if (cadTextUsesEndpointSpan(record)) {
+    const deltaX = record.alignmentPoint[0] - record.insertionPoint[0];
+    const deltaY = record.alignmentPoint[1] - record.insertionPoint[1];
+    if (Math.hypot(deltaX, deltaY) > 1e-12) {
+      return Math.atan2(deltaY, deltaX);
+    }
+  }
+  return Number.isFinite(record.rotation) ? record.rotation : 0;
+}
+
 export function cadTextEntityMatrix(record, style) {
   const styleHeight =
     style?.height > 0 ? style.height : style?.lastHeight > 0 ? style.lastHeight : 1;
@@ -455,7 +513,7 @@ export function cadTextEntityMatrix(record, style) {
   const oblique =
     (Number.isFinite(record.obliqueAngle) ? record.obliqueAngle : 0) +
     (Number.isFinite(style?.obliqueAngle) ? style.obliqueAngle : 0);
-  const normal = record.normal.every(Number.isFinite)
+  const normal = finiteCadPoint(record.normal)
     ? record.normal
     : [0, 0, 1];
   const generationFlags =
@@ -464,18 +522,20 @@ export function cadTextEntityMatrix(record, style) {
     ((style?.flags & 2) !== 0 ? 4 : 0);
   const horizontalDirection = (generationFlags & 2) !== 0 ? -1 : 1;
   const verticalDirection = (generationFlags & 4) !== 0 ? -1 : 1;
+  const candidatePlacementPoint = cadTextPlacementPoint(record);
+  const placementPoint = finiteCadPoint(candidatePlacementPoint)
+    ? candidatePlacementPoint
+    : [0, 0, 0];
   const placement =
-    record.kind === TextEntityKind.MText
+    isMTextRecord(record)
       ? [
-          translationMat4(...record.insertionPoint),
+          translationMat4(...placementPoint),
           mtextWorldBasisMat4(record, normal),
         ]
       : [
           arbitraryAxisMat4(normal),
-          translationMat4(...record.insertionPoint),
-          rotationZMat4(
-            Number.isFinite(record.rotation) ? record.rotation : 0,
-          ),
+          translationMat4(...placementPoint),
+          rotationZMat4(cadTextRotation(record)),
         ];
   return [
     ...placement,
@@ -486,6 +546,73 @@ export function cadTextEntityMatrix(record, style) {
       height,
     ),
   ].reduce(multiplyMat4);
+}
+
+function annotationScalesMatch(left, right) {
+  return (
+    Number.isFinite(left) &&
+    Number.isFinite(right) &&
+    Math.abs(left - right) <= Math.max(1, Math.abs(left), Math.abs(right)) * 1e-9
+  );
+}
+
+export function annotativeTextRecordForInstance(
+  record,
+  instanceGraph,
+  instances,
+  instanceIndex,
+) {
+  const contexts = record.annotationContexts;
+  if (
+    (record.flags & TEXT_FLAG_ANNOTATIVE) === 0 ||
+    !Array.isArray(contexts) ||
+    contexts.length === 0
+  ) {
+    return record;
+  }
+  const visibilityRow = instances.visibilityRows?.[instanceIndex] ?? 0;
+  const viewportScale =
+    instanceGraph.annotationScalesByVisibilityRow?.[visibilityRow] ?? 0;
+  if (!Number.isFinite(viewportScale) || viewportScale <= 0) {
+    return record;
+  }
+  const targetContext = contexts.find((context) =>
+    annotationScalesMatch(context.scale, viewportScale),
+  );
+  const defaultContext = contexts.find((context) => context.isDefault);
+  if (!targetContext || !defaultContext || targetContext === defaultContext) {
+    return record;
+  }
+  const heightScale = targetContext.scale / defaultContext.scale;
+  if (!Number.isFinite(heightScale) || heightScale <= 0) {
+    return record;
+  }
+  const columnHeightCount = targetContext.columnHeights.length;
+  return Object.freeze({
+    ...record,
+    insertionPoint: targetContext.insertionPoint,
+    xAxisDirection: targetContext.xAxisDirection,
+    height: baseTextHeight(record) * heightScale,
+    attachment: targetContext.attachment,
+    rectangleHeight: targetContext.rectangleHeight,
+    rectangleWidth: targetContext.rectangleWidth,
+    extentsWidth: targetContext.extentsWidth,
+    extentsHeight: targetContext.extentsHeight,
+    columnType: targetContext.columnType,
+    columnCount:
+      columnHeightCount > 0 ? columnHeightCount : record.columnCount,
+    columnFlags:
+      (record.columnFlags & ~0x3) |
+      (targetContext.autoHeight ? 1 : 0) |
+      (targetContext.flowReversed ? 2 : 0),
+    columnWidth: targetContext.columnWidth,
+    columnGutter: targetContext.columnGutter,
+    firstColumnHeight: 0,
+    columnHeightCount,
+    columnHeightPool: null,
+    columnHeights: targetContext.columnHeights,
+    annotationDisplayScale: targetContext.scale,
+  });
 }
 
 function isMTextRecord(record) {
@@ -562,11 +689,7 @@ function normalizedColumnHeights(record, scale) {
 
 export function cadTextAlignmentWidth(record) {
   if (
-    isMTextRecord(record) ||
-    ![3, 5].includes(record.horizontalAlignment) ||
-    record.verticalAlignment !== 0 ||
-    !record.alignmentPoint?.every(Number.isFinite) ||
-    !record.insertionPoint?.every(Number.isFinite)
+    !cadTextUsesEndpointSpan(record)
   ) {
     return 0;
   }
@@ -578,14 +701,119 @@ export function cadTextAlignmentWidth(record) {
   );
 }
 
-function measuredFallbackAdvance(context, character) {
-  if (typeof context.measureText !== "function") {
-    return 1;
+export function cadTextAlignmentOffsets(
+  record,
+  { advance = 0, top = 1, bottom = 0 } = {},
+) {
+  if (isMTextRecord(record)) {
+    return Object.freeze({ horizontal: 0, baseline: 0 });
   }
-  const measured = context.measureText(character)?.width;
-  return Number.isFinite(measured) && measured > 0
-    ? Math.min(Math.max(measured, 0.1), 4)
-    : 1;
+  const safeAdvance =
+    Number.isFinite(advance) && advance > 0 ? advance : 0;
+  const safeTop = Number.isFinite(top) ? top : 1;
+  const safeBottom = Number.isFinite(bottom) ? bottom : 0;
+  const upper = Math.max(safeTop, safeBottom);
+  const lower = Math.min(safeTop, safeBottom);
+  const horizontalAlignment = Number.isInteger(record.horizontalAlignment)
+    ? record.horizontalAlignment
+    : 0;
+  const verticalAlignment = Number.isInteger(record.verticalAlignment)
+    ? record.verticalAlignment
+    : 0;
+  const horizontal =
+    horizontalAlignment === 1 || horizontalAlignment === 4
+      ? -safeAdvance * 0.5
+      : horizontalAlignment === 2
+        ? -safeAdvance
+        : 0;
+  const baseline =
+    verticalAlignment === 1
+      ? -lower
+      : verticalAlignment === 2
+        ? -(upper + lower) * 0.5
+        : verticalAlignment === 3
+          ? -upper
+          : horizontalAlignment === 4
+            ? -(upper + lower) * 0.5
+            : 0;
+  return Object.freeze({ horizontal, baseline });
+}
+
+function boundedFallbackMetric(value, fallback) {
+  return Number.isFinite(value)
+    ? Math.min(Math.max(value, -4), 4)
+    : fallback;
+}
+
+function measuredFallbackGlyph(context, character) {
+  if (typeof context.measureText !== "function") {
+    return Object.freeze({
+      advance: 1,
+      left: 0,
+      right: 1,
+      top: 1,
+      bottom: 0,
+    });
+  }
+  const measured = context.measureText(character);
+  const advance =
+    Number.isFinite(measured?.width) && measured.width > 0
+      ? Math.min(Math.max(measured.width, 0.1), 4)
+      : 1;
+  const left = -boundedFallbackMetric(
+    measured?.actualBoundingBoxLeft,
+    0,
+  );
+  const right = boundedFallbackMetric(
+    measured?.actualBoundingBoxRight,
+    advance,
+  );
+  const top = boundedFallbackMetric(
+    measured?.actualBoundingBoxAscent,
+    1,
+  );
+  const bottom = -boundedFallbackMetric(
+    measured?.actualBoundingBoxDescent,
+    0,
+  );
+  return Object.freeze({ advance, left, right, top, bottom });
+}
+
+function shxGlyphBounds(glyph) {
+  const cached = SHX_GLYPH_BOUNDS.get(glyph);
+  if (cached) {
+    return cached;
+  }
+  const vertices = glyph?.vertices;
+  let left = Infinity;
+  let right = -Infinity;
+  let top = -Infinity;
+  let bottom = Infinity;
+  if (ArrayBuffer.isView(vertices)) {
+    for (let offset = 0; offset + 1 < vertices.length; offset += 2) {
+      const x = vertices[offset];
+      const y = vertices[offset + 1];
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        continue;
+      }
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+      top = Math.max(top, y);
+      bottom = Math.min(bottom, y);
+    }
+  }
+  const bounds = Object.freeze(
+    [left, right, top, bottom].every(Number.isFinite)
+      ? { left, right, top, bottom }
+      : {
+          left: 0,
+          right: Number.isFinite(glyph?.advance) ? glyph.advance : 1,
+          top: 1,
+          bottom: 0,
+        },
+  );
+  SHX_GLYPH_BOUNDS.set(glyph, bounds);
+  return bounds;
 }
 
 function decodeColor(
@@ -594,7 +822,11 @@ function decodeColor(
   byBlock = null,
   palette = DEFAULT_ACI_PALETTE,
 ) {
-  return decodeCadColor(encoded, { layer, byBlock, palette });
+  return decodeCadColor(encoded, {
+    layer: Number.isInteger(layer) ? { color: layer } : layer,
+    byBlock,
+    palette,
+  });
 }
 
 function instancesForText(record, ownerBlockIndex, instanceGraph) {
@@ -943,6 +1175,9 @@ export class CanvasTextOverlay {
       minimumPixelHeight = DEFAULT_MINIMUM_PIXEL_HEIGHT,
       maximumMaskOccurrences = DEFAULT_MAXIMUM_MASK_OCCURRENCES,
       maskOrder = null,
+      orderCompositionEnabled = Boolean(maskOrder?.generalOrderEnabled),
+      orderDepthBias = -0.25,
+      maskBucketScale = 1,
       palette = DEFAULT_ACI_PALETTE,
       drawingBackground = DEFAULT_DRAWING_BACKGROUND,
       onInlineFonts = null,
@@ -957,6 +1192,20 @@ export class CanvasTextOverlay {
     }
     this.canvas = canvas;
     this.context = context;
+    this.orderCompositionEnabled = Boolean(orderCompositionEnabled);
+    this.orderSurface = this.orderCompositionEnabled
+      ? drawOrderSurfaceFor(canvas)
+      : null;
+    this.orderCanvas = this.orderSurface?.canvas ?? null;
+    this.orderDepthBias = Number.isFinite(orderDepthBias)
+      ? Math.max(-0.5, Math.min(0.5, orderDepthBias))
+      : -0.25;
+    this.maskBucketScale =
+      Number.isFinite(maskBucketScale) &&
+      maskBucketScale > 0 &&
+      maskBucketScale <= 1
+        ? maskBucketScale
+        : 1;
     this.baseTextEntities = textEntities;
     this.renderDeltaTextEntries = Object.freeze([]);
     this.renderDeltaTransforms = Object.freeze([]);
@@ -1005,6 +1254,7 @@ export class CanvasTextOverlay {
     this.reportedInlineFontKeys = new Set();
     this.configuredMaskOrder = maskOrder?.enabled ? maskOrder : null;
     this.maskOrder = this.configuredMaskOrder;
+    this.maskVisibility = true;
     this.blockIndexByHandle = new Map(
       blocks.map((block) => [block.handle, block.index]),
     );
@@ -1056,8 +1306,8 @@ export class CanvasTextOverlay {
   }
 
   setMaskVisibility(visible) {
-    this.maskOrder = visible ? this.configuredMaskOrder : null;
-    return Boolean(this.maskOrder);
+    this.maskVisibility = Boolean(visible);
+    return this.maskVisibility;
   }
 
   setRenderDeltaSuppressions(identities) {
@@ -1290,7 +1540,6 @@ export class CanvasTextOverlay {
       if (instances.count === 0) {
         return null;
       }
-      const localMatrix = cadTextEntityMatrix(record, record.style);
       for (
         let instanceIndex = 0;
         instanceIndex < instances.count;
@@ -1322,7 +1571,20 @@ export class CanvasTextOverlay {
           instances,
           instanceIndex,
         );
-        const worldMatrix = multiplyMat4(instanceMatrix, localMatrix);
+        const displayRecord = annotativeTextRecordForInstance(
+          record,
+          this.instanceGraph,
+          instances,
+          instanceIndex,
+        );
+        const displayLocalMatrix = cadTextEntityMatrix(
+          displayRecord,
+          displayRecord.style,
+        );
+        const worldMatrix = multiplyMat4(
+          instanceMatrix,
+          displayLocalMatrix,
+        );
         const point = [
           worldMatrix[12],
           worldMatrix[13],
@@ -1350,7 +1612,7 @@ export class CanvasTextOverlay {
         return Object.freeze({
           point: Object.freeze(point),
           worldHeight,
-          kind: record.kind,
+          kind: displayRecord.kind,
         });
       }
       return null;
@@ -1402,7 +1664,7 @@ export class CanvasTextOverlay {
       if (best && distancePixels >= best.distancePixels) {
         continue;
       }
-      const fullRecord =
+      const sourceRecord =
         typeof this.textEntities.get === "function"
           ? this.textEntities.get(occurrence.textIndex)
           : Object.freeze({
@@ -1414,6 +1676,10 @@ export class CanvasTextOverlay {
               tag: "",
               prompt: "",
             });
+      const fullRecord = Object.freeze({
+        ...sourceRecord,
+        ...occurrence.record,
+      });
       const names = ["TEXT", "MTEXT", "ATTDEF", "ATTRIB"];
       best = Object.freeze({
         kind: enabled.has("entity") ? "entity" : "insertion",
@@ -1464,6 +1730,7 @@ export class CanvasTextOverlay {
   redraw(camera, layerVisibility, { clear = true, size = null } = {}) {
     const { width, height } = this.resize(size);
     const context = this.context;
+    resizeDrawOrderSurface(this.orderSurface, width, height, { clear });
     context.setTransform(1, 0, 0, 1, 0, 0);
     if (clear) {
       context.clearRect(0, 0, width, height);
@@ -1491,20 +1758,83 @@ export class CanvasTextOverlay {
       truncated: false,
     };
     this.hitOccurrences = [];
-    const screenMasks = this.#screenMasks(
-      camera,
-      width,
-      height,
-      layerVisibility,
-      metrics,
-    );
+    const screenMasks = this.maskVisibility
+      ? this.#screenMasks(
+          camera,
+          width,
+          height,
+          layerVisibility,
+          metrics,
+        )
+      : [];
     const sourceCount = Math.min(
       this.textEntities.length,
       this.maximumSourceTexts,
     );
-    for (const textIndex of this.textEntities.indices(
-      this.maximumSourceTexts,
-    )) {
+    const orderedOccurrences = [];
+    for (const textIndex of this.textEntities.indices(this.maximumSourceTexts)) {
+      if (!this.orderCompositionEnabled) {
+        orderedOccurrences.push({
+          textIndex,
+          instanceIndex: null,
+          absoluteBucket: 0,
+          handle: 0n,
+        });
+        continue;
+      }
+      const sourceRecord =
+        typeof this.textEntities.readDisplayRecord === "function"
+          ? this.textEntities.readDisplayRecord(
+              textIndex,
+              this.displayRecord,
+            )
+          : this.textEntities.get(textIndex);
+      const ownerBlockIndex = this.blockIndexByHandle.get(
+        sourceRecord.ownerHandle,
+      );
+      const instances = instancesForText(
+        sourceRecord,
+        ownerBlockIndex,
+        this.instanceGraph,
+      );
+      const localBucket =
+        maskBucketFor(
+          this.configuredMaskOrder,
+          sourceRecord.ownerHandle,
+          sourceRecord.handle,
+        ) * this.maskBucketScale;
+      for (
+        let instanceIndex = 0;
+        instanceIndex < instances.count;
+        instanceIndex += 1
+      ) {
+        orderedOccurrences.push({
+          textIndex,
+          instanceIndex,
+          absoluteBucket:
+            (instances.maskBases?.[instanceIndex] ?? 0) + localBucket,
+          handle: sourceRecord.handle,
+        });
+      }
+    }
+    if (this.orderCompositionEnabled) {
+      orderedOccurrences.sort(
+        (left, right) =>
+          left.absoluteBucket - right.absoluteBucket ||
+          (left.handle < right.handle
+            ? -1
+            : left.handle > right.handle
+              ? 1
+              : left.textIndex - right.textIndex ||
+                left.instanceIndex - right.instanceIndex),
+      );
+    }
+    const visitedTextIndices = new Set();
+    for (const {
+      textIndex,
+      instanceIndex: orderedInstanceIndex,
+      absoluteBucket: orderedAbsoluteBucket,
+    } of orderedOccurrences) {
       if (
         metrics.visibleOccurrences >= this.maximumOccurrences ||
         metrics.segments >= this.maximumSegments ||
@@ -1520,7 +1850,10 @@ export class CanvasTextOverlay {
               this.displayRecord,
             )
           : this.textEntities.get(textIndex);
-      metrics.visitedSourceTexts += 1;
+      if (!visitedTextIndices.has(textIndex)) {
+        visitedTextIndices.add(textIndex);
+        metrics.visitedSourceTexts += 1;
+      }
       const renderDiffEntry = this.renderDiffEntryForText(
         textIndex,
         record,
@@ -1553,16 +1886,20 @@ export class CanvasTextOverlay {
       if (!record.insertionPoint.every(Number.isFinite)) {
         continue;
       }
-      const localMatrix = cadTextEntityMatrix(record, record.style);
       const ownerBlockIndex = this.blockIndexByHandle.get(record.ownerHandle);
       const instances = instancesForText(
         record,
         ownerBlockIndex,
         this.instanceGraph,
       );
+      const firstInstanceIndex = orderedInstanceIndex ?? 0;
+      const endInstanceIndex =
+        orderedInstanceIndex === null
+          ? instances.count
+          : Math.min(instances.count, orderedInstanceIndex + 1);
       for (
-        let instanceIndex = 0;
-        instanceIndex < instances.count;
+        let instanceIndex = firstInstanceIndex;
+        instanceIndex < endInstanceIndex;
         instanceIndex += 1
       ) {
         const style = renderDeltaInstanceStyle(
@@ -1616,12 +1953,31 @@ export class CanvasTextOverlay {
           style?.opacity ??
           instances.opacities?.[instanceIndex] ??
           1;
+        const layerColor = viewportLayerColor(
+          this.instanceGraph,
+          viewportStyleRow(instances, instanceIndex),
+          layerIndex,
+          this.layers[layerIndex]?.color ?? 0,
+        );
         const instanceMatrix = renderDeltaInstanceMatrix(
           this.renderDeltaTransformIndex,
           instances,
           instanceIndex,
         );
-        const worldMatrix = multiplyMat4(instanceMatrix, localMatrix);
+        const displayRecord = annotativeTextRecordForInstance(
+          record,
+          this.instanceGraph,
+          instances,
+          instanceIndex,
+        );
+        const displayLocalMatrix = cadTextEntityMatrix(
+          displayRecord,
+          displayRecord.style,
+        );
+        const worldMatrix = multiplyMat4(
+          instanceMatrix,
+          displayLocalMatrix,
+        );
         const screen = screenTransform(worldMatrix, camera, width, height);
         if (
           ![
@@ -1638,7 +1994,7 @@ export class CanvasTextOverlay {
           continue;
         }
         const conservativeCharacters = Math.min(
-          record.valueByteLength ?? record.value?.length ?? 0,
+          displayRecord.valueByteLength ?? displayRecord.value?.length ?? 0,
           MAXIMUM_CODE_POINTS_PER_ENTITY * 4,
         );
         const conservativeRadius =
@@ -1658,10 +2014,10 @@ export class CanvasTextOverlay {
           typeof this.textEntities.readValue === "function"
             ? this.textEntities.readValue(textIndex)
             : record.value;
-        const isMText = isMTextRecord(record);
+        const isMText = isMTextRecord(displayRecord);
         const richLines = isMText
           ? parseCadMTextRuns(value, {
-              baseHeight: baseTextHeight(record),
+              baseHeight: baseTextHeight(displayRecord),
               maximumCodePoints: MAXIMUM_CODE_POINTS_PER_ENTITY,
             })
           : unformattedRichLines(plainCadTextLines(value, false));
@@ -1686,12 +2042,15 @@ export class CanvasTextOverlay {
         }
         metrics.visibleOccurrences += 1;
         const absoluteBucket =
-          (instances.maskBases?.[instanceIndex] ?? 0) +
-          maskBucketFor(
-            this.maskOrder,
-            record.ownerHandle,
-            record.handle,
-          );
+          orderedInstanceIndex === null
+            ? (instances.maskBases?.[instanceIndex] ?? 0) +
+              maskBucketFor(
+                this.maskOrder,
+                record.ownerHandle,
+                record.handle,
+              ) *
+                this.maskBucketScale
+            : orderedAbsoluteBucket;
         const xclipped = this.#beginXClip(
           instances.clipIds?.[instanceIndex] ?? 0,
           camera,
@@ -1706,8 +2065,9 @@ export class CanvasTextOverlay {
           height,
           metrics,
         );
+        const orderMetrics = this.orderSurface ? { ...metrics } : null;
         const localBounds = this.#drawOccurrence(
-          record,
+          displayRecord,
           richLines,
           worldMatrix,
           screen,
@@ -1715,11 +2075,56 @@ export class CanvasTextOverlay {
           width,
           height,
           metrics,
-          layerIndex,
+          layerColor,
           byBlockColor,
           byBlockOpacity,
           renderDiffStyle,
         );
+        if (this.orderSurface && orderMetrics) {
+          const colorContext = this.context;
+          this.context = this.orderSurface.proxy;
+          let orderXClipped = false;
+          let orderMaskClipped = false;
+          try {
+            this.orderSurface.setBucket(absoluteBucket);
+            orderXClipped = this.#beginXClip(
+              instances.clipIds?.[instanceIndex] ?? 0,
+              camera,
+              width,
+              height,
+              orderMetrics,
+            );
+            orderMaskClipped = this.#beginMaskClip(
+              absoluteBucket,
+              screenMasks,
+              width,
+              height,
+              orderMetrics,
+            );
+            this.#drawOccurrence(
+              displayRecord,
+              richLines,
+              worldMatrix,
+              screen,
+              camera,
+              width,
+              height,
+              orderMetrics,
+              layerColor,
+              byBlockColor,
+              byBlockOpacity,
+              renderDiffStyle,
+            );
+          } finally {
+            if (orderMaskClipped) {
+              this.context.restore();
+            }
+            if (orderXClipped) {
+              this.context.restore();
+            }
+            this.context = colorContext;
+          }
+        }
         if (this.hitTestingEnabled && localBounds) {
           const localPolygon = [
             [localBounds.left, localBounds.top, 0],
@@ -1739,7 +2144,7 @@ export class CanvasTextOverlay {
             );
           const measurementMatrix = multiplyMat4(
             measurementInstanceMatrix,
-            localMatrix,
+            displayLocalMatrix,
           );
           const measurementPolygon = localPolygon.map((point) =>
             transformPoint(measurementMatrix, point),
@@ -1763,9 +2168,27 @@ export class CanvasTextOverlay {
                   color: record.color,
                   lineWeight: record.lineWeight,
                   linetypeCode: record.linetypeCode,
-                  height: record.height,
-                  rotation: record.rotation,
-                  style: record.style,
+                  height: displayRecord.height,
+                  rotation: displayRecord.rotation,
+                  style: displayRecord.style,
+                  insertionPoint: Object.freeze([
+                    ...displayRecord.insertionPoint,
+                  ]),
+                  xAxisDirection: Object.freeze([
+                    ...displayRecord.xAxisDirection,
+                  ]),
+                  attachment: displayRecord.attachment,
+                  rectangleWidth: displayRecord.rectangleWidth,
+                  rectangleHeight: displayRecord.rectangleHeight,
+                  extentsWidth: displayRecord.extentsWidth,
+                  extentsHeight: displayRecord.extentsHeight,
+                  columnType: displayRecord.columnType,
+                  columnCount: displayRecord.columnCount,
+                  columnFlags: displayRecord.columnFlags,
+                  columnWidth: displayRecord.columnWidth,
+                  columnGutter: displayRecord.columnGutter,
+                  annotationDisplayScale:
+                    displayRecord.annotationDisplayScale ?? null,
                 }),
                 displayPoint: Object.freeze([
                   worldMatrix[12],
@@ -1936,7 +2359,7 @@ export class CanvasTextOverlay {
         screenMasks.push({
           bucket:
             (instances.maskBases?.[instanceIndex] ?? 0) +
-            mask.localBucket,
+            mask.localBucket * this.maskBucketScale,
           points,
         });
       }
@@ -2036,12 +2459,13 @@ export class CanvasTextOverlay {
     width,
     height,
     metrics,
-    layerIndex,
+    layerColor,
     byBlockColor,
     left,
     right,
     top,
     bottom,
+    opacity,
     renderDiffStyle,
   ) {
     const flags = Number.isInteger(record.backgroundFlags)
@@ -2105,15 +2529,17 @@ export class CanvasTextOverlay {
         diffColor ??
         decodeColor(
           record.backgroundColor,
-          this.layers[layerIndex],
+          layerColor,
           byBlockColor,
           this.palette,
         );
       color =
         `rgba(${red}, ${green}, ${blue}, ` +
-        `${renderDiffStyle.opacity})`;
+        "1)";
     }
     const context = this.context;
+    context.save();
+    context.globalAlpha = Math.max(0, Math.min(1, opacity));
     context.fillStyle = color;
     context.beginPath();
     context.moveTo(points[0][0], points[0][1]);
@@ -2122,6 +2548,7 @@ export class CanvasTextOverlay {
     }
     context.closePath();
     context.fill();
+    context.restore();
     metrics.backgroundFills += 1;
   }
 
@@ -2134,7 +2561,7 @@ export class CanvasTextOverlay {
     width,
     height,
     metrics,
-    layerIndex,
+    layerColor,
     byBlockColor,
     byBlockOpacity,
     renderDiffStyle,
@@ -2143,7 +2570,7 @@ export class CanvasTextOverlay {
     const opacity =
       decodeCadOpacity(record.color, {
         layer: decodeCadOpacity(
-          this.layers[layerIndex]?.color ?? 0,
+          layerColor,
         ),
         byBlock: byBlockOpacity,
       }) * renderDiffStyle.opacity;
@@ -2159,7 +2586,7 @@ export class CanvasTextOverlay {
         diffColor ??
         decodeColor(
           encoded,
-          this.layers[layerIndex],
+          layerColor,
           byBlockColor,
           this.palette,
         );
@@ -2246,18 +2673,29 @@ export class CanvasTextOverlay {
             formatted.style,
             character.codePointAt(0),
           );
+      const measured = measuredFallbackGlyph(
+        context,
+        character === "\t" ? " " : character,
+      );
+      const bounds = glyph ? shxGlyphBounds(glyph) : measured;
       const baseAdvance =
         character === "\t"
-          ? measuredFallbackAdvance(context, " ") * 4
+          ? measured.advance * 4
           : glyph?.advance > 0
             ? glyph.advance
-            : measuredFallbackAdvance(context, character);
+            : measured.advance;
       const entry = Object.freeze({
         glyph,
         formatted,
         whitespace,
         advance:
           baseAdvance * formatted.widthScale * formatted.tracking,
+        top:
+          bounds.top * formatted.heightScale +
+          formatted.baselineOffset,
+        bottom:
+          bounds.bottom * formatted.heightScale +
+          formatted.baselineOffset,
       });
       perFormat.set(character, entry);
       return entry;
@@ -2527,15 +2965,17 @@ export class CanvasTextOverlay {
         width,
         height,
         metrics,
-        layerIndex,
+        layerColor,
         byBlockColor,
         blockLeft,
         blockLeft + blockWidth,
         verticalOffset + 1,
         verticalOffset + 1 - blockHeight,
+        opacity,
         renderDiffStyle,
       );
     }
+    let textBounds = null;
 
     for (const column of columns) {
       for (
@@ -2699,6 +3139,28 @@ export class CanvasTextOverlay {
             ? storedLineWidth / lineAdvance
             : 1;
         const scaledLineAdvance = lineAdvance * lineScale;
+        let lineTop = -Infinity;
+        let lineBottom = Infinity;
+        for (const entry of glyphs) {
+          if (entry.whitespace) {
+            continue;
+          }
+          const entryOffset = entry.yOffset ?? 0;
+          lineTop = Math.max(lineTop, entry.top + entryOffset);
+          lineBottom = Math.min(
+            lineBottom,
+            entry.bottom + entryOffset,
+          );
+        }
+        if (!Number.isFinite(lineTop) || !Number.isFinite(lineBottom)) {
+          lineTop = 1;
+          lineBottom = 0;
+        }
+        const textAlignment = cadTextAlignmentOffsets(record, {
+          advance: scaledLineAdvance,
+          top: lineTop,
+          bottom: lineBottom,
+        });
         const paragraphStart = cadMTextParagraphStart(
           paragraph,
           paragraphLine,
@@ -2734,14 +3196,30 @@ export class CanvasTextOverlay {
               column.x +
               paragraphStart +
               paragraphAlignmentOffset
-            : horizontalGroup === 1
-              ? -scaledLineAdvance * 0.5
-              : horizontalGroup === 2
-                ? -scaledLineAdvance
-                : 0;
+            : textAlignment.horizontal;
         const baseline = verticalFlow
           ? verticalOffset
-          : verticalOffset - lineIndex * lineStep;
+          : verticalOffset - lineIndex * lineStep +
+            textAlignment.baseline;
+        if (!isMText) {
+          const currentBounds = {
+            left: horizontalOffset,
+            right: horizontalOffset + scaledLineAdvance,
+            top: baseline + lineTop,
+            bottom: baseline + lineBottom,
+          };
+          textBounds = textBounds
+            ? {
+                left: Math.min(textBounds.left, currentBounds.left),
+                right: Math.max(textBounds.right, currentBounds.right),
+                top: Math.max(textBounds.top, currentBounds.top),
+                bottom: Math.min(
+                  textBounds.bottom,
+                  currentBounds.bottom,
+                ),
+              }
+            : currentBounds;
+        }
         context.beginPath();
         let hasVectorPath = false;
         let activeVectorColor = "";
@@ -2928,6 +3406,24 @@ export class CanvasTextOverlay {
         }
       }
     }
+    if (textBounds) {
+      const centerX = (textBounds.left + textBounds.right) * 0.5;
+      const centerY = (textBounds.top + textBounds.bottom) * 0.5;
+      const selectionWidth = Math.max(
+        textBounds.right - textBounds.left,
+        0.35,
+      );
+      const selectionHeight = Math.max(
+        textBounds.top - textBounds.bottom,
+        1,
+      );
+      return Object.freeze({
+        left: centerX - selectionWidth * 0.5,
+        right: centerX + selectionWidth * 0.5,
+        top: centerY + selectionHeight * 0.5,
+        bottom: centerY - selectionHeight * 0.5,
+      });
+    }
     const selectionWidth = Math.max(
       blockWidth,
       textAlignmentWidth,
@@ -2984,7 +3480,14 @@ export class CanvasTextOverlay {
 export class CompositeTextOverlay {
   constructor(canvas) {
     this.canvas = canvas;
+    this.orderCanvas = drawOrderSurfaceFor(canvas)?.canvas ?? null;
     this.overlays = [];
+    this.aggregateScratch = createDrawOrderScratch(canvas);
+    this.lastOrderedComposition = Object.freeze({
+      attempted: false,
+      succeeded: false,
+      results: Object.freeze([]),
+    });
     this.maskVisibility = true;
     this.hitTestingEnabled = false;
     this.palette = new Uint8Array(DEFAULT_ACI_PALETTE);
@@ -3224,7 +3727,15 @@ export class CompositeTextOverlay {
     return best;
   }
 
-  redraw(camera, layerVisibility, { size = null } = {}) {
+  redraw(
+    camera,
+    layerVisibility,
+    {
+      size = null,
+      canDrawOrderedLayer = null,
+      drawOrderedLayer = null,
+    } = {},
+  ) {
     const metrics = {
       sourceTexts: 0,
       renderDeltaTexts: 0,
@@ -3244,6 +3755,11 @@ export class CompositeTextOverlay {
       xclipOperations: 0,
       truncated: false,
     };
+    this.lastOrderedComposition = Object.freeze({
+      attempted: false,
+      succeeded: false,
+      results: Object.freeze([]),
+    });
     if (this.overlays.length === 0) {
       if (size) {
         this.canvas.width = size.width;
@@ -3251,13 +3767,15 @@ export class CompositeTextOverlay {
       }
       const context = this.canvas.getContext("2d", { alpha: true });
       context?.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      resizeDrawOrderSurface(
+        drawOrderSurfaceFor(this.canvas),
+        this.canvas.width,
+        this.canvas.height,
+        { clear: true },
+      );
       return Object.freeze(metrics);
     }
-    this.overlays.forEach((overlay, index) => {
-      const current = overlay.redraw(camera, layerVisibility, {
-        clear: index === 0,
-        size,
-      });
+    const accumulate = (current) => {
       for (const name of [
         "sourceTexts",
         "renderDeltaTexts",
@@ -3279,7 +3797,75 @@ export class CompositeTextOverlay {
       }
       metrics.maskClipDisabled ||= Boolean(current.maskClipDisabled);
       metrics.truncated ||= Boolean(current.truncated);
-    });
+    };
+    const canStreamLayers =
+      this.overlays.length > 1 &&
+      this.aggregateScratch &&
+      this.overlays.every((overlay) => overlay.orderCanvas) &&
+      typeof canDrawOrderedLayer === "function" &&
+      typeof drawOrderedLayer === "function";
+    const firstOverlay = this.overlays[0];
+    accumulate(
+      firstOverlay.redraw(camera, layerVisibility, {
+        clear: true,
+        size,
+      }),
+    );
+    if (canStreamLayers && canDrawOrderedLayer(firstOverlay)) {
+      const width = this.canvas.width;
+      const height = this.canvas.height;
+      const aggregate = this.aggregateScratch;
+      if (
+        aggregate.canvas.width !== width ||
+        aggregate.canvas.height !== height
+      ) {
+        aggregate.canvas.width = width;
+        aggregate.canvas.height = height;
+      }
+      aggregate.context.setTransform(1, 0, 0, 1, 0, 0);
+      aggregate.context.globalAlpha = 1;
+      aggregate.context.globalCompositeOperation = "source-over";
+      aggregate.context.filter = "none";
+      aggregate.context.clearRect(0, 0, width, height);
+      const results = [];
+      const composeCurrent = (overlay) => {
+        results.push(drawOrderedLayer(overlay));
+        aggregate.context.drawImage(overlay.canvas, 0, 0);
+      };
+      composeCurrent(firstOverlay);
+      for (let index = 1; index < this.overlays.length; index += 1) {
+        const overlay = this.overlays[index];
+        accumulate(
+          overlay.redraw(camera, layerVisibility, {
+            clear: true,
+            size,
+          }),
+        );
+        composeCurrent(overlay);
+      }
+      const context = this.canvas.getContext("2d", { alpha: true });
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.globalAlpha = 1;
+      context.globalCompositeOperation = "source-over";
+      context.filter = "none";
+      context.clearRect(0, 0, width, height);
+      context.drawImage(aggregate.canvas, 0, 0);
+      this.lastOrderedComposition = Object.freeze({
+        attempted: true,
+        succeeded: results.every(Boolean),
+        results: Object.freeze(results),
+      });
+    } else {
+      for (let index = 1; index < this.overlays.length; index += 1) {
+        const overlay = this.overlays[index];
+        accumulate(
+          overlay.redraw(camera, layerVisibility, {
+            clear: false,
+            size,
+          }),
+        );
+      }
+    }
     return Object.freeze(metrics);
   }
 
@@ -3288,6 +3874,15 @@ export class CompositeTextOverlay {
       overlay.dispose();
     }
     this.overlays.length = 0;
+    if (this.aggregateScratch) {
+      this.aggregateScratch.canvas.width = 1;
+      this.aggregateScratch.canvas.height = 1;
+    }
+    this.lastOrderedComposition = Object.freeze({
+      attempted: false,
+      succeeded: false,
+      results: Object.freeze([]),
+    });
     this.renderDeltaSuppressions = Object.freeze([]);
     this.renderDeltaTexts = Object.freeze([]);
     this.renderDeltaTransforms = Object.freeze([]);

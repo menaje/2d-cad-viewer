@@ -180,6 +180,36 @@ both surfaces. `ViewerSplitViewUiController` owns the actual accessible
 two-surface DOM composition, bounded keyboard/pointer divider and restoration
 of the injected surfaces to their original DOM positions; renderer resources
 remain product-owned.
+`@menaje/viewer-webgl` implements this logical split contract with
+`mountWebGlRevisionComparison()`. The admitted physical strategy is
+`single-renderer-serial-snapshot`: one mounted `WebGlLineRenderer` switches
+between the adapter's exact retained base and target revision, captures each
+with the same logical camera, and displays the results in two bounded RGBA
+Canvas surfaces. It does not allocate a second WebGL context, clone the base
+Scene Cache/GPU resources, or alter the ordinary single-surface entrypoint.
+The current private reference qualification already reaches 530,058,768–
+594,939,480 bytes of incremental physical memory against the 600 MB target, so
+a second full renderer/cache is not admitted without a separate hard-Gate
+qualification. Overlay-only toggle remains cheaper but does not satisfy the
+simultaneously visible comparison requirement. A split-viewport renderer is
+also not claimed: the current renderer owns a full-canvas viewport, while the
+selected serial capture path reuses that implementation and measured only
+1,843,200 retained RGBA bytes at the 640×360 qualification size.
+
+The comparison validates session, source, base snapshot, base/committed/target
+revision and preview ID before its first frame. Camera, diff and selection
+updates use Core's synchronous rollback controllers; a failed target capture
+restores both last-good bitmaps and the camera. Added/removed entities are
+highlighted only on the side where they exist, modified entities require the
+same layer/Render ID on both sides, and a pick bound to another revision is
+rejected. Disposal removes generated surfaces, restores injected surfaces to
+their original DOM placement and controller-modified presentation state,
+restores the underlying render canvas, clears diff state and leaves
+adapter/presentation disposal to their owner. Browser and packaged VS Code
+actual-pixel qualification repeat this
+lifecycle eight times and end with zero allocated delta bytes. The development
+evidence is
+[`viewer-webgl-comparison-2026-08-09.json`](../compatibility/evidence/viewer-webgl-comparison-2026-08-09.json).
 `ViewerDiffSemanticController` projects only identity/dependency changes and
 bounded invalidation IDs into the revision-bound `diff.open` Host event, so an
 external semantic panel does not require the visual geometry list or an
@@ -201,6 +231,15 @@ the packaged product reported `status: ok`, 5,220 ms to first usable frame,
 cleanup. The frame missed the 5-second target by 220 ms but remained below the
 8-second hard limit; memory remained below its 800 MB hard limit. The private
 drawing and raw report are not committed.
+
+The current optimized product path was requalified three more times on
+2026-08-09. It reached first usable frames in 4,704, 4,613 and 4,547 ms and
+added 582,045,296, 530,058,768 and 594,939,480 bytes of de-duplicated physical
+memory; every run passed the 5-second/600 MB targets and completed converter and
+editor cleanup. A KOGL Type 1 public AC1021 fixture was also downloaded from
+the pinned public-corpus manifest after live license, archive-size and SHA-256
+verification. The packaged VSIX opened its unmodified 5,325,824-byte DWG in
+1,103 ms with 71,945,240 incremental physical bytes and complete cleanup.
 
 The engine decision is now accepted: LibreDWG 0.14 is the primary parser and
 converter for continued product development. The former acadrust comparison
@@ -227,7 +266,7 @@ exercises intended-versus-reopened-observed receipt validation. The rejected
 WASM MEMFS candidate remains outside settings and the VSIX.
 
 The product writer, preview writer, benchmark validator and Webview reader now
-accept only Scene Cache v1.18. Lower version numbers in the milestone evidence
+accept only Scene Cache v1.20. Lower version numbers in the milestone evidence
 below are historical development records, not supported runtime formats.
 
 LibreDWG passes the conversion time and memory targets and matches the
@@ -258,16 +297,23 @@ INSERT/XREF spatial-clip boundaries. The VS Code host resolves
 relative, drive, UNC and POSIX forms through bounded project-local search,
 persists explicit manual mappings, converts child caches serially and the
 Webview composes their shared line/text instances under the parent INSERT.
-Aggregate XREF overview source, overview GPU and detail GPU data are each
-capped at 32 MiB. Versions 1.14–1.17 add drawing display settings, named
+The same composed instance graph now drives child HATCH, primitive and
+stable-view exact-curve workers, with child layer and linetype indices remapped
+before upload. Aggregate XREF overview source, overview GPU and detail GPU data
+are each capped at 32 MiB; external deferred geometry has a separate 64 MiB GPU
+cap. Versions 1.14–1.17 add drawing display settings, named
 linetypes, saved model view and paper/model layout viewport state. Scene Cache
 v1.18 adds IMAGE/IMAGEDEF paths, placement bases and clip vertices without
 adding raster bytes to the cache or first-frame read. The host resolves only
 visible JPG/PNG references and transfers deduplicated, bounded content; the
 Webview applies image/XREF clipping and keeps decoded bitmaps in a 64 MiB RGBA
-LRU below the transparent WebGL drawing plane. Remaining exact
-CAD text layout and draw-order work are product-completeness gates on this
-selected engine, not an open parser choice.
+LRU below the transparent WebGL drawing plane. Scene Cache v1.19 added bounded
+MTEXT annotation contexts and exact viewport annotation scales, so layout
+viewports select stored representations instead of multiplying text by a
+geometric viewport ratio. Scene Cache v1.20 adds viewport-specific layer color,
+transparency, linetype and lineweight across WebGL and Canvas overlays.
+Remaining exact CAD text layout and draw-order work are product-completeness
+gates on this selected engine, not an open parser choice.
 
 The complete mlightcad/LibreDWG WASM object-model pipeline is intentionally not
 used for large drawings because the full JavaScript model, structured cloning,
@@ -392,7 +438,13 @@ memory is also diagnostic because VS Code's pre-existing host cost is outside
 the extension. Reports contain numeric metrics and source size, never drawing
 paths or text.
 
-The runner performs both a full first-open and a close-during-conversion run.
+The runner performs a full first-open, close-during-conversion and isolated
+actual-WebGL comparison run. The comparison driver activates the packaged
+extension directly without opening a drawing, so its temporary WebGL surface
+does not contaminate the first-frame or memory Gate. It requires distinct
+current/candidate checksums, corresponding highlight pixels, stale-pick
+rejection, camera/pixel rollback, eight repeated lifecycle releases, zero
+remaining delta bytes and host-panel/process cleanup.
 The final macOS arm64 sample reached a full first frame in 3,745 ms, added
 595,660,352 bytes above a 416,779,576-byte stable host baseline, and observed
 the converter gone 286 ms after disposal. Three prior stable full runs added
@@ -693,7 +745,10 @@ segments per revolution. Valid splines use two segments per non-empty knot span
 with a 256-segment entity cap; malformed splines fall back to bounded fit-point
 or control-point chords. Approximation bits stay attached to the GPU vertices,
 and the source-precision records remain available for later view-adaptive
-high-zoom refinement. Batch-local position error is recorded as a conservative
+high-zoom refinement. That refinement evaluates valid NURBS data first and,
+when a drawing stores only fit data, constructs a bounded cubic interpolant
+using chord, square-root chord or uniform spacing, stored endpoint tangents and
+periodic closure. Batch-local position error is recorded as a conservative
 `f32` upper bound without a second geometry traversal.
 
 The v1.5 display slice extends the same path to HATCH boundaries. Each HATCH
@@ -703,6 +758,17 @@ edges all stay in the existing overview, Morton detail and byte-bounded cache
 pipeline. Reports count rendered boundary segments and capped HATCH entities.
 Solid, gradient and clipped pattern fills are intentionally left for a
 separate source-backed renderer.
+
+The current converter applies a denser bounded rule only to those HATCH
+boundaries: circular, elliptic and bulge curves use at most 64 chords per
+revolution, while curved spline knot spans use eight and remain capped at
+1,024 spline segments. A HATCH spline that contains fit points but lacks a
+valid control-point/knot definition uses a chord-parameterized cubic Hermite
+path, including stored endpoint tangents and periodic closure, rather than
+straight fit-point links. Ordinary first-frame curves keep the original
+16/two limits because their analytic source is refined after zoom settles.
+The public `2004/HatchG.dwg` fixture consequently retains 1,064 rather than
+269 HATCH ring vertices without reaching a per-entity or global cap.
 
 The v1.6 fill slice implements that separate path without changing the line
 first frame. After the overview is visible, a dedicated worker reopens the
@@ -714,6 +780,12 @@ batches and draw before boundary lines. Source planning is capped at 65,536
 vertices per HATCH and 1,048,576 globally; browser work is capped at 2,048
 loops and 65,536 triangles per entity and 32 MiB of GPU vertices overall.
 Opening another file terminates the previous worker.
+
+Gradient batches retain the named AutoCAD profile as a compact descriptor.
+The fill fragment shader evaluates LINEAR, CYLINDER, SPHERICAL,
+HEMISPHERICAL, CURVED and all inverse forms from HATCH-local coordinates,
+angle and shift, avoiding a profile-dependent tessellation increase. Unknown
+names use LINEAR while incrementing an explicit diagnostic counter.
 
 The v1.7 pattern slice retains the same worker and source buffers after fill
 initialization. Camera changes are debounced by 160 ms and regenerate pattern
@@ -739,8 +811,8 @@ block-instance metadata, reuses the instance graph including DIMENSION picture
 references,
 transfers only the packed display buffers and exits. POINT keeps WCS location
 and drawing `PDMODE`/`PDSIZE`;
-its shader draws bounded screen-space glyphs. SOLID keeps four OCS corners
-and drawing `FILLMODE`; the worker applies the arbitrary-axis transform and
+its shader draws bounded screen-space glyphs. SOLID keeps four OCS corners in
+1-2-4-3 perimeter order and drawing `FILLMODE`; the worker applies the arbitrary-axis transform and
 emits either fill triangles or three/four outline edges.
 
 The v1.9 3DFACE slice adds WCS corners and four source invisible-edge bits to

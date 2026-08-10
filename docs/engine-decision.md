@@ -255,7 +255,7 @@ is under [`adapters/libredwg/wasm`](../adapters/libredwg/wasm/README.md).
 
 ## Native document query and writer admission
 
-이 문서에서 기존에 “writer”라고 부른 구현은 DWG를 Scene Cache v1.18로
+이 문서에서 기존에 “writer”라고 부른 구현은 DWG를 Scene Cache v1.20로
 투영하는 읽기 전용 cache writer다. 원본 DWG를 수정해 새 DWG/DXF를 만드는
 native document writer와는 별도다.
 
@@ -303,9 +303,11 @@ exact LibreDWG archive, adapter source, build scripts, license texts, manifest
 and checksums. Corresponding source is therefore shipped in the same archive
 rather than delegated to an unpinned external URL. The workflow reproduces all
 three adapter archives and the VSIX, rejects a GPL adapter inside the VSIX,
-emits combined checksums, and creates GitHub build-provenance
-attestations. A matching `v<version>` tag is the only path that publishes a
-GitHub release.
+emits combined checksums, and creates GitHub build-provenance attestations.
+Only a qualified merge through `dev` → `prerelease` or
+`prerelease` → `main` can publish the corresponding channel; the workflow
+creates the matching immutable `v<version>` tag after Marketplace publication
+succeeds.
 
 The reviewed publication rules are:
 

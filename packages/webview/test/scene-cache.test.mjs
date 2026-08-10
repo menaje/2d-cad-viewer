@@ -18,6 +18,8 @@ import {
   SPLINE_HEADER_RECORD_SIZE,
   SPLINE_POINT_RECORD_SIZE,
   SPLINE_SCALAR_RECORD_SIZE,
+  ViewportLayerOverrideFlags,
+  ViewportLayerOverrideProperty,
 } from "../src/scene-cache.mjs";
 import { makeFixtureCache } from "./cache-fixture.mjs";
 
@@ -27,13 +29,13 @@ test("opens the header and directory without reading the full cache", async () =
   const reader = await SceneCacheReader.open(source);
 
   assert.equal(reader.header.major, 1);
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 20);
   assert.equal(reader.header.fileSize, buffer.byteLength);
   assert.equal(reader.header.preview, false);
-  assert.equal(reader.sections.size, 44);
+  assert.equal(reader.sections.size, 47);
   assert.deepEqual(source.requests, [
     { offset: 0, length: 64 },
-    { offset: 64, length: 44 * 40 },
+    { offset: 64, length: 47 * 40 },
   ]);
   assert.ok(source.bytesRead < buffer.byteLength / 2);
 });
@@ -144,20 +146,75 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
     SPLINE_POINT_RECORD_SIZE,
     0,
   );
+  addSection(
+    SectionKind.SplineFitPoints,
+    SPLINE_POINT_RECORD_SIZE,
+    0,
+  );
   const reader = new SceneCacheReader(
     source,
-    { minor: 18 },
+    { minor: 20 },
     sections,
   );
   const curves = await reader.readCurveRefinementSource();
 
   assert.equal(curves.arcs.length, arcCount);
+  assert.equal(curves.splineFitPoints.length, 0);
   assert.equal(curves.requestCount, 2);
   assert.ok(curves.maximumReadBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
   assert.ok(source.maximumRequestBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
   assert.equal(source.bytesRead, arcBytes);
   await assert.rejects(
     reader.readCurveRefinementSource({
+      maximumSourceBytes: 64 * 1024 * 1024 + 1,
+    }),
+    /byte budget must be between/,
+  );
+});
+
+test("reads deferred polyline source in independently bounded chunks", async () => {
+  const headerCount = 5_000;
+  const vertexCount = 9_000;
+  const headerBytes = headerCount * POLYLINE_HEADER_RECORD_SIZE;
+  const vertexBytes = vertexCount * POLYLINE_VERTEX_RECORD_SIZE;
+  const source = new TrackedRangeSource(
+    new MemoryRangeSource(new ArrayBuffer(headerBytes + vertexBytes)),
+  );
+  const sections = new Map([
+    [
+      SectionKind.PolylineHeaders,
+      {
+        kind: SectionKind.PolylineHeaders,
+        recordSize: POLYLINE_HEADER_RECORD_SIZE,
+        recordCount: headerCount,
+        offset: 0,
+        byteLength: headerBytes,
+        flags: 0,
+      },
+    ],
+    [
+      SectionKind.PolylineVertices,
+      {
+        kind: SectionKind.PolylineVertices,
+        recordSize: POLYLINE_VERTEX_RECORD_SIZE,
+        recordCount: vertexCount,
+        offset: headerBytes,
+        byteLength: vertexBytes,
+        flags: 0,
+      },
+    ],
+  ]);
+  const reader = new SceneCacheReader(source, { minor: 20 }, sections);
+  const polylines = await reader.readPolylineSource();
+
+  assert.equal(polylines.polylines.length, headerCount);
+  assert.equal(polylines.polylineVertices.length, vertexCount);
+  assert.equal(polylines.requestCount, 4);
+  assert.ok(polylines.maximumReadBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
+  assert.ok(source.maximumRequestBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
+  assert.equal(source.bytesRead, headerBytes + vertexBytes);
+  await assert.rejects(
+    reader.readPolylineSource({
       maximumSourceBytes: 64 * 1024 * 1024 + 1,
     }),
     /byte budget must be between/,
@@ -196,9 +253,9 @@ test("does not read curve source sections while loading first-frame data", async
 test("rejects a newer unsupported Scene Cache minor version", async () => {
   await assert.rejects(
     SceneCacheReader.open(
-      new MemoryRangeSource(makeFixtureCache({ minorVersion: 19 })),
+      new MemoryRangeSource(makeFixtureCache({ minorVersion: 21 })),
     ),
-    /unsupported scene-cache version 1\.19/,
+    /unsupported scene-cache version 1\.21/,
   );
 });
 
@@ -206,7 +263,7 @@ test("reads current drawing display settings", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 20,
         wipeoutFrame: 2,
         lineWeightDisplay: true,
         fillMode: false,
@@ -220,13 +277,29 @@ test("reads current drawing display settings", async () => {
   assert.equal(metadata.drawing.lineWeightDisplay, true);
   assert.equal(metadata.drawing.fillMode, false);
   assert.equal(metadata.drawing.modelSpaceActive, false);
+
+  const missingWipeoutReader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        wipeoutFrame: null,
+        lineWeightDisplay: true,
+        fillMode: false,
+        modelSpaceActive: false,
+      }),
+    ),
+  );
+  const missingWipeoutDrawing = await missingWipeoutReader.readDrawing();
+  assert.equal(missingWipeoutDrawing.wipeoutFrame, null);
+  assert.equal(missingWipeoutDrawing.lineWeightDisplay, true);
+  assert.equal(missingWipeoutDrawing.fillMode, false);
+  assert.equal(missingWipeoutDrawing.modelSpaceActive, false);
 });
 
 test("reads current linetype definitions and scale", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 20,
         globalLinetypeScale: 300,
       }),
     ),
@@ -260,6 +333,7 @@ test("reads current layouts, viewports and frozen layers", async () => {
   );
   assert.equal(metadata.layouts[1].viewports.length, 2);
   assert.equal(metadata.layouts[1].viewports[1].id, 2);
+  assert.equal(metadata.layouts[1].viewports[1].annotationScale, 100);
   assert.deepEqual(
     metadata.layouts[1].viewports[1].frozenLayerIndices,
     [0],
@@ -275,6 +349,123 @@ test("reads current layouts, viewports and frozen layers", async () => {
   );
 });
 
+test("reads sparse viewport layer property overrides", async () => {
+  const reader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        viewportLayerOverrides: [
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.Color,
+            value: (3 << 30) | 0x112233,
+          },
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.Transparency,
+            value: 39 << 24,
+          },
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.Linetype,
+            value: 3,
+          },
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.LineWeight,
+            value: 50,
+          },
+        ],
+      }),
+    ),
+  );
+
+  const layouts = await reader.readLayouts();
+  assert.deepEqual(layouts[1].viewports[1].layerOverrides, [
+    {
+      layerIndex: 0,
+      flags:
+        ViewportLayerOverrideFlags.Color |
+        ViewportLayerOverrideFlags.Transparency |
+        ViewportLayerOverrideFlags.Linetype |
+        ViewportLayerOverrideFlags.LineWeight,
+      color: ((3 << 30) | 0x112233) >>> 0,
+      transparency: 39 << 24,
+      linetypeCode: 3,
+      lineWeight: 50,
+    },
+  ]);
+});
+
+test("rejects duplicate and orphan viewport layer overrides", async () => {
+  const duplicateReader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        viewportLayerOverrides: [
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.LineWeight,
+            value: 50,
+          },
+          {
+            viewportHandle: 2002,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.LineWeight,
+            value: 70,
+          },
+        ],
+      }),
+    ),
+  );
+  await assert.rejects(
+    duplicateReader.readLayouts(),
+    /duplicates a property/u,
+  );
+
+  const orphanReader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        viewportLayerOverrides: [
+          {
+            viewportHandle: 9999,
+            layerIndex: 0,
+            property: ViewportLayerOverrideProperty.Color,
+            value: (3 << 30) | 0x112233,
+          },
+        ],
+      }),
+    ),
+  );
+  await assert.rejects(
+    orphanReader.readLayouts(),
+    /contains invalid metadata/u,
+  );
+});
+
+test("rejects a negative viewport annotation scale", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let viewportOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.Viewports) {
+      viewportOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(viewportOffset, undefined);
+  view.setFloat64(viewportOffset + 16 + 264, -1, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(reader.readLayouts(), /viewport 0 contains invalid metadata/);
+});
+
 test("reads the current saved model view", async () => {
   const savedModelView = {
     center: [1_903_111.951778639, -372_937.2779705549, 0],
@@ -285,7 +476,7 @@ test("reads the current saved model view", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 20,
         savedModelView,
       }),
     ),
@@ -295,7 +486,7 @@ test("reads the current saved model view", async () => {
   assert.deepEqual(metadata.drawing.savedModelView, savedModelView);
 });
 
-test("reads bounded Scene Cache v1.18 raster image references", async () => {
+test("reads bounded Scene Cache v1.20 raster image references", async () => {
   const source = new TrackedRangeSource(
     new MemoryRangeSource(makeFixtureCache()),
   );
@@ -354,7 +545,7 @@ test("accepts the current HATCH-boundary sections", async () => {
   );
 
   assert.equal(reader.header.major, 1);
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 20);
 });
 
 test("reads bounded HATCH source pools lazily", async () => {
@@ -365,7 +556,7 @@ test("reads bounded HATCH source pools lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const hatches = await reader.readHatchSource();
 
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 20);
   assert.equal(hatches.length, 1);
   assert.equal(hatches.loopCount, 2);
   assert.equal(hatches.vertexCount, 8);
@@ -440,10 +631,12 @@ test("reads bounded POINT and SOLID source lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const primitives = await reader.readPrimitiveSource();
 
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 20);
   assert.equal(primitives.points.length, 1);
   assert.equal(primitives.solids.length, 2);
   assert.equal(primitives.faces.length, 5);
+  assert.equal(primitives.polylines.length, 0);
+  assert.equal(primitives.polylineVertices.length, 0);
   assert.deepEqual(primitives.points.get(0).location, [11, 2, 0]);
   assert.equal(primitives.points.get(0).displayMode, 66);
   assert.equal(primitives.points.get(0).displaySize, -3);
@@ -461,7 +654,7 @@ test("reads bounded 3DFACE source lazily", async () => {
   const requestsAfterOpen = source.requests.length;
   const primitives = await reader.readPrimitiveSource();
 
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 20);
   assert.equal(primitives.faces.length, 5);
   assert.deepEqual(
     [0, 1, 2, 3, 4].map(
@@ -546,7 +739,7 @@ test("rejects a WIPEOUT source table above its record cap", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 20,
         wipeoutRecordCount: 65_537,
       }),
     ),
@@ -594,6 +787,46 @@ test("reads normalized draw order lazily", async () => {
   );
   assert.equal(drawOrder.readTable(1, {}).firstEntry, 2);
   assert.equal(drawOrder.readEntry(2, {}).entityHandle, 0x401n);
+});
+
+test("reads only bounded entity prefixes for the shared display-order index", async () => {
+  const source = new TrackedRangeSource(
+    new MemoryRangeSource(makeFixtureCache()),
+  );
+  const reader = await SceneCacheReader.open(source);
+  const kinds = [
+    SectionKind.TextEntities,
+    SectionKind.HatchEntities,
+    SectionKind.PointEntities,
+    SectionKind.SolidEntities,
+    SectionKind.FaceEntities,
+    SectionKind.ImageEntities,
+  ];
+  const expectedRecords = kinds.reduce(
+    (total, kind) => total + reader.getSection(kind).recordCount,
+    0,
+  );
+  const requestsBefore = source.requests.length;
+
+  const identities = await reader.readDisplayOrderIdentities();
+
+  assert.equal(identities.limited, false);
+  assert.equal(identities.sourceRecordCount, expectedRecords);
+  assert.equal(identities.length, expectedRecords);
+  assert.equal(source.requests.length - requestsBefore, kinds.length);
+  for (let index = 0; index < identities.length; index += 1) {
+    const identity = identities.readEntity(index, {});
+    assert.equal(typeof identity.handle, "bigint");
+    assert.equal(typeof identity.ownerHandle, "bigint");
+  }
+
+  const requestsBeforeLimit = source.requests.length;
+  const limited = await reader.readDisplayOrderIdentities({
+    maximumRecords: 1,
+  });
+  assert.equal(limited.limited, true);
+  assert.equal(limited.length, 0);
+  assert.equal(source.requests.length, requestsBeforeLimit);
 });
 
 test("rejects a non-contiguous draw-order range", async () => {
@@ -646,7 +879,7 @@ test("rejects a 3DFACE source table above its record cap", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(
       makeFixtureCache({
-        minorVersion: 18,
+        minorVersion: 20,
         faceRecordCount: 131_073,
       }),
     ),
@@ -711,7 +944,7 @@ test("preserves Korean source text, style fonts and MTEXT columns", async () => 
   const styles = await reader.readTextStyles();
   const texts = await reader.readTextEntities();
 
-  assert.equal(reader.header.minor, 18);
+  assert.equal(reader.header.minor, 20);
   assert.equal(styles[0].fontFile, "txt.shx");
   assert.equal(styles[0].bigFontFile, "hztxt.shx");
   assert.equal(texts.length, 2);
@@ -748,6 +981,47 @@ test("preserves Korean source text, style fonts and MTEXT columns", async () => 
       ),
     ],
     [10, 11],
+  );
+  assert.equal(displayRecord.annotationContexts.length, 2);
+  assert.equal(displayRecord.annotationContexts[0].scale, 50);
+  assert.equal(displayRecord.annotationContexts[0].isDefault, true);
+  assert.deepEqual(
+    [...displayRecord.annotationContexts[0].columnHeights],
+    [10, 11],
+  );
+  assert.equal(displayRecord.annotationContexts[1].scale, 100);
+  assert.equal(displayRecord.annotationContexts[1].flowReversed, true);
+  assert.deepEqual(displayRecord.annotationContexts[1].insertionPoint, [
+    206,
+    402,
+    0,
+  ]);
+  assert.deepEqual(
+    [...displayRecord.annotationContexts[1].columnHeights],
+    [20, 22],
+  );
+});
+
+test("rejects an annotation context owned by non-MTEXT text", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let contextOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.TextAnnotationContexts) {
+      contextOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(contextOffset, undefined);
+  view.setBigUint64(contextOffset, 300n, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(
+    reader.readTextEntities(),
+    /annotation context 0 contains invalid metadata/,
   );
 });
 

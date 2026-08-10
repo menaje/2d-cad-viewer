@@ -24,7 +24,7 @@ const runtime = await openViewerRuntime(source, {
 
 ## DWG Viewer product shell
 
-Scene Cache v1.18 range reader, WebGL2 line/fill/point renderer, bounded CAD
+Scene Cache v1.20 range reader, WebGL2 line/fill/point renderer, bounded CAD
 text overlay and lazy raster IMAGE overlay for the VS Code Webview.
 
 Standalone Browser의 `File`과 VS Code의 cache channel은 모두
@@ -61,6 +61,67 @@ draw range만 제외합니다. Canvas text도 같은 source/handle suppression�
 committed/preview renderer state를 다시 활성화하므로 같은 전이를 안전하게
 재시도할 수 있습니다. source switch와 idempotent disposal은 active 여부와
 무관하게 소유한 GPU/Canvas/instance resource를 정확히 한 번 회수합니다.
+
+## Full-scene revision comparison
+
+`mountWebGlRevisionComparison()`은 이미 mount된 public presentation,
+`DwgRenderDeltaAdapter`, Core의 revision-bound diff controller와 제품이
+제공한 container를 결합합니다. base와 candidate에 별도 WebGL context와
+전체 Scene Cache를 복제하지 않습니다. 하나의 `WebGlLineRenderer`가 exact
+base/target revision을 직렬로 활성화해 같은 logical camera로 그린 뒤,
+current/candidate 결과를 두 개의 bounded 2D surface에 보존합니다. 따라서
+두 화면을 동시에 비교하면서도 기존 단일 surface 제품 경로는 이 API를
+호출하지 않는 한 바뀌지 않습니다.
+
+```js
+import {
+  mountWebGlRevisionComparison,
+} from "@menaje/viewer-webgl/comparison";
+
+const comparison = mountWebGlRevisionComparison({
+  presentation,
+  renderDeltaAdapter,
+  renderDiffController,
+  container: comparisonElement,
+  camera: { origin: [0, 0, 0], worldHeight: 100 },
+});
+
+comparison.setCamera({ origin: [20, 10, 0], worldHeight: 50 });
+comparison.select("before", {
+  revisionId: baseRevisionId,
+  layerId,
+  renderId,
+});
+comparison.setSideVisibility({ before: true, after: false });
+comparison.dispose();
+```
+
+Mount 전에 presentation snapshot, diff의 session/source/base snapshot,
+base/committed/target revision과 preview ID가 모두 일치해야 합니다. 하나라도
+다르면 첫 surface를 그리기 전에 fail-closed합니다. `setCamera()`,
+`setCameraFrom()`, selection/highlight, diff policy와 resize는 원자적
+transition이며 candidate capture가 실패하면 last-good current/candidate
+pixel과 logical camera를 복원합니다. added와 removed는 실제 존재하는 쪽에만,
+modified는 exact layer/Render ID가 일치하는 양쪽에만 강조됩니다. pick의
+revision이 해당 surface와 다르면 stale pick으로 거부합니다.
+
+두 최종 RGBA surface의 기본 합계 한도는 16,777,216 pixels(64 MiB)이며,
+transition rollback용 임시 surface는 각 transition 뒤 즉시 해제됩니다.
+`dispose()`는 생성한 Canvas와 listener를 한 번만 회수하고 원래 render
+canvas의 DOM/접근성 상태를 복원합니다. 호출자가 주입한 비교 Canvas는
+제거하지 않고 원래 DOM 위치·크기와 이 컨트롤러가 바꾼 inline style/속성을
+복원합니다. presentation과 delta adapter의
+소유권은 호출자에게 남으므로 source switch나 host 종료 때는 comparison을
+먼저 닫은 뒤 adapter와 presentation을 각각 dispose해야 합니다.
+
+2026-08-09 qualification은 640×360 current/candidate RGBA surface 두 개에
+1,843,200 bytes를 유지했고, 독립 Browser의 actual WebGL2 첫 비교 frame은
+43 ms, 패키징된 VS Code 1.131.0 Webview는 74 ms였습니다. actual pixel,
+camera rollback, stale selection, corresponding highlight, visibility와 8회
+반복 mount/close 후 Canvas/GPU delta 기준선 회귀를 모두 확인했습니다.
+경로 없는 결과는
+[`compatibility/evidence/viewer-webgl-comparison-2026-08-09.json`](../../compatibility/evidence/viewer-webgl-comparison-2026-08-09.json)에
+기록됩니다.
 
 The current decoded v6 packet is private to this package:
 
@@ -144,9 +205,12 @@ built-in languages, template keys, or runtime shell keys diverge.
   under its parent INSERT and preserves shared geometry across repeated inserts.
 - Reads current INSERT/XREF spatial clips, propagates nested clip chains through
   shared instances and applies one boundary to WebGL geometry and Canvas text.
-- Reads the v1.18 linetype, saved-view, layout, VIEWPORT and raster IMAGE
+- Reads the v1.20 linetype, saved-view, layout, VIEWPORT and raster IMAGE
   sections and
   allows every paper-space tab to be selected without duplicating model data.
+- Applies each viewport's layer color, transparency, linetype and lineweight
+  overrides consistently to WebGL geometry, Canvas text/complex linetypes and
+  raster images while preserving shared block geometry.
 - Opens each tab at its saved CAD view while the `전체 보기` action fits the
   complete stored layout extents, including multi-sheet paper-space layouts
   without letting stray off-paper geometry distort the fit.
@@ -157,10 +221,13 @@ built-in languages, template keys, or runtime shell keys diverge.
   current on-screen size and upgrades only after a meaningful zoom. IMAGE clip
   pixels are converted from their saved top-origin Y convention before
   placement so cropped rasters stay aligned with CAD geometry.
-- Remaps child layers to root XREF-dependent names and renders external
-  overview/detail lines and source text without expanding a full scene graph.
+- Remaps child layers and linetypes to root XREF-dependent definitions and
+  renders external overview/detail lines, HATCH fills and patterns,
+  POINT/SOLID/3DFACE primitives, stable-view curve refinement and source text
+  without expanding a full scene graph.
 - Serializes external first-frame loads and caps aggregate external overview
-  source, overview GPU and detail GPU data at 32 MiB each.
+  source, overview GPU and detail GPU data at 32 MiB each. Deferred external
+  fill, primitive and refined-curve GPU data has a separate 64 MiB cap.
 - Stores instance transforms in packed `Float64Array` collections.
 - Rebases world coordinates around the camera before WebGL2 `f32` upload.
 - Renders overview lines with batched, instanced draw calls.
@@ -234,11 +301,18 @@ built-in languages, template keys, or runtime shell keys diverge.
   `layout-names.txt` map so native ZIP tools retain arbitrary Unicode layout
   labels across macOS, Windows and Linux.
 - Displays bounded first-pass chords for arcs, circles, ellipses, polyline
-  bulges, NURBS splines and HATCH boundaries emitted by the converter.
+  bulges, NURBS splines and HATCH boundaries emitted by the converter. HATCH
+  curves use their own denser 64-segment circular and eight-per-span spline
+  limits without increasing ordinary first-frame curve density; fit-point-only
+  HATCH splines are interpolated through their points with saved endpoint
+  tangents and periodic closure instead of displaying their control polygon.
 - Starts a persistent worker after the first line frame and range-reads the
   v1.6/v1.7 HATCH source sections independently of the first frame.
 - Triangulates solid and gradient HATCH rings with pinned Earcut 3.2.3, keeps
-  holes and source HATCH styles, and draws fills before boundary lines.
+  holes and source HATCH styles, and draws fills before boundary lines. Named
+  LINEAR, CYLINDER, SPHERICAL, HEMISPHERICAL and CURVED gradients plus their
+  inverse variants are evaluated per fragment from the saved angle and shift;
+  unknown names fall back to LINEAR and remain visible in diagnostics.
 - Retains shared block instances and layer visibility for fill geometry
   without expanding a whole-drawing scene graph.
 - Caps HATCH fill GPU vertices at 32 MiB, triangles at 65,536 per entity,
@@ -252,10 +326,10 @@ built-in languages, template keys, or runtime shell keys diverge.
 - Caps one pattern result at 250,000 segments (16 MiB of line vertices),
   65,536 segments per HATCH and eight million boundary intersection tests.
 - Terminates the previous HATCH worker when another cache is selected.
-- Range-reads the current v1.18 POINT/SOLID/3DFACE/WIPEOUT source sections only
+- Range-reads the current v1.20 POINT/SOLID/3DFACE/WIPEOUT source sections only
   after the first line frame, preserving shared block instances without
   expanding geometry per INSERT.
-- Range-reads the current v1.18 normalized `SORTENTSTABLE` tables and entries on
+- Range-reads the current v1.20 normalized `SORTENTSTABLE` tables and entries on
   demand. The first frame reads neither draw-order section.
 - Collapses the preserved sort keys to WIPEOUT-only order events, recursively
   includes nested/DIMENSION/MINSERT mask spans and attaches one compact order
@@ -301,9 +375,11 @@ built-in languages, template keys, or runtime shell keys diverge.
 - Renders explicit top-to-bottom MTEXT and by-style vertical flow as upright
   glyphs descending within right-to-left logical columns. A by-style record
   remains horizontal unless its referenced text style is actually vertical.
-- Maps single-line TEXT from its stored OCS plane, retains the decoder-adjusted
-  insertion point for left/center/right/middle and vertical justifications,
-  and uses the two endpoint span only for Align/Fit.
+- Maps single-line TEXT, ATTRIB and ATTDEF from their stored OCS plane. Plain
+  left/baseline text uses the insertion point; center, right, middle and
+  vertical justification use the alignment point plus resolved SHX or
+  fallback-font glyph metrics. Align/Fit retain their two-point span and
+  direction, while multiline attributes use their embedded MTEXT basis.
 - Separates strict EUC-KR from CP949/UHC, encodes all 11,172 modern Hangul
   syllables plus the KS X 1001 symbol and Hanja rows as Johab/CP1361, and
   probes actual glyph presence instead of guessing from BigFont filenames.
@@ -312,11 +388,13 @@ built-in languages, template keys, or runtime shell keys diverge.
 
 The current page is an engine verification harness, not the final VS Code
 extension UI. At a stable 4× or higher zoom, a dedicated worker now refines
-ARC, CIRCLE, ELLIPSE, polyline-bulge and valid NURBS geometry to a 0.5 px
-screen-error contract without changing the bounded first frame. External
-image baselines for every TEXT OCS/justification combination, lossless
-analytic HATCH boundary topology and further real-world Korean SHX corpus
-expansion remain follow-up work.
+ARC, CIRCLE, ELLIPSE, polyline-bulge, control-point NURBS and fit-point-only
+SPLINE geometry to a 0.5 px screen-error contract without changing the bounded
+first frame. Fit-point interpolation distinguishes chord, centripetal and
+uniform knot spacing, honors stored endpoint tangents and closes periodic
+curves smoothly. External image baselines for every TEXT OCS/justification
+combination, lossless analytic HATCH boundary topology and further real-world
+Korean SHX corpus expansion remain follow-up work.
 
 ## Run
 
@@ -324,12 +402,40 @@ From the repository root:
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm --filter dwg-viewer-vscode run build:webview
 python3 -m http.server 4173 --bind 127.0.0.1 --directory .
 ```
 
-Open `http://127.0.0.1:4173/packages/webview/` and select a generated `.cache`
-file. The repository root is the static root because the Webview imports the
-shared `packages/dwg-scene-source` package. The file stays local to the browser.
+Open `http://127.0.0.1:4173/apps/vscode-extension/media/webview/` and select a
+generated `.cache` file. This serves the same bundled main module and workers
+that ship in the extension. The repository root remains the static root so a
+same-origin qualification cache can be served without uploading it. The file
+stays local to the browser.
+
+Automated local UI qualification can open a same-origin synthetic cache of at
+most 64 MiB without a native file picker:
+
+```text
+http://127.0.0.1:4173/apps/vscode-extension/media/webview/?qualification-cache=/tmp/fixture.cache
+```
+
+This query is ignored by the VS Code host and rejects cross-origin or non-cache
+paths. It is a development-shell input, not a product DWG loading path.
+
+The public actual-WebGL comparison fixture is available at:
+
+```text
+http://127.0.0.1:4173/packages/webview/qualification/revision-comparison.html
+```
+
+It uses the same public comparison mount as the packaged VS Code qualification;
+the fixture does not call VS Code APIs when opened in a standalone browser.
+
+Append `qualification-shell=vscode` to exercise the immersive extension shell.
+The optional `qualification-top-toolbar-labels` and
+`qualification-left-toolbar-labels` parameters accept `hover` or `icons`, and
+`qualification-locale` accepts a BCP 47 language tag. These parameters are also
+ignored by the VS Code host.
 
 ## Test
 
@@ -348,7 +454,7 @@ bounded root/XREF filled-object selection with layer and clip filtering, and
 LRU eviction/request coalescing.
 They also cover delayed Korean text reads, strict EUC-KR, CP949 and Johab
 mapping, per-BigFont overrides, SHX/BigFont cache limits and the
-current v1.18 HATCH range, triangulation, dashed-pattern, block-clipping,
+current v1.20 HATCH range, triangulation, dashed-pattern, block-clipping,
 large-coordinate and render-order contracts, plus POINT/SOLID/3DFACE/WIPEOUT
 range, WCS/OCS, clip-boundary, frame-setting, instance-sharing and GPU-budget
 behavior, plus draw-order normalization,
@@ -358,3 +464,9 @@ Render Delta coverage additionally includes bounded nested root/XREF transform
 and inherited-style propagation, direct-child precedence, repeated occurrence
 isolation, XCLIP fail-closed behavior and shared WebGL/Canvas text/raster IMAGE
 results.
+Revision-comparison coverage additionally checks exact source/snapshot/revision
+binding, one-renderer current/candidate pixels, synchronized camera rollback,
+revision-exact selection, corresponding highlights, side/status visibility,
+surface pixel budgets and idempotent repeated cleanup. The packaged VS Code
+scenario runs the same actual WebGL fixture from the built VSIX without mixing
+its memory with the drawing first-frame measurement.

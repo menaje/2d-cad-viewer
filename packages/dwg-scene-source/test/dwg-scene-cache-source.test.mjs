@@ -58,7 +58,7 @@ test("opens only the Scene Cache header and directory before snapshot use", asyn
   );
   assert.deepEqual(rangeSource.requests, [
     { offset: 0, length: 64 },
-    { offset: 64, length: 44 * 40 },
+    { offset: 64, length: 47 * 40 },
   ]);
 
   const magic = await session.readRange(
@@ -123,7 +123,7 @@ test("mounts the canonical reader through the Viewer Core runtime", async () => 
   });
 
   assert.equal(runtime.presentation.reader.header.major, 1);
-  assert.equal(runtime.presentation.reader.header.minor, 18);
+  assert.equal(runtime.presentation.reader.header.minor, 20);
   await runtime.dispose();
   assert.equal(hostDisposals, 1);
   assert.equal(rangeSource.disposed, true);

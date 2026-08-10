@@ -11,6 +11,12 @@ export {
   mountDwgWebGlPresentation,
 } from "./dwg-presentation.mjs";
 export {
+  MAXIMUM_COMPARISON_SURFACE_PIXELS,
+  ViewerWebGlComparisonStrategy,
+  ViewerWebGlRevisionComparisonController,
+  mountWebGlRevisionComparison,
+} from "./revision-comparison.mjs";
+export {
   DwgRenderDeltaAdapter,
   DWG_FILL_VERTEX_STRIDE,
   DWG_LINE_VERTEX_STRIDE,

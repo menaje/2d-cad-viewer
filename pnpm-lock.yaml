@@ -33,6 +33,12 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
+  apps/vscode-libredwg-adapter:
+    devDependencies:
+      '@vscode/vsce':
+        specifier: 3.9.2
+        version: 3.9.2
+
   packages/dwg-scene-source:
     dependencies:
       '@menaje/viewer-render-protocol':

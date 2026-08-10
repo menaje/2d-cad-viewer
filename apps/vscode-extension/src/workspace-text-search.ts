@@ -7,6 +7,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 import {
   LibreDwgNativeSceneEngine,
+  LIBREDWG_ADAPTER_EXTENSION_ID,
   resolveLibreDwgAdapter,
 } from "./native-cache";
 import {
@@ -517,6 +518,9 @@ export class WorkspaceTextSearchController
           configuredPath,
           environmentPath: process.env.DWG_VIEWER_LIBREDWG_ADAPTER,
           extensionPath: this.context.extensionPath,
+          bundledExtensionPath: vscode.extensions.getExtension(
+            LIBREDWG_ADAPTER_EXTENSION_ID,
+          )?.extensionPath,
         });
       } catch {
         const selection = await vscode.window.showErrorMessage(

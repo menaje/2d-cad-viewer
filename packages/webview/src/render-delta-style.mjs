@@ -5,6 +5,11 @@ import {
 import {
   walkInstanceDependencyOccurrences,
 } from "./instance-dependency.mjs";
+import {
+  viewportLayerColor,
+  viewportLayerLineWeight,
+  viewportLayerLinetype,
+} from "./viewport-layer-state.mjs";
 
 const DWG_RENDER_DELTA_STYLE_BYTES = 40;
 const DEFAULT_MAXIMUM_DERIVED_STYLE_BYTES = 8 * 1024 * 1024;
@@ -66,6 +71,7 @@ function baseInstanceStyle(instances, instanceIndex) {
       instances.lineWeightInherited?.[instanceIndex] === 1,
     linetypeInherited:
       instances.linetypeInherited?.[instanceIndex] === 1,
+    visibilityRow: instances.visibilityRows?.[instanceIndex] ?? 0,
   };
 }
 
@@ -99,9 +105,15 @@ function resolvedNestedStyle(instanceGraph, insert, parent) {
   const insertColor =
     Number.isInteger(insert.color) ? insert.color >>> 0 : 0;
   const colorKind = insertColor >>> 30;
+  const layerColor = viewportLayerColor(
+    instanceGraph,
+    parent.visibilityRow,
+    layerIndex,
+    layers[layerIndex]?.color ?? DEFAULT_BYBLOCK_COLOR,
+  );
   const color =
     colorKind === 0
-      ? layers[layerIndex]?.color ?? DEFAULT_BYBLOCK_COLOR
+      ? layerColor
       : colorKind === 1
         ? parent.color
         : insertColor;
@@ -110,7 +122,7 @@ function resolvedNestedStyle(instanceGraph, insert, parent) {
   const opacityCode = cadOpacityCode(insertColor);
   const opacity = Math.fround(
     decodeCadOpacity(insertColor, {
-      layer: decodeCadOpacity(layers[layerIndex]?.color ?? 0),
+      layer: decodeCadOpacity(layerColor),
       byBlock: parent.opacity,
     }),
   );
@@ -118,11 +130,14 @@ function resolvedNestedStyle(instanceGraph, insert, parent) {
     opacityCode === 2 ? parent.opacityInherited : false;
   const sourceLineWeight =
     Number.isInteger(insert.lineWeight) ? insert.lineWeight : -1;
-  const layerLineWeight = Number.isInteger(
-    layers[layerIndex]?.lineWeight,
-  )
-    ? layers[layerIndex].lineWeight
-    : -3;
+  const layerLineWeight = viewportLayerLineWeight(
+    instanceGraph,
+    parent.visibilityRow,
+    layerIndex,
+    Number.isInteger(layers[layerIndex]?.lineWeight)
+      ? layers[layerIndex].lineWeight
+      : -3,
+  );
   const lineWeight =
     sourceLineWeight === -1
       ? layerLineWeight >= 0
@@ -141,11 +156,15 @@ function resolvedNestedStyle(instanceGraph, insert, parent) {
     insert.linetypeCode <= 2047
       ? insert.linetypeCode
       : 0;
-  const layerLinetypeCode =
+  const layerLinetypeCode = viewportLayerLinetype(
+    instanceGraph,
+    parent.visibilityRow,
+    layerIndex,
     Number.isInteger(layerLinetypeCodes[layerIndex]) &&
-    layerLinetypeCodes[layerIndex] >= 2
+      layerLinetypeCodes[layerIndex] >= 2
       ? layerLinetypeCodes[layerIndex]
-      : 2;
+      : 2,
+  );
   const linetypeCode =
     rawLinetypeCode === 0
       ? layerLinetypeCode
@@ -171,6 +190,7 @@ function resolvedNestedStyle(instanceGraph, insert, parent) {
     opacityInherited,
     lineWeightInherited,
     linetypeInherited,
+    visibilityRow: parent.visibilityRow,
   };
 }
 

@@ -18,12 +18,14 @@ import { gzipSync } from "node:zlib";
 export const LIBREDWG_VERSION = "0.14";
 export const LIBREDWG_SOURCE_SHA256 =
   "62ebb73b984f865960f20ed26619ea5f8789d5e3fd088fa40a2598384da81275";
+export const GPL_3_0_SHA256 =
+  "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903";
 export const MPL_2_0_SHA256 =
   "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04";
 const PACKAGE_SCHEMA = "dwg-libredwg-package/1";
 const DOCTOR_SCHEMA = "dwg-engine-doctor/1";
 const ADAPTER_PROTOCOL = "dwg-engine-adapter/1";
-const CACHE_SCHEMA = "dwg-scene-cache/1.18";
+const CACHE_SCHEMA = "dwg-scene-cache/1.20";
 const MAX_ADAPTER_BYTES = 128 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 128 * 1024 * 1024;
 const MAX_DEPENDENCY_AUDIT_BYTES = 32 * 1024 * 1024;
@@ -335,13 +337,11 @@ async function extractGplLicense(sourceArchive) {
       cause: error,
     });
   }
-  if (
-    !result.stdout.includes("GNU GENERAL PUBLIC LICENSE") ||
-    !result.stdout.includes("Version 3, 29 June 2007")
-  ) {
+  const license = Buffer.from(result.stdout, "utf8");
+  if (sha256(license) !== GPL_3_0_SHA256) {
     throw new Error("LibreDWG source contains an unexpected license file");
   }
-  return Buffer.from(result.stdout, "utf8");
+  return license;
 }
 
 function packageReadme(report, executableName) {
@@ -411,7 +411,7 @@ DWG Viewer adapter source
   Project notice: source/dwg-viewer/NOTICE
 
 The adapter executable is statically linked with LibreDWG and is conveyed
-under GPL-3.0-or-later. The extension VSIX is a separate MPL-2.0 artifact and
+under GPL-3.0-or-later. The MPL-2.0 DWG Viewer VSIX is a separate artifact and
 is not included in this archive. This notice records the project's engineering
 distribution policy and is not legal advice.
 `,

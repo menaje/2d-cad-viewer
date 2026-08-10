@@ -3,11 +3,11 @@ import { layerLinetypeCodes } from "./cad-linetype.mjs";
 import {
   buildLayoutInstanceGraph,
   paperViewportForLayout,
-} from "./layout-scene.mjs?v=1.18.2";
+} from "./layout-scene.mjs?v=1.20.0";
 import { readJsHeapSnapshot } from "./memory-telemetry.mjs";
 import { calculateRasterImageBounds } from "./raster-image-overlay.mjs";
-import { WebGlLineRenderer } from "./renderer.mjs?v=1.18.2";
-import { SceneCacheReader } from "./scene-cache.mjs?v=1.18.8";
+import { WebGlLineRenderer } from "./renderer.mjs?v=1.20.0";
+import { SceneCacheReader } from "./scene-cache.mjs?v=1.20.0";
 
 function now() {
   return globalThis.performance?.now?.() ?? Date.now();
@@ -122,6 +122,8 @@ function buildViewInstanceGraph(
     layers: metadata.layers,
     insertClips: metadata.insertClips,
     layerLinetypeCodes: layerLineTypes,
+    paperSpaceLinetypeScale:
+      metadata.drawing.paperSpaceLinetypeScale,
     ...options,
   };
   return view.kind === "layout"
@@ -133,6 +135,65 @@ function buildViewInstanceGraph(
         common,
       )
     : buildInstanceGraph(metadata.blocks, metadata.inserts, common);
+}
+
+export function createDisposableFirstFrameScene(input) {
+  let state = input;
+  const value = (key) => state?.[key];
+  const requireState = () => {
+    if (state) {
+      return state;
+    }
+    const error = new Error("first-frame scene is disposed");
+    error.name = "AbortError";
+    throw error;
+  };
+  return Object.freeze({
+    get reader() {
+      return value("reader");
+    },
+    get metadata() {
+      return value("metadata");
+    },
+    get instanceGraph() {
+      return value("instanceGraph");
+    },
+    get overview() {
+      return value("overview");
+    },
+    get imageEntities() {
+      return value("imageEntities");
+    },
+    get renderer() {
+      return value("renderer");
+    },
+    get render() {
+      return value("render");
+    },
+    get metrics() {
+      return value("metrics");
+    },
+    get views() {
+      return value("views");
+    },
+    get activeView() {
+      return value("activeView");
+    },
+    buildViewInstanceGraph(view, options) {
+      const current = requireState();
+      return buildViewInstanceGraph(
+        current.metadata,
+        current.layerLineTypes,
+        view,
+        options,
+      );
+    },
+    dispose() {
+      const current = state;
+      state = undefined;
+      current?.reader?.cache?.clear?.();
+    },
+  });
 }
 
 export async function loadFirstFrame(
@@ -217,7 +278,7 @@ export async function loadFirstFrame(
   });
   onProgress("첫 화면 완료");
 
-  return Object.freeze({
+  return createDisposableFirstFrameScene({
     reader,
     metadata,
     instanceGraph,
@@ -228,8 +289,7 @@ export async function loadFirstFrame(
     metrics,
     views: viewSet.views,
     activeView: viewSet.active,
-    buildViewInstanceGraph: (view, options) =>
-      buildViewInstanceGraph(metadata, layerLineTypes, view, options),
+    layerLineTypes,
   });
 }
 

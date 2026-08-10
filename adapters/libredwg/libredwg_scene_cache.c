@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MPL-2.0
  *
- * A bounded-memory Scene Cache v1.18 writer for GNU LibreDWG. Geometry and
+ * A bounded-memory Scene Cache v1.20 writer for GNU LibreDWG. Geometry and
  * source text are traversed repeatedly and written directly to the
  * destination; the writer never creates a JSON or whole-drawing in-memory
  * representation. Large detail passes use private temporary files for an
@@ -108,6 +108,10 @@ _Static_assert (
 #define SPLINE_SEGMENTS_PER_SPAN 2u
 #define MAX_SPLINE_DEGREE 15u
 #define MAX_SPLINE_SEGMENTS 256u
+#define HATCH_CURVE_MAX_ANGLE_RADIANS 0.09817477042468103870
+#define MAX_HATCH_CIRCULAR_SEGMENTS 64u
+#define HATCH_SPLINE_SEGMENTS_PER_SPAN 8u
+#define MAX_HATCH_SPLINE_SEGMENTS 1024u
 #define MAX_HATCH_BOUNDARY_SEGMENTS 65536u
 #define MAX_HATCH_FILL_VERTICES 1048576u
 #define MAX_HATCH_AUX_RECORDS 1048576u
@@ -126,7 +130,11 @@ _Static_assert (
 #define MAX_INSERT_CLIP_VERTICES_PER_BOUNDARY 256u
 #define MAX_VIEWPORT_CLIP_VERTICES 1048576u
 #define MAX_VIEWPORT_CLIP_VERTICES_PER_BOUNDARY 4096u
+#define MAX_VIEWPORT_LAYER_OVERRIDES 1048576u
 #define VIEWPORT_CLIP_CURVE_SEGMENTS 64u
+#define MAX_TEXT_ANNOTATION_CONTEXTS 262144u
+#define MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS 1048576u
+#define MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT 64u
 #define MAX_MULTILEADER_NODES 65536u
 #define MAX_MULTILEADER_LINES_PER_NODE 65536u
 #define MAX_MULTILEADER_POINTS_PER_LINE 65536u
@@ -139,6 +147,15 @@ _Static_assert (
 #define HATCH_FLAG_SINGLE_COLOR_GRADIENT (1u << 4)
 #define HATCH_FLAG_TRUNCATED (1u << 5)
 #define HATCH_LOOP_FLAG_APPROXIMATED_CURVE 1u
+#define POLYLINE_FLAG_SPLINE_FIT (1u << 2)
+#define POLYLINE_FLAG_CONTINUOUS_LINETYPE (1u << 7)
+#define VERTEX_FLAG_CURVE_FIT_EXTRA (1u << 0)
+#define VERTEX_FLAG_SPLINE_FIT_EXTRA (1u << 3)
+#define VERTEX_FLAG_SPLINE_FRAME_CONTROL (1u << 4)
+#define VIEWPORT_LAYER_OVERRIDE_COLOR 1u
+#define VIEWPORT_LAYER_OVERRIDE_TRANSPARENCY 2u
+#define VIEWPORT_LAYER_OVERRIDE_LINETYPE 3u
+#define VIEWPORT_LAYER_OVERRIDE_LINEWEIGHT 4u
 
 enum
 {
@@ -185,7 +202,10 @@ enum
   SECTION_VIEWPORT_FROZEN_LAYERS = 52,
   SECTION_VIEWPORT_CLIP_VERTICES = 53,
   SECTION_IMAGE_ENTITIES = 54,
-  SECTION_IMAGE_CLIP_VERTICES = 55
+  SECTION_IMAGE_CLIP_VERTICES = 55,
+  SECTION_TEXT_ANNOTATION_CONTEXTS = 56,
+  SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS = 57,
+  SECTION_VIEWPORT_LAYER_OVERRIDES = 58
 };
 
 enum
@@ -230,7 +250,10 @@ enum
   VIEWPORT_FROZEN_LAYER_RECORD_SIZE = 8,
   VIEWPORT_CLIP_VERTEX_RECORD_SIZE = 16,
   IMAGE_ENTITY_RECORD_SIZE = 176,
-  IMAGE_CLIP_VERTEX_RECORD_SIZE = 16
+  IMAGE_CLIP_VERTEX_RECORD_SIZE = 16,
+  TEXT_ANNOTATION_CONTEXT_RECORD_SIZE = 160,
+  TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8,
+  VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE = 24
 };
 
 typedef struct
@@ -427,6 +450,14 @@ typedef struct
   double domain_end;
   int uniform_domain;
 } SplineSampling;
+
+typedef struct
+{
+  size_t point_count;
+  size_t source_segment_count;
+  unsigned segment_count;
+  int periodic;
+} HatchFitSampling;
 
 typedef struct
 {
@@ -646,7 +677,10 @@ static const uint32_t SECTION_KINDS[LIBREDWG_SCENE_SECTION_COUNT]
         SECTION_VIEWPORT_FROZEN_LAYERS,
         SECTION_VIEWPORT_CLIP_VERTICES,
         SECTION_IMAGE_ENTITIES,
-        SECTION_IMAGE_CLIP_VERTICES };
+        SECTION_IMAGE_CLIP_VERTICES,
+        SECTION_TEXT_ANNOTATION_CONTEXTS,
+        SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS,
+        SECTION_VIEWPORT_LAYER_OVERRIDES };
 
 static const uint32_t SECTION_RECORD_SIZES[LIBREDWG_SCENE_SECTION_COUNT]
     = { DRAWING_RECORD_SIZE,
@@ -692,7 +726,10 @@ static const uint32_t SECTION_RECORD_SIZES[LIBREDWG_SCENE_SECTION_COUNT]
         VIEWPORT_FROZEN_LAYER_RECORD_SIZE,
         VIEWPORT_CLIP_VERTEX_RECORD_SIZE,
         IMAGE_ENTITY_RECORD_SIZE,
-        IMAGE_CLIP_VERTEX_RECORD_SIZE };
+        IMAGE_CLIP_VERTEX_RECORD_SIZE,
+        TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
+        TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+        VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE };
 
 static const char *const SECTION_NAMES[LIBREDWG_SCENE_SECTION_COUNT]
     = { "drawing",
@@ -738,7 +775,10 @@ static const char *const SECTION_NAMES[LIBREDWG_SCENE_SECTION_COUNT]
         "viewport_frozen_layers",
         "viewport_clip_vertices",
         "image_entities",
-        "image_clip_vertices" };
+        "image_clip_vertices",
+        "text_annotation_contexts",
+        "text_annotation_column_heights",
+        "viewport_layer_overrides" };
 
 static void
 set_error (CacheWriter *writer, const char *message)
@@ -1098,6 +1138,196 @@ copy_versioned_text (BITCODE_RS codepage, Dwg_Version_Type version,
   copy = copy_valid_utf8 (converted);
   free (converted);
   return copy;
+}
+
+static Dwg_Object *
+dictionary_item_named (const Dwg_Data *dwg, Dwg_Object *object,
+                       const char *name)
+{
+  Dwg_Object_DICTIONARY *dictionary;
+  uint32_t index;
+  if (!dwg || !object || !name
+      || object->fixedtype != DWG_TYPE_DICTIONARY
+      || !object->tio.object
+      || !(dictionary = object->tio.object->tio.DICTIONARY)
+      || dictionary->numitems <= 0 || !dictionary->texts
+      || !dictionary->itemhandles)
+    return NULL;
+  for (index = 0; index < (uint32_t)dictionary->numitems; index++)
+    {
+      char *key = copy_versioned_text (
+          dwg->header.codepage, dwg->header.version,
+          dictionary->texts[index]);
+      int matches = key && strcmp (key, name) == 0;
+      free (key);
+      if (matches)
+        return reference_object (dwg, dictionary->itemhandles[index]);
+    }
+  return NULL;
+}
+
+static double
+annotation_scale_factor_for_object (const Dwg_Object *object)
+{
+  const Dwg_Object_SCALE *scale;
+  if (!object || object->fixedtype != DWG_TYPE_SCALE
+      || !object->tio.object
+      || !(scale = object->tio.object->tio.SCALE)
+      || !isfinite (scale->paper_units)
+      || !isfinite (scale->drawing_units)
+      || scale->paper_units <= DBL_EPSILON
+      || scale->drawing_units <= DBL_EPSILON)
+    return 0.0;
+  return scale->drawing_units / scale->paper_units;
+}
+
+static double
+annotation_scale_factor (const Dwg_Data *dwg,
+                         Dwg_Object_Ref *reference)
+{
+  return annotation_scale_factor_for_object (
+      reference_object (dwg, reference));
+}
+
+static double
+viewport_annotation_scale (const Dwg_Data *dwg,
+                           const Dwg_Object *object)
+{
+  Dwg_Object *xdic;
+  Dwg_Object *xrecord_object;
+  Dwg_Object_XRECORD *xrecord;
+  Dwg_Resbuf *item;
+  if (!dwg || !object || !object->tio.entity
+      || !object->tio.entity->xdicobjhandle)
+    return 0.0;
+  xdic = reference_object (dwg, object->tio.entity->xdicobjhandle);
+  xrecord_object = dictionary_item_named (
+      dwg, xdic, "ASDK_XREC_ANNOTATION_SCALE_INFO");
+  if (!xrecord_object || xrecord_object->fixedtype != DWG_TYPE_XRECORD
+      || !xrecord_object->tio.object
+      || !(xrecord = xrecord_object->tio.object->tio.XRECORD))
+    return 0.0;
+  for (item = xrecord->xdata; item; item = item->nextrb)
+    if (item->type == 340 && item->value.absref)
+      {
+        double scale = annotation_scale_factor_for_object (
+            dwg_resolve_handle_silent (dwg, item->value.absref));
+        if (scale > 0.0)
+          return scale;
+      }
+  return 0.0;
+}
+
+static Dwg_Object_DICTIONARY *
+text_annotation_context_dictionary (const Dwg_Data *dwg,
+                                    const Dwg_Object *object)
+{
+  Dwg_Object *xdic;
+  Dwg_Object *manager;
+  Dwg_Object *scales;
+  if (!dwg || !object || !object->tio.entity
+      || !object->tio.entity->xdicobjhandle)
+    return NULL;
+  xdic = reference_object (dwg, object->tio.entity->xdicobjhandle);
+  manager = dictionary_item_named (
+      dwg, xdic, "AcDbContextDataManager");
+  scales = dictionary_item_named (
+      dwg, manager, "ACDB_ANNOTATIONSCALES");
+  if (!scales || scales->fixedtype != DWG_TYPE_DICTIONARY
+      || !scales->tio.object)
+    return NULL;
+  return scales->tio.object->tio.DICTIONARY;
+}
+
+static int
+valid_mtext_annotation_context (
+    const Dwg_Data *dwg, Dwg_Object *object,
+    const Dwg_Object_MTEXTOBJECTCONTEXTDATA **result,
+    double *scale_factor)
+{
+  const Dwg_Object_MTEXTOBJECTCONTEXTDATA *context;
+  double scale;
+  uint32_t index;
+  if (!object
+      || object->fixedtype != DWG_TYPE_MTEXTOBJECTCONTEXTDATA
+      || !object->tio.object
+      || !(context = object->tio.object->tio.MTEXTOBJECTCONTEXTDATA))
+    return 0;
+  scale = annotation_scale_factor (dwg, context->scale);
+  if (!isfinite (scale) || scale <= DBL_EPSILON
+      || context->class_version < 3 || context->class_version > 4
+      || context->attachment < 1 || context->attachment > 9
+      || !isfinite (context->ins_pt.x)
+      || !isfinite (context->ins_pt.y)
+      || !isfinite (context->ins_pt.z)
+      || !isfinite (context->x_axis_dir.x)
+      || !isfinite (context->x_axis_dir.y)
+      || !isfinite (context->x_axis_dir.z)
+      || hypot (hypot (context->x_axis_dir.x, context->x_axis_dir.y),
+                context->x_axis_dir.z)
+             <= DBL_EPSILON
+      || !isfinite (context->rect_height)
+      || !isfinite (context->rect_width)
+      || !isfinite (context->extents_width)
+      || !isfinite (context->extents_height)
+      || context->rect_height < 0.0 || context->rect_width < 0.0
+      || context->extents_width < 0.0
+      || context->extents_height < 0.0
+      || context->column_type > 2
+      || !isfinite (context->column_width)
+      || !isfinite (context->gutter)
+      || context->column_width < 0.0 || context->gutter < 0.0
+      || context->num_column_heights
+             > MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT
+      || (context->num_column_heights > 0
+          && !context->column_heights))
+    return 0;
+  for (index = 0; index < (uint32_t)context->num_column_heights;
+       index++)
+    if (!isfinite (context->column_heights[index]))
+      return 0;
+  if (result)
+    *result = context;
+  if (scale_factor)
+    *scale_factor = scale;
+  return 1;
+}
+
+static uint32_t
+mtext_annotation_context_count (const Dwg_Data *dwg,
+                                const Dwg_Object *object,
+                                uint64_t *column_height_count)
+{
+  Dwg_Object_DICTIONARY *dictionary
+      = text_annotation_context_dictionary (dwg, object);
+  uint32_t count = 0;
+  uint32_t index;
+  if (column_height_count)
+    *column_height_count = 0;
+  if (!dictionary || dictionary->numitems <= 0
+      || !dictionary->itemhandles)
+    return 0;
+  for (index = 0; index < (uint32_t)dictionary->numitems; index++)
+    {
+      const Dwg_Object_MTEXTOBJECTCONTEXTDATA *context;
+      if (!valid_mtext_annotation_context (
+              dwg,
+              reference_object (dwg, dictionary->itemhandles[index]),
+              &context, NULL))
+        continue;
+      if (count == MAX_TEXT_ANNOTATION_CONTEXTS)
+        return count;
+      count++;
+      if (column_height_count)
+        {
+          if (*column_height_count
+              > MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS
+                    - context->num_column_heights)
+            return count;
+          *column_height_count += context->num_column_heights;
+        }
+    }
+  return count;
 }
 
 static char *
@@ -2253,7 +2483,8 @@ write_drawing_section (CacheWriter *writer, Dwg_Data *dwg,
                        SectionEntry *entry)
 {
   uint64_t offset;
-  uint32_t display_settings = wipeout_frame;
+  uint32_t display_settings
+      = wipeout_frame == UINT32_MAX ? 3u : wipeout_frame;
   double min[3];
   double max[3];
   SavedModelView saved_view;
@@ -2275,15 +2506,12 @@ write_drawing_section (CacheWriter *writer, Dwg_Data *dwg,
           break;
         }
     }
-  if (display_settings != UINT32_MAX)
-    {
-      if (dwg->header_vars.LWDISPLAY)
-        display_settings |= 1u << 2;
-      if (dwg->header_vars.FILLMODE)
-        display_settings |= 1u << 3;
-      if (dwg->header_vars.TILEMODE)
-        display_settings |= 1u << 4;
-    }
+  if (dwg->header_vars.LWDISPLAY)
+    display_settings |= 1u << 2;
+  if (dwg->header_vars.FILLMODE)
+    display_settings |= 1u << 3;
+  if (dwg->header_vars.TILEMODE)
+    display_settings |= 1u << 4;
   if (!align_writer (writer, &offset)
       || !write_u32 (writer, source_version)
       || !write_u32 (writer,
@@ -2555,6 +2783,9 @@ static void
 copy_embedded_mtext (TextSource *source,
                      const Dwg_AcDbMTextObjectEmbedded *mtext)
 {
+  source->insertion_point[0] = mtext->ins_pt.x;
+  source->insertion_point[1] = mtext->ins_pt.y;
+  source->insertion_point[2] = mtext->ins_pt.z;
   source->attachment = (int16_t)mtext->attachment;
   source->x_axis_direction[0] = mtext->x_axis_dir.x;
   source->x_axis_direction[1] = mtext->x_axis_dir.y;
@@ -2654,7 +2885,7 @@ read_text_source (const Dwg_Data *dwg, const Dwg_Object *object,
         source->rectangle_width = text->rect_width;
         source->rectangle_height = text->rect_height;
         source->flags |= TEXT_FLAG_HAS_RECTANGLE_HEIGHT;
-        if (!text->is_not_annotative)
+        if (mtext_annotation_context_count (dwg, object, NULL) > 0)
           source->flags |= TEXT_FLAG_ANNOTATIVE;
         source->extents_width = text->extents_width;
         source->extents_height = text->extents_height;
@@ -3677,7 +3908,8 @@ write_viewport_section (CacheWriter *writer, const Dwg_Data *dwg,
               || !write_u64 (writer, first_clip_vertex)
               || !write_u32 (writer, clip_vertex_count)
               || !write_u32 (writer, 0)
-              || !write_u64 (writer, 0))
+              || !write_f64 (
+                  writer, viewport_annotation_scale (dwg, object)))
             goto done;
           first_frozen_layer += frozen_count;
           first_clip_vertex += clip_vertex_count;
@@ -3755,6 +3987,158 @@ write_viewport_frozen_layer_section (
       writer, entry, SECTION_VIEWPORT_FROZEN_LAYERS,
       VIEWPORT_FROZEN_LAYER_RECORD_SIZE,
       "viewport_frozen_layers", offset, count);
+}
+
+static int
+viewport_layer_override_value (
+    const CacheTables *tables, uint16_t property,
+    const Dwg_Resbuf *item, uint32_t *value)
+{
+  uint32_t raw;
+  if (!tables || !item || !value)
+    return 0;
+  if (property == VIEWPORT_LAYER_OVERRIDE_COLOR)
+    {
+      uint32_t method;
+      raw = (uint32_t)item->value.i32;
+      method = raw >> 24;
+      if (method == 0xc2u)
+        *value = (3u << 30) | (raw & 0x00ffffffu);
+      else if (method == 0xc3u && (raw & 0xffu) > 0u)
+        *value = (2u << 30) | (raw & 0xffu);
+      else
+        return 0;
+      return 1;
+    }
+  if (property == VIEWPORT_LAYER_OVERRIDE_TRANSPARENCY)
+    {
+      uint32_t alpha;
+      uint32_t code;
+      raw = (uint32_t)item->value.i32;
+      if ((raw >> 24) != 2u)
+        return 0;
+      alpha = raw & 0xffu;
+      code = 3u + (alpha * 60u + 127u) / 255u;
+      *value = code << 24;
+      return 1;
+    }
+  if (property == VIEWPORT_LAYER_OVERRIDE_LINETYPE)
+    {
+      uint32_t code = find_handle_index (
+          tables->linetype_codes, tables->linetype_count,
+          (uint64_t)item->value.absref);
+      if (code == UINT32_MAX || code > 2047u)
+        return 0;
+      *value = code;
+      return 1;
+    }
+  if (property == VIEWPORT_LAYER_OVERRIDE_LINEWEIGHT)
+    {
+      int32_t lineweight = item->value.i32;
+      if (lineweight < 0 || lineweight > 211)
+        return 0;
+      *value = (uint32_t)lineweight;
+      return 1;
+    }
+  return 0;
+}
+
+static int
+write_viewport_layer_override_section (
+    CacheWriter *writer, const Dwg_Data *dwg,
+    const CacheTables *tables, SectionEntry *entry)
+{
+  static const struct
+  {
+    const char *key;
+    short value_type;
+    uint16_t property;
+  } definitions[] = {
+    { "ADSK_XREC_LAYER_COLOR_OVR", 420,
+      VIEWPORT_LAYER_OVERRIDE_COLOR },
+    { "ADSK_XREC_LAYER_ALPHA_OVR", 440,
+      VIEWPORT_LAYER_OVERRIDE_TRANSPARENCY },
+    { "ADSK_XREC_LAYER_LINETYPE_OVR", 343,
+      VIEWPORT_LAYER_OVERRIDE_LINETYPE },
+    { "ADSK_XREC_LAYER_LINEWT_OVR", 91,
+      VIEWPORT_LAYER_OVERRIDE_LINEWEIGHT },
+  };
+  uint64_t offset;
+  uint64_t count = 0;
+  size_t layer_index;
+  if (!align_writer (writer, &offset))
+    return 0;
+  for (layer_index = 0; layer_index < tables->layer_count; layer_index++)
+    {
+      Dwg_Object *layer_object = tables->layers[layer_index].object;
+      Dwg_Object *xdic;
+      size_t definition_index;
+      if (!layer_object || !layer_object->tio.object
+          || !layer_object->tio.object->xdicobjhandle)
+        continue;
+      xdic = reference_object (
+          dwg, layer_object->tio.object->xdicobjhandle);
+      for (definition_index = 0;
+           definition_index
+               < sizeof (definitions) / sizeof (definitions[0]);
+           definition_index++)
+        {
+          Dwg_Object *xrecord_object = dictionary_item_named (
+              dwg, xdic, definitions[definition_index].key);
+          Dwg_Object_XRECORD *xrecord;
+          Dwg_Resbuf *item;
+          uint64_t viewport_handle = 0;
+          if (!xrecord_object
+              || xrecord_object->fixedtype != DWG_TYPE_XRECORD
+              || !xrecord_object->tio.object
+              || !(xrecord
+                       = xrecord_object->tio.object->tio.XRECORD))
+            continue;
+          for (item = xrecord->xdata; item; item = item->nextrb)
+            {
+              uint32_t value;
+              Dwg_Object *viewport_object;
+              if (item->type == 335)
+                {
+                  viewport_handle = (uint64_t)item->value.absref;
+                  continue;
+                }
+              if (item->type != definitions[definition_index].value_type
+                  || !viewport_handle)
+                continue;
+              viewport_object = dwg_resolve_handle_silent (
+                  dwg, viewport_handle);
+              if (is_viewport_entity (viewport_object)
+                  && viewport_layer_override_value (
+                      tables, definitions[definition_index].property,
+                      item, &value))
+                {
+                  if (count >= MAX_VIEWPORT_LAYER_OVERRIDES)
+                    {
+                      set_error (
+                          writer,
+                          "viewport layer overrides exceed their limits");
+                      return 0;
+                    }
+                  if (!write_u64 (writer, viewport_handle)
+                      || !write_u32 (writer, (uint32_t)layer_index)
+                      || !write_u16 (
+                          writer,
+                          definitions[definition_index].property)
+                      || !write_u16 (writer, 0)
+                      || !write_u32 (writer, value)
+                      || !write_u32 (writer, 0))
+                    return 0;
+                  count++;
+                }
+              viewport_handle = 0;
+            }
+        }
+    }
+  return finish_fixed_section (
+      writer, entry, SECTION_VIEWPORT_LAYER_OVERRIDES,
+      VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
+      "viewport_layer_overrides", offset, count);
 }
 
 static int
@@ -3993,6 +4377,143 @@ write_text_column_height_section (CacheWriter *writer, const Dwg_Data *dwg,
   return finish_fixed_section (
       writer, entry, SECTION_TEXT_COLUMN_HEIGHTS,
       TEXT_COLUMN_HEIGHT_RECORD_SIZE, "text_column_heights", offset, count);
+}
+
+static int
+write_text_annotation_context_section (CacheWriter *writer,
+                                       const Dwg_Data *dwg,
+                                       SectionEntry *entry)
+{
+  uint64_t offset;
+  uint64_t context_count = 0;
+  uint64_t first_column_height = 0;
+  size_t object_index;
+  if (!align_writer (writer, &offset))
+    return 0;
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      Dwg_Object *text_object = &dwg->object[object_index];
+      Dwg_Object_DICTIONARY *dictionary;
+      uint32_t context_index;
+      if (text_object->fixedtype != DWG_TYPE_MTEXT)
+        continue;
+      dictionary = text_annotation_context_dictionary (dwg, text_object);
+      if (!dictionary || dictionary->numitems <= 0
+          || !dictionary->itemhandles)
+        continue;
+      for (context_index = 0;
+           context_index < (uint32_t)dictionary->numitems;
+           context_index++)
+        {
+          const Dwg_Object_MTEXTOBJECTCONTEXTDATA *context;
+          double scale;
+          uint32_t flags;
+          if (!valid_mtext_annotation_context (
+                  dwg,
+                  reference_object (
+                      dwg, dictionary->itemhandles[context_index]),
+                  &context, &scale))
+            continue;
+          if (context_count >= MAX_TEXT_ANNOTATION_CONTEXTS
+              || first_column_height
+                     > MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS
+                           - context->num_column_heights)
+            {
+              set_error (
+                  writer, "text annotation context pool exceeds its limits");
+              return 0;
+            }
+          flags = (context->is_default ? 1u : 0u)
+                  | (context->auto_height ? 2u : 0u)
+                  | (context->flow_reversed ? 4u : 0u);
+          if (!write_u64 (writer, (uint64_t)text_object->handle.value)
+              || !write_f64 (writer, scale)
+              || !write_u32 (writer, flags)
+              || !write_i32 (writer, (int32_t)context->attachment)
+              || !write_f64 (writer, context->ins_pt.x)
+              || !write_f64 (writer, context->ins_pt.y)
+              || !write_f64 (writer, context->ins_pt.z)
+              || !write_f64 (writer, context->x_axis_dir.x)
+              || !write_f64 (writer, context->x_axis_dir.y)
+              || !write_f64 (writer, context->x_axis_dir.z)
+              || !write_f64 (writer, context->rect_height)
+              || !write_f64 (writer, context->rect_width)
+              || !write_f64 (writer, context->extents_width)
+              || !write_f64 (writer, context->extents_height)
+              || !write_i32 (writer, (int32_t)context->column_type)
+              || !write_u32 (writer, 0)
+              || !write_f64 (writer, context->column_width)
+              || !write_f64 (writer, context->gutter)
+              || !write_u64 (writer, first_column_height)
+              || !write_u64 (
+                  writer, (uint64_t)context->num_column_heights)
+              || !write_u64 (writer, 0) || !write_u64 (writer, 0))
+            return 0;
+          first_column_height += context->num_column_heights;
+          context_count++;
+        }
+    }
+  return finish_fixed_section (
+      writer, entry, SECTION_TEXT_ANNOTATION_CONTEXTS,
+      TEXT_ANNOTATION_CONTEXT_RECORD_SIZE, "text_annotation_contexts",
+      offset, context_count);
+}
+
+static int
+write_text_annotation_column_height_section (
+    CacheWriter *writer, const Dwg_Data *dwg, SectionEntry *entry)
+{
+  uint64_t offset;
+  uint64_t count = 0;
+  size_t object_index;
+  if (!align_writer (writer, &offset))
+    return 0;
+  for (object_index = 0; object_index < (size_t)dwg->num_objects;
+       object_index++)
+    {
+      Dwg_Object *text_object = &dwg->object[object_index];
+      Dwg_Object_DICTIONARY *dictionary;
+      uint32_t context_index;
+      if (text_object->fixedtype != DWG_TYPE_MTEXT)
+        continue;
+      dictionary = text_annotation_context_dictionary (dwg, text_object);
+      if (!dictionary || dictionary->numitems <= 0
+          || !dictionary->itemhandles)
+        continue;
+      for (context_index = 0;
+           context_index < (uint32_t)dictionary->numitems;
+           context_index++)
+        {
+          const Dwg_Object_MTEXTOBJECTCONTEXTDATA *context;
+          uint32_t column_index;
+          if (!valid_mtext_annotation_context (
+                  dwg,
+                  reference_object (
+                      dwg, dictionary->itemhandles[context_index]),
+                  &context, NULL))
+            continue;
+          if (count
+              > MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS
+                    - context->num_column_heights)
+            {
+              set_error (
+                  writer,
+                  "text annotation column-height pool exceeds its limits");
+              return 0;
+            }
+          for (column_index = 0;
+               column_index < (uint32_t)context->num_column_heights;
+               column_index++)
+            if (!write_f64 (writer, context->column_heights[column_index]))
+              return 0;
+          count += context->num_column_heights;
+        }
+    }
+  return finish_fixed_section (
+      writer, entry, SECTION_TEXT_ANNOTATION_COLUMN_HEIGHTS,
+      TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+      "text_annotation_column_heights", offset, count);
 }
 
 static int
@@ -5703,17 +6224,35 @@ segment_iteration_reject (SegmentIteration *iteration)
 }
 
 static unsigned
-curve_segment_count (double sweep)
+bounded_curve_segment_count (double sweep, double maximum_angle,
+                             unsigned maximum_segments)
 {
   double requested;
-  if (!isfinite (sweep) || fabs (sweep) <= CURVE_EPSILON)
+  if (!isfinite (sweep) || fabs (sweep) <= CURVE_EPSILON
+      || !isfinite (maximum_angle)
+      || maximum_angle <= CURVE_EPSILON || !maximum_segments)
     return 0;
-  requested = ceil (fabs (sweep) / CURVE_MAX_ANGLE_RADIANS);
+  requested = ceil (fabs (sweep) / maximum_angle);
   if (!isfinite (requested) || requested < 1.0)
     return 0;
-  if (requested > (double)MAX_CIRCULAR_SEGMENTS)
-    return MAX_CIRCULAR_SEGMENTS;
+  if (requested > (double)maximum_segments)
+    return maximum_segments;
   return (unsigned)requested;
+}
+
+static unsigned
+curve_segment_count (double sweep)
+{
+  return bounded_curve_segment_count (
+      sweep, CURVE_MAX_ANGLE_RADIANS, MAX_CIRCULAR_SEGMENTS);
+}
+
+static unsigned
+hatch_curve_segment_count (double sweep)
+{
+  return bounded_curve_segment_count (
+      sweep, HATCH_CURVE_MAX_ANGLE_RADIANS,
+      MAX_HATCH_CIRCULAR_SEGMENTS);
 }
 
 static int
@@ -5747,6 +6286,18 @@ bulge_segment_count (double bulge)
     return 1;
   sweep = fabs (4.0 * atan (bulge));
   requested = curve_segment_count (sweep);
+  return requested ? requested : 1u;
+}
+
+static unsigned
+hatch_bulge_segment_count (double bulge)
+{
+  double sweep;
+  unsigned requested;
+  if (!isfinite (bulge) || fabs (bulge) <= CURVE_EPSILON)
+    return 1;
+  sweep = fabs (4.0 * atan (bulge));
+  requested = hatch_curve_segment_count (sweep);
   return requested ? requested : 1u;
 }
 
@@ -5870,7 +6421,33 @@ typedef struct
   PolylineVertex previous;
   uint64_t count;
   int has_previous;
+  int use_spline_fit_vertices;
 } PolylineSegmentBuilder;
+
+typedef struct
+{
+  uint64_t generated;
+} PolylineFitVertexCount;
+
+static int
+is_spline_fit_display_vertex (const PolylineVertex *vertex)
+{
+  return vertex
+         && (vertex->flags
+             & (VERTEX_FLAG_CURVE_FIT_EXTRA
+                | VERTEX_FLAG_SPLINE_FIT_EXTRA))
+         && !(vertex->flags & VERTEX_FLAG_SPLINE_FRAME_CONTROL);
+}
+
+static int
+count_spline_fit_display_vertex (void *context,
+                                 const PolylineVertex *vertex)
+{
+  PolylineFitVertexCount *count = (PolylineFitVertexCount *)context;
+  if (is_spline_fit_display_vertex (vertex))
+    count->generated++;
+  return 1;
+}
 
 static void
 initialize_polyline_segment (const PolylineSegmentBuilder *builder,
@@ -5907,6 +6484,11 @@ emit_polyline_edge (PolylineSegmentBuilder *builder,
             ? 1u
             : bulge_segment_count (start->bulge);
   unsigned index;
+  if (!(builder->info->flags & POLYLINE_FLAG_CONTINUOUS_LINETYPE))
+    {
+      builder->iteration->has_pattern_end = 0;
+      builder->iteration->pattern_cursor = 0.0;
+    }
   for (index = 0; index < subdivisions; index++)
     {
       LineSegment segment;
@@ -5947,6 +6529,9 @@ polyline_segment_vertex (void *context, const PolylineVertex *vertex)
 {
   PolylineSegmentBuilder *builder
       = (PolylineSegmentBuilder *)context;
+  if (builder->use_spline_fit_vertices
+      && !is_spline_fit_display_vertex (vertex))
+    return 1;
   if (!builder->has_previous)
     {
       builder->first = *vertex;
@@ -5979,6 +6564,16 @@ iterate_polyline_segments (const Dwg_Object *object,
   builder.tables = tables;
   builder.info = &info;
   builder.iteration = iteration;
+  if (info.kind == 2 && (info.flags & POLYLINE_FLAG_SPLINE_FIT))
+    {
+      PolylineFitVertexCount fit_count;
+      memset (&fit_count, 0, sizeof (fit_count));
+      if (!iterate_polyline_vertices (
+              object, count_spline_fit_display_vertex, &fit_count,
+              NULL))
+        return 0;
+      builder.use_spline_fit_vertices = fit_count.generated >= 2;
+    }
   if (!iterate_polyline_vertices (
           object, polyline_segment_vertex, &builder, NULL))
     return 0;
@@ -6866,7 +7461,7 @@ read_hatch_spline_sampling (const Dwg_HATCH_PathSeg *segment,
   if (!nonzero_spans)
     return 0;
   sampling->segments_per_span
-      = degree == 1u ? 1u : SPLINE_SEGMENTS_PER_SPAN;
+      = degree == 1u ? 1u : HATCH_SPLINE_SEGMENTS_PER_SPAN;
   if (nonzero_spans > SIZE_MAX / sampling->segments_per_span)
     return 0;
   requested_segments
@@ -6875,11 +7470,11 @@ read_hatch_spline_sampling (const Dwg_HATCH_PathSeg *segment,
   sampling->control_count = control_count;
   sampling->nonzero_spans = nonzero_spans;
   sampling->segment_count
-      = requested_segments > MAX_SPLINE_SEGMENTS
-            ? MAX_SPLINE_SEGMENTS
+      = requested_segments > MAX_HATCH_SPLINE_SEGMENTS
+            ? MAX_HATCH_SPLINE_SEGMENTS
             : (unsigned)requested_segments;
   sampling->uniform_domain
-      = requested_segments > MAX_SPLINE_SEGMENTS;
+      = requested_segments > MAX_HATCH_SPLINE_SEGMENTS;
   return sampling->segment_count != 0;
 }
 
@@ -7025,66 +7620,293 @@ evaluate_hatch_spline (const Dwg_HATCH_PathSeg *segment,
   return 1;
 }
 
-static size_t
-hatch_spline_fallback_point_count (
-    const Dwg_HATCH_PathSeg *segment, int *use_fit_points)
+static int
+hatch_fit_points_near (const BITCODE_2RD *left,
+                       const BITCODE_2RD *right)
 {
-  size_t fit_count;
-  size_t control_count;
-  if (!segment)
+  double scale;
+  double tolerance;
+  if (!left || !right || !isfinite (left->x)
+      || !isfinite (left->y) || !isfinite (right->x)
+      || !isfinite (right->y))
     return 0;
-  fit_count = segment->fitpts
-                  ? (size_t)segment->num_fitpts
-                  : 0;
-  control_count = segment->control_points
-                      ? (size_t)segment->num_control_points
-                      : 0;
-  *use_fit_points = fit_count >= 2u;
-  return *use_fit_points ? fit_count : control_count;
+  scale = fmax (1.0, fabs (left->x));
+  scale = fmax (scale, fabs (left->y));
+  scale = fmax (scale, fabs (right->x));
+  scale = fmax (scale, fabs (right->y));
+  tolerance = fmax (CURVE_EPSILON, scale * DBL_EPSILON * 64.0);
+  return fabs (left->x - right->x) <= tolerance
+         && fabs (left->y - right->y) <= tolerance;
+}
+
+static double
+hatch_fit_interval (const Dwg_HATCH_PathSeg *segment,
+                    size_t first, size_t second)
+{
+  double delta_x;
+  double delta_y;
+  if (!segment || !segment->fitpts
+      || first >= (size_t)segment->num_fitpts
+      || second >= (size_t)segment->num_fitpts)
+    return 0.0;
+  delta_x = segment->fitpts[second].x - segment->fitpts[first].x;
+  delta_y = segment->fitpts[second].y - segment->fitpts[first].y;
+  return hypot (delta_x, delta_y);
+}
+
+static int
+read_hatch_fit_sampling (const Dwg_HATCH_PathSeg *segment,
+                         HatchFitSampling *sampling)
+{
+  size_t point_count;
+  size_t source_segment_count;
+  size_t index;
+  int periodic;
+  if (!segment || !sampling || !segment->fitpts
+      || segment->num_fitpts < 2u)
+    return 0;
+  point_count = (size_t)segment->num_fitpts;
+  for (index = 0; index < point_count; index++)
+    {
+      if (!isfinite (segment->fitpts[index].x)
+          || !isfinite (segment->fitpts[index].y))
+        return 0;
+    }
+  periodic = segment->is_periodic && point_count >= 3u;
+  if (periodic
+      && hatch_fit_points_near (
+          &segment->fitpts[0], &segment->fitpts[point_count - 1u]))
+    point_count--;
+  if ((periodic && point_count < 3u) || point_count < 2u)
+    return 0;
+  source_segment_count
+      = point_count - 1u + (periodic ? 1u : 0u);
+  for (index = 0; index < source_segment_count; index++)
+    {
+      size_t next = (index + 1u) % point_count;
+      double interval = hatch_fit_interval (segment, index, next);
+      if (!isfinite (interval) || interval <= CURVE_EPSILON)
+        return 0;
+    }
+  sampling->point_count = point_count;
+  sampling->source_segment_count = source_segment_count;
+  sampling->segment_count
+      = source_segment_count
+                > MAX_HATCH_SPLINE_SEGMENTS
+                      / HATCH_SPLINE_SEGMENTS_PER_SPAN
+            ? MAX_HATCH_SPLINE_SEGMENTS
+            : (unsigned)(source_segment_count
+                         * HATCH_SPLINE_SEGMENTS_PER_SPAN);
+  sampling->periodic = periodic;
+  return sampling->segment_count != 0;
+}
+
+static int
+hatch_fit_explicit_tangent (const BITCODE_2RD *source,
+                            double tangent[2])
+{
+  if (!source || !tangent || !isfinite (source->x)
+      || !isfinite (source->y)
+      || hypot (source->x, source->y) <= CURVE_EPSILON)
+    return 0;
+  tangent[0] = source->x;
+  tangent[1] = source->y;
+  return 1;
+}
+
+static int
+hatch_fit_tangent (const Dwg_HATCH_PathSeg *segment,
+                   const HatchFitSampling *sampling, size_t index,
+                   double tangent[2])
+{
+  size_t previous;
+  size_t next;
+  double previous_interval;
+  double next_interval;
+  size_t axis;
+  if (!segment || !sampling || !tangent
+      || index >= sampling->point_count)
+    return 0;
+  if (!sampling->periodic && index == 0u
+      && hatch_fit_explicit_tangent (
+          &segment->start_tangent, tangent))
+    return 1;
+  if (!sampling->periodic && index + 1u == sampling->point_count
+      && hatch_fit_explicit_tangent (
+          &segment->end_tangent, tangent))
+    return 1;
+  if (!sampling->periodic && index == 0u)
+    {
+      next_interval = hatch_fit_interval (segment, 0u, 1u);
+      if (!isfinite (next_interval)
+          || next_interval <= CURVE_EPSILON)
+        return 0;
+      tangent[0]
+          = (segment->fitpts[1].x - segment->fitpts[0].x)
+            / next_interval;
+      tangent[1]
+          = (segment->fitpts[1].y - segment->fitpts[0].y)
+            / next_interval;
+      return 1;
+    }
+  if (!sampling->periodic && index + 1u == sampling->point_count)
+    {
+      previous = index - 1u;
+      previous_interval
+          = hatch_fit_interval (segment, previous, index);
+      if (!isfinite (previous_interval)
+          || previous_interval <= CURVE_EPSILON)
+        return 0;
+      tangent[0]
+          = (segment->fitpts[index].x
+             - segment->fitpts[previous].x)
+            / previous_interval;
+      tangent[1]
+          = (segment->fitpts[index].y
+             - segment->fitpts[previous].y)
+            / previous_interval;
+      return 1;
+    }
+  previous
+      = (index + sampling->point_count - 1u)
+        % sampling->point_count;
+  next = (index + 1u) % sampling->point_count;
+  previous_interval
+      = hatch_fit_interval (segment, previous, index);
+  next_interval = hatch_fit_interval (segment, index, next);
+  if (!isfinite (previous_interval)
+      || !isfinite (next_interval)
+      || previous_interval <= CURVE_EPSILON
+      || next_interval <= CURVE_EPSILON)
+    return 0;
+  for (axis = 0; axis < 2u; axis++)
+    {
+      double previous_value
+          = axis ? segment->fitpts[previous].y
+                 : segment->fitpts[previous].x;
+      double current_value
+          = axis ? segment->fitpts[index].y
+                 : segment->fitpts[index].x;
+      double next_value
+          = axis ? segment->fitpts[next].y
+                 : segment->fitpts[next].x;
+      double previous_slope
+          = (current_value - previous_value) / previous_interval;
+      double next_slope
+          = (next_value - current_value) / next_interval;
+      tangent[axis]
+          = (previous_slope * next_interval
+             + next_slope * previous_interval)
+            / (previous_interval + next_interval);
+    }
+  return isfinite (tangent[0]) && isfinite (tangent[1]);
+}
+
+static int
+evaluate_hatch_fit_boundary (
+    const Dwg_HATCH_PathSeg *segment,
+    const HatchFitSampling *sampling, unsigned boundary_index,
+    double elevation, double point[3])
+{
+  double scaled;
+  size_t source_index;
+  size_t next_index;
+  double local_parameter;
+  double interval;
+  double start_tangent[2];
+  double end_tangent[2];
+  double inverse;
+  double start_basis;
+  double start_tangent_basis;
+  double end_basis;
+  double end_tangent_basis;
+  size_t axis;
+  if (!segment || !sampling || !point
+      || boundary_index > sampling->segment_count
+      || !sampling->segment_count)
+    return 0;
+  if (boundary_index == sampling->segment_count)
+    {
+      source_index = sampling->source_segment_count - 1u;
+      local_parameter = 1.0;
+    }
+  else
+    {
+      scaled
+          = (double)boundary_index
+            * (double)sampling->source_segment_count
+            / (double)sampling->segment_count;
+      source_index = (size_t)floor (scaled);
+      if (source_index >= sampling->source_segment_count)
+        source_index = sampling->source_segment_count - 1u;
+      local_parameter = scaled - (double)source_index;
+    }
+  next_index = (source_index + 1u) % sampling->point_count;
+  interval = hatch_fit_interval (segment, source_index, next_index);
+  if (!isfinite (interval) || interval <= CURVE_EPSILON
+      || !hatch_fit_tangent (
+          segment, sampling, source_index, start_tangent)
+      || !hatch_fit_tangent (
+          segment, sampling, next_index, end_tangent))
+    return 0;
+  inverse = 1.0 - local_parameter;
+  start_basis
+      = inverse * inverse * (1.0 + 2.0 * local_parameter);
+  start_tangent_basis
+      = local_parameter * inverse * inverse * interval;
+  end_basis
+      = local_parameter * local_parameter
+        * (3.0 - 2.0 * local_parameter);
+  end_tangent_basis
+      = local_parameter * local_parameter
+        * (local_parameter - 1.0) * interval;
+  for (axis = 0; axis < 2u; axis++)
+    {
+      double start_value
+          = axis ? segment->fitpts[source_index].y
+                 : segment->fitpts[source_index].x;
+      double end_value
+          = axis ? segment->fitpts[next_index].y
+                 : segment->fitpts[next_index].x;
+      point[axis]
+          = start_basis * start_value
+            + start_tangent_basis * start_tangent[axis]
+            + end_basis * end_value
+            + end_tangent_basis * end_tangent[axis];
+    }
+  point[2] = elevation;
+  return isfinite (point[0]) && isfinite (point[1])
+         && isfinite (point[2]);
+}
+
+static size_t
+hatch_spline_control_point_count (
+    const Dwg_HATCH_PathSeg *segment)
+{
+  return segment && segment->control_points
+             ? (size_t)segment->num_control_points
+             : 0u;
 }
 
 static unsigned
 hatch_spline_fallback_segment_count (
     const Dwg_HATCH_PathSeg *segment)
 {
-  int use_fit_points;
-  size_t point_count = hatch_spline_fallback_point_count (
-      segment, &use_fit_points);
+  HatchFitSampling fit_sampling;
+  size_t point_count;
   size_t source_segments;
-  (void)use_fit_points;
+  memset (&fit_sampling, 0, sizeof (fit_sampling));
+  if (read_hatch_fit_sampling (segment, &fit_sampling))
+    return fit_sampling.segment_count;
+  point_count = hatch_spline_control_point_count (segment);
   if (point_count < 2u)
     return 0;
   source_segments
       = point_count - 1u
         + (segment->is_periodic ? 1u : 0u);
-  return source_segments > MAX_SPLINE_SEGMENTS
-             ? MAX_SPLINE_SEGMENTS
+  return source_segments > MAX_HATCH_SPLINE_SEGMENTS
+             ? MAX_HATCH_SPLINE_SEGMENTS
              : (unsigned)source_segments;
-}
-
-static int
-hatch_spline_fallback_point (
-    const Dwg_HATCH_PathSeg *segment, int use_fit_points,
-    size_t index, double elevation, double point[3])
-{
-  if (use_fit_points)
-    {
-      if (!segment->fitpts
-          || index >= (size_t)segment->num_fitpts)
-        return 0;
-      point[0] = segment->fitpts[index].x;
-      point[1] = segment->fitpts[index].y;
-    }
-  else
-    {
-      if (!segment->control_points
-          || index >= (size_t)segment->num_control_points)
-        return 0;
-      point[0] = segment->control_points[index].point.x;
-      point[1] = segment->control_points[index].point.y;
-    }
-  point[2] = elevation;
-  return 1;
 }
 
 static int
@@ -7092,21 +7914,33 @@ hatch_spline_fallback_segment (
     const Dwg_HATCH_PathSeg *segment, unsigned segment_index,
     double elevation, double start[3], double end[3])
 {
-  int use_fit_points;
-  size_t point_count = hatch_spline_fallback_point_count (
-      segment, &use_fit_points);
+  HatchFitSampling fit_sampling;
+  size_t point_count;
   size_t source_segments;
   unsigned output_segments;
   size_t start_index;
   size_t end_index;
+  memset (&fit_sampling, 0, sizeof (fit_sampling));
+  if (read_hatch_fit_sampling (segment, &fit_sampling))
+    {
+      if (segment_index >= fit_sampling.segment_count)
+        return 0;
+      return evaluate_hatch_fit_boundary (
+                 segment, &fit_sampling, segment_index,
+                 elevation, start)
+             && evaluate_hatch_fit_boundary (
+                 segment, &fit_sampling, segment_index + 1u,
+                 elevation, end);
+    }
+  point_count = hatch_spline_control_point_count (segment);
   if (point_count < 2u)
     return 0;
   source_segments
       = point_count - 1u
         + (segment->is_periodic ? 1u : 0u);
   output_segments
-      = source_segments > MAX_SPLINE_SEGMENTS
-            ? MAX_SPLINE_SEGMENTS
+      = source_segments > MAX_HATCH_SPLINE_SEGMENTS
+            ? MAX_HATCH_SPLINE_SEGMENTS
             : (unsigned)source_segments;
   if (!output_segments || segment_index >= output_segments)
     return 0;
@@ -7119,10 +7953,15 @@ hatch_spline_fallback_segment (
                      * source_segments
                  / output_segments)
         % point_count;
-  return hatch_spline_fallback_point (
-             segment, use_fit_points, start_index, elevation, start)
-         && hatch_spline_fallback_point (
-             segment, use_fit_points, end_index, elevation, end);
+  start[0] = segment->control_points[start_index].point.x;
+  start[1] = segment->control_points[start_index].point.y;
+  start[2] = elevation;
+  end[0] = segment->control_points[end_index].point.x;
+  end[1] = segment->control_points[end_index].point.y;
+  end[2] = elevation;
+  return isfinite (start[0]) && isfinite (start[1])
+         && isfinite (start[2]) && isfinite (end[0])
+         && isfinite (end[1]) && isfinite (end[2]);
 }
 
 static int
@@ -7173,7 +8012,7 @@ iterate_hatch_polyline_path (
       PolylineVertex end_vertex;
       double bulge
           = path->bulges_present ? start->bulge : 0.0;
-      unsigned subdivisions = bulge_segment_count (bulge);
+      unsigned subdivisions = hatch_bulge_segment_count (bulge);
       unsigned subdivision;
       memset (&start_vertex, 0, sizeof (start_vertex));
       memset (&end_vertex, 0, sizeof (end_vertex));
@@ -7243,7 +8082,7 @@ iterate_hatch_edge (
               edge->start_angle, edge->end_angle, edge->is_ccw,
               &first, &sweep))
         return 1;
-      count = curve_segment_count (sweep);
+      count = hatch_curve_segment_count (sweep);
       for (index = 0; index < count; index++)
         {
           double start_angle
@@ -7295,7 +8134,7 @@ iterate_hatch_edge (
       minor[0] = -major[1] * fabs (edge->minor_major_ratio);
       minor[1] = major[0] * fabs (edge->minor_major_ratio);
       minor[2] = 0.0;
-      count = curve_segment_count (sweep);
+      count = hatch_curve_segment_count (sweep);
       for (index = 0; index < count; index++)
         {
           double start_parameter
@@ -7576,7 +8415,7 @@ hatch_edge_requested_segments (const Dwg_HATCH_PathSeg *edge)
               edge->start_angle, edge->end_angle, edge->is_ccw,
               &first, &sweep))
         return 0;
-      return curve_segment_count (sweep);
+      return hatch_curve_segment_count (sweep);
     }
   if (edge->curve_type == 3u)
     {
@@ -7590,7 +8429,7 @@ hatch_edge_requested_segments (const Dwg_HATCH_PathSeg *edge)
               edge->start_angle, edge->end_angle, edge->is_ccw,
               &first, &sweep))
         return 0;
-      return curve_segment_count (sweep);
+      return hatch_curve_segment_count (sweep);
     }
   if (edge->curve_type == 4u)
     {
@@ -7635,7 +8474,7 @@ hatch_requested_boundary_segments (const Dwg_Entity_HATCH *hatch)
                         ? path->polyline_paths[item_index].bulge
                         : 0.0;
               total = bounded_hatch_segment_sum (
-                  total, bulge_segment_count (bulge));
+                  total, hatch_bulge_segment_count (bulge));
               if (total >= marker)
                 return marker;
             }
@@ -7690,7 +8529,7 @@ hatch_path_requested_segments (const Dwg_HATCH_Path *path)
                     ? path->polyline_paths[item_index].bulge
                     : 0.0;
           total = bounded_hatch_segment_sum (
-              total, bulge_segment_count (bulge));
+              total, hatch_bulge_segment_count (bulge));
           if (total >= marker)
             return marker;
         }
@@ -8895,10 +9734,17 @@ write_solid_entity_section (CacheWriter *writer, const Dwg_Data *dwg,
       corners[0][1] = solid->corner1.y;
       corners[1][0] = solid->corner2.x;
       corners[1][1] = solid->corner2.y;
-      corners[2][0] = solid->corner3.x;
-      corners[2][1] = solid->corner3.y;
-      corners[3][0] = solid->corner4.x;
-      corners[3][1] = solid->corner4.y;
+      /*
+       * AutoCAD records the third SOLID corner opposite corner 2 and the
+       * fourth opposite corner 1.  Cache the quadrilateral in perimeter
+       * order so every consumer can triangulate, outline and hit-test it as
+       * 1-2-4-3.  A triangular SOLID remains 1-2-3-3 because corners 3 and 4
+       * are identical in that case.
+       */
+      corners[2][0] = solid->corner4.x;
+      corners[2][1] = solid->corner4.y;
+      corners[3][0] = solid->corner3.x;
+      corners[3][1] = solid->corner3.y;
       for (corner_index = 0; corner_index < 4; corner_index++)
         corners[corner_index][2] = solid->elevation;
       if (!isfinite (solid->elevation)
@@ -10814,7 +11660,11 @@ write_scene_preview (
           &writer, dwg, tables, &sections[40])
       || !write_empty_fixed_section (&writer, &sections[41], 41)
       || !write_empty_string_section (&writer, &sections[42], 42)
-      || !write_empty_fixed_section (&writer, &sections[43], 43))
+      || !write_empty_fixed_section (&writer, &sections[43], 43)
+      || !write_empty_fixed_section (&writer, &sections[44], 44)
+      || !write_empty_fixed_section (&writer, &sections[45], 45)
+      || !write_viewport_layer_override_section (
+          &writer, dwg, tables, &sections[46]))
     goto done;
   if (!position (&writer, &file_size)
       || !write_header (
@@ -11058,6 +11908,12 @@ libredwg_write_scene_cache (
           &writer, dwg, &tables, &sections[42])
       || !write_image_clip_vertex_section (
           &writer, dwg, &sections[43])
+      || !write_text_annotation_context_section (
+          &writer, dwg, &sections[44])
+      || !write_text_annotation_column_height_section (
+          &writer, dwg, &sections[45])
+      || !write_viewport_layer_override_section (
+          &writer, dwg, &tables, &sections[46])
       || !position (&writer, &file_size)
       || !write_header (
           &writer, file_size, source_size, source_version,

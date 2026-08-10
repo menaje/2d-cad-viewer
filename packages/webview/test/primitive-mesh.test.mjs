@@ -29,6 +29,65 @@ async function primitiveFixture() {
   return { source, metadata, instanceGraph };
 }
 
+function entityTable(rows) {
+  return {
+    length: rows.length,
+    readEntity(index, target) {
+      Object.assign(target, rows[index]);
+      return target;
+    },
+  };
+}
+
+function vertexTable(rows) {
+  return {
+    length: rows.length,
+    readVertex(index, target) {
+      Object.assign(target, rows[index]);
+      target.position = [...rows[index].position];
+      return target;
+    },
+  };
+}
+
+function primitivePointsForHandle(scene, handle) {
+  const ranges = scene.identityRanges.data;
+  const view = new DataView(scene.vertices.buffer);
+  const points = [];
+  for (let range = 0; range < ranges.length; range += 4) {
+    const rangeHandle =
+      BigInt(ranges[range + 2]) |
+      (BigInt(ranges[range + 3]) << 32n);
+    if (rangeHandle !== handle) {
+      continue;
+    }
+    const end = ranges[range] + ranges[range + 1];
+    for (let vertex = ranges[range]; vertex < end; vertex += 1) {
+      const batch = scene.batches.find(
+        (candidate) =>
+          vertex >= candidate.firstVertex &&
+          vertex < candidate.firstVertex + candidate.vertexCount,
+      );
+      const offset = vertex * PRIMITIVE_VERTEX_STRIDE;
+      points.push(
+        batch.origin.map(
+          (origin, axis) =>
+            origin + view.getFloat32(offset + axis * 4, true),
+        ),
+      );
+    }
+  }
+  return points;
+}
+
+function withPolyline(source, entity, vertices) {
+  return {
+    ...source,
+    polylines: entityTable([entity]),
+    polylineVertices: vertexTable(vertices),
+  };
+}
+
 function verticesForHandle(scene, handle) {
   const view = new DataView(scene.vertices.buffer);
   const points = [];
@@ -330,4 +389,236 @@ test("stops WIPEOUT frames at the shared surface GPU budget", async () => {
   assert.equal(result.metrics.renderedWipeoutFrameEdges, 4);
   assert.equal(result.metrics.wipeoutOutlineVertices, 8);
   assert.equal(result.solidOutlines.vertices.vertexCount, 44);
+});
+
+test("renders constant-width polylines as filled geometry and replaces their centerlines", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const handle = 0x123456789n;
+  const polylineSource = withPolyline(
+    source,
+    {
+      handle,
+      ownerHandle: metadata.blocks[0].handle,
+      layerIndex: 0,
+      color: (2 << 30) | 7,
+      lineWeight: 25,
+      commonFlags: 0,
+      linetypeCode: 0,
+      firstVertex: 0,
+      vertexCount: 2,
+      polylineKind: 1,
+      polylineFlags: 0,
+      elevation: 0,
+      normal: [0, 0, 1],
+      defaultStartWidth: 0,
+      defaultEndWidth: 0,
+      constantWidth: 2,
+    },
+    [
+      { position: [0, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+      { position: [10, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+    ],
+  );
+
+  const result = buildPrimitiveMeshes(
+    polylineSource,
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: true },
+  );
+  const points = primitivePointsForHandle(result.solidFills, handle);
+
+  assert.equal(result.metrics.sourceWidePolylines, 1);
+  assert.equal(result.metrics.renderedFilledWidePolylines, 1);
+  assert.equal(result.metrics.widePolylineFillVertices, 6);
+  assert.deepEqual([...result.lineReplacementHandleWords], [0x23456789, 1]);
+  assert.equal(points.length, 6);
+  assert.deepEqual(
+    [
+      Math.min(...points.map((point) => point[0])),
+      Math.max(...points.map((point) => point[0])),
+      Math.min(...points.map((point) => point[1])),
+      Math.max(...points.map((point) => point[1])),
+    ],
+    [0, 10, -1, 1],
+  );
+});
+
+test("renders wide polyline boundaries when FILLMODE is disabled", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const handle = 901n;
+  const result = buildPrimitiveMeshes(
+    withPolyline(
+      source,
+      {
+        handle,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        firstVertex: 0,
+        vertexCount: 2,
+        polylineKind: 2,
+        polylineFlags: 0,
+        elevation: 0,
+        normal: [0, 0, 1],
+        defaultStartWidth: 2,
+        defaultEndWidth: 2,
+        constantWidth: 0,
+      },
+      [
+        { position: [0, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+        { position: [10, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+      ],
+    ),
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: false },
+  );
+  const points = primitivePointsForHandle(result.solidOutlines, handle);
+
+  assert.equal(result.metrics.renderedOutlineWidePolylines, 1);
+  assert.equal(result.metrics.widePolylineOutlineVertices, 8);
+  assert.deepEqual([...result.lineReplacementHandleWords], [901, 0]);
+  assert.equal(points.length, 8);
+  assert.deepEqual(
+    [
+      Math.min(...points.map((point) => point[0])),
+      Math.max(...points.map((point) => point[0])),
+      Math.min(...points.map((point) => point[1])),
+      Math.max(...points.map((point) => point[1])),
+    ],
+    [0, 10, -1, 1],
+  );
+});
+
+test("tessellates a closed bulge polyline across its full outer width", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const handle = 903n;
+  const result = buildPrimitiveMeshes(
+    withPolyline(
+      source,
+      {
+        handle,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        firstVertex: 0,
+        vertexCount: 2,
+        polylineKind: 2,
+        polylineFlags: 1,
+        elevation: 0,
+        normal: [0, 0, 1],
+        defaultStartWidth: 1,
+        defaultEndWidth: 1,
+        constantWidth: 2,
+      },
+      [
+        { position: [0, 0, 0], bulge: 1, startWidth: 0, endWidth: 0, flags: 0 },
+        { position: [10, 0, 0], bulge: 1, startWidth: 0, endWidth: 0, flags: 0 },
+      ],
+    ),
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: true },
+  );
+  const points = primitivePointsForHandle(result.solidFills, handle);
+  const bounds = [
+    Math.min(...points.map((point) => point[0])),
+    Math.max(...points.map((point) => point[0])),
+    Math.min(...points.map((point) => point[1])),
+    Math.max(...points.map((point) => point[1])),
+  ];
+
+  assert.ok(points.length > 100);
+  assert.deepEqual([...result.lineReplacementHandleWords], [903, 0]);
+  assert.ok(Math.abs(bounds[0] + 1) <= 2e-3);
+  assert.ok(Math.abs(bounds[1] - 11) <= 2e-3);
+  assert.ok(Math.abs(bounds[2] + 6) <= 2e-3);
+  assert.ok(Math.abs(bounds[3] - 6) <= 2e-3);
+});
+
+test("keeps the native centerline when only part of a polyline has width", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const result = buildPrimitiveMeshes(
+    withPolyline(
+      source,
+      {
+        handle: 902n,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        firstVertex: 0,
+        vertexCount: 3,
+        polylineKind: 1,
+        polylineFlags: 0,
+        elevation: 0,
+        normal: [0, 0, 1],
+        defaultStartWidth: 0,
+        defaultEndWidth: 0,
+        constantWidth: 0,
+      },
+      [
+        { position: [0, 0, 0], bulge: 0, startWidth: 2, endWidth: 2, flags: 0 },
+        { position: [10, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+        { position: [20, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+      ],
+    ),
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: true },
+  );
+
+  assert.equal(result.metrics.mixedWidthPolylines, 1);
+  assert.equal(result.metrics.renderedFilledWidePolylines, 1);
+  assert.equal(result.lineReplacementHandleWords.length, 0);
+});
+
+test("keeps the native centerline when a complete wide mesh exceeds its GPU budget", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const result = buildPrimitiveMeshes(
+    withPolyline(
+      source,
+      {
+        handle: 904n,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        firstVertex: 0,
+        vertexCount: 2,
+        polylineKind: 1,
+        polylineFlags: 0,
+        elevation: 0,
+        normal: [0, 0, 1],
+        defaultStartWidth: 0,
+        defaultEndWidth: 0,
+        constantWidth: 2,
+      },
+      [
+        { position: [0, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+        { position: [10, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+      ],
+    ),
+    metadata.blocks,
+    instanceGraph,
+    {
+      fillMode: true,
+      maximumSolidFillGpuBytes: 6 * PRIMITIVE_VERTEX_STRIDE,
+    },
+  );
+
+  assert.equal(result.metrics.widePolylineGpuLimitReached, true);
+  assert.equal(result.metrics.renderedFilledWidePolylines, 0);
+  assert.equal(result.lineReplacementHandleWords.length, 0);
 });

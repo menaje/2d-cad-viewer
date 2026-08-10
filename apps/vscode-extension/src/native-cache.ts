@@ -20,6 +20,8 @@ export const ADAPTER_PROTOCOL = "dwg-engine-adapter/1";
 export const CACHE_SCHEMA_VERSION = SCENE_CACHE_SCHEMA_VERSION;
 export const DOCTOR_REPORT_SCHEMA = "dwg-engine-doctor/1";
 export const LIBREDWG_NATIVE_ENGINE_VERSION = "0.14";
+export const LIBREDWG_ADAPTER_EXTENSION_ID =
+  "menaje.dwg-viewer-libredwg";
 const MAX_STDOUT_BYTES = 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
 const MAX_DOCTOR_STDOUT_BYTES = 64 * 1024;
@@ -30,6 +32,7 @@ export interface AdapterSelection {
   configuredPath?: string;
   environmentPath?: string;
   extensionPath: string;
+  bundledExtensionPath?: string;
   platform?: NodeJS.Platform;
   architecture?: string;
 }
@@ -41,8 +44,10 @@ export async function resolveLibreDwgAdapter(
   const architecture = selection.architecture ?? process.arch;
   const executableName =
     platform === "win32" ? "libredwg-adapter.exe" : "libredwg-adapter";
+  const bundledRoot =
+    selection.bundledExtensionPath?.trim() || selection.extensionPath;
   const bundledPath = path.join(
-    selection.extensionPath,
+    bundledRoot,
     "native",
     `${platform}-${architecture}`,
     executableName,
@@ -68,7 +73,7 @@ export async function resolveLibreDwgAdapter(
   } catch (error) {
     throw new SceneEngineError(
       "ADAPTER_NOT_FOUND",
-      "LibreDWG 변환기를 찾을 수 없습니다. DWG Viewer 설정에서 변환기 경로를 지정해 주세요.",
+      "LibreDWG 변환기를 찾을 수 없습니다. 동반 확장을 설치하거나 DWG Viewer 설정에서 변환기 경로를 지정해 주세요.",
       { cause: error },
     );
   }

@@ -1,6 +1,6 @@
 # Licensing and distribution policy
 
-Status: project licensing review updated on 2026-08-04.
+Status: project licensing review updated on 2026-08-08.
 
 This document records the repository's engineering policy. It is not legal
 advice, does not replace the applicable license texts, and does not determine
@@ -17,8 +17,9 @@ terms control.
    `THIRD_PARTY_NOTICES.md`, or this policy instead of inserting them into an
    upstream license text.
 3. Include notices according to what an artifact actually contains. The MPL
-   VSIX does not claim to contain the GPL adapter, and the separate GPL adapter
-   archive includes its own applicable licenses and corresponding source.
+   VSIX does not claim to contain the GPL adapter. The separate GPL companion
+   VSIX and standalone adapter archive each include their applicable licenses
+   and complete corresponding source.
 4. Tell executable-form recipients where they can obtain the matching
    preferred source form.
 5. Treat a published artifact and its checksum as immutable. A licensing-file
@@ -30,13 +31,14 @@ terms control.
 | Component or artifact | License | Distribution policy |
 | --- | --- | --- |
 | Repository source and documentation, unless a file states otherwise | MPL-2.0 | `LICENSE` is the complete, unmodified official MPL 2.0 text; project copyright is in `NOTICE` |
-| `dwg-viewer-vscode-<version>.vsix` | MPL-2.0, plus bundled MIT and ISC components | Includes `LICENSE.txt`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, and a README link to the corresponding tagged source |
+| `dwg-viewer-vscode-<version>.vsix` | MPL-2.0, plus bundled MIT and ISC components | Includes `LICENSE.txt`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, a source link, and only a manifest dependency on the separately packaged GPL companion |
+| `dwg-viewer-libredwg-<version>-<target>.vsix` | GPL-3.0-or-later executable; included adapter source retains MPL-2.0 notices | Platform-specific companion containing the adapter executable, exact LibreDWG source archive, adapter source, build scripts, unmodified GPLv3 and MPL 2.0 texts, manifest, and checksums |
 | `@menaje/viewer-core`, `@menaje/viewer-render-protocol`, `@menaje/viewer-ui` | MPL-2.0 | Current packages include the unmodified official MPL text, project `NOTICE`, README, and source modules |
 | `@menaje/viewer-webgl`, `@menaje/dwg-scene-source` | MPL-2.0, with MIT and ISC runtime dependencies used by WebGL | Public package archives include the unmodified official MPL text, project `NOTICE`, README, and source modules; dependency packages retain their own upstream licenses and notices |
 | `@mlightcad/shx-parser` 1.4.5 | MIT | Bundled into the Webview; its copyright and full MIT permission notice are included in `THIRD_PARTY_NOTICES.md` |
 | Earcut 3.2.3 | ISC | Bundled into the Webview; its copyright and full ISC permission notice are included in `THIRD_PARTY_NOTICES.md` |
 | DWG Viewer LibreDWG adapter source | MPL-2.0 | Included as corresponding adapter source in the separate engine archive |
-| Linked LibreDWG adapter executable and GNU LibreDWG 0.14 | GPL-3.0-or-later | Published only in a separate platform archive with the GPL text, exact LibreDWG source, adapter source, build scripts, manifest, and checksums |
+| Linked LibreDWG adapter executable and GNU LibreDWG 0.14 | GPL-3.0-or-later | Published only in separate platform artifacts with the GPL text, exact LibreDWG source, adapter source, build scripts, manifest, and checksums |
 | ACadSharp benchmark adapter source | MPL-2.0 | Development and qualification only; not part of the selected viewer runtime |
 | ACadSharp 3.6.51 | MIT | Optional process-isolated benchmark dependency; not bundled in the VSIX |
 | `dwg-converter` Rust tool | MPL-2.0 | Development and qualification tool; not included in the current VSIX or LibreDWG adapter release artifacts |
@@ -73,21 +75,31 @@ MPL text and keep project-specific copyright in `NOTICE`.
 ## GPL adapter boundary
 
 The LibreDWG adapter executable statically links GNU LibreDWG and is conveyed
-under GPL-3.0-or-later. It is not present in the MPL VSIX. The release workflow
-publishes it as a separately named archive and includes corresponding source
-in that same archive instead of relying only on an external download.
+under GPL-3.0-or-later. It is not present in the MPL VSIX. The main extension
+manifest declares `menaje.dwg-viewer-libredwg` as an extension dependency, so
+VS Code can install the separately published companion without merging its
+files into the MPL package.
+
+The release workflow first creates a separately named, source-complete GPL
+archive. It verifies every checksum and then stages each platform companion
+from that verified package. The companion therefore includes the same binary,
+the exact checksum-pinned LibreDWG source archive, adapter source and build
+scripts, license texts, notice, manifest, and checksums instead of relying only
+on a future external download. `LICENSE.txt` is byte-identical to the GPLv3
+`COPYING` file conveyed in the pinned LibreDWG 0.14 source.
 
 At runtime, the extension starts the adapter as a separate operating-system
 process. It does not load LibreDWG into the extension host or Webview. The
 current boundary exchanges command options, bounded progress records, and
 versioned Scene Cache files through `dwg-engine-adapter/1`.
 
-This technical separation is a project control, not a categorical legal
-conclusion. The GNU GPL FAQ explains that the substance and intimacy of
-communication between programs can affect whether they are treated as a
-single combined program. Any change that bundles the adapter, links LibreDWG
-into the VSIX, shares in-process data structures, or materially expands the
-private protocol requires a new licensing review before release.
+The dependency declaration and technical separation are project controls, not
+a categorical legal conclusion. The GNU GPL FAQ explains that the substance
+and intimacy of communication between programs can affect whether they are
+treated as a single combined program. Any change that places the adapter in
+the MPL VSIX, links or loads LibreDWG into the extension host, shares in-process
+data structures, or materially expands the private protocol requires a new
+licensing review before release.
 
 ## Third-party notice policy
 
@@ -115,10 +127,13 @@ so their presence is not confused with bundled runtime code.
   official MPL 2.0 plain text. Keep project-specific notices outside it.
 - Review every new runtime dependency before merging it and add its exact
   required notice before bundling.
-- Do not copy GPL-covered LibreDWG code into the VSIX or public Viewer
+- Do not copy GPL-covered LibreDWG code into the MPL VSIX or public Viewer
   packages.
-- Do not publish a linked LibreDWG adapter outside the source-complete GPL
-  package created by `adapters/libredwg/package.mjs`.
+- Build every linked LibreDWG artifact from the verified source-complete GPL
+  package created by `adapters/libredwg/package.mjs`; never stage a companion
+  from an unverified binary alone.
+- Publish all platform variants of the GPL companion before publishing the MPL
+  extension version that declares it as a dependency.
 - Re-run the Webview production-license audit and inspect the packaged VSIX.
 - Require `pnpm run check` and the release gates in
   [`distribution.md`](distribution.md) before publication.
@@ -130,3 +145,5 @@ so their presence is not confused with bundled runtime code.
 - [Mozilla MPL 2.0 FAQ](https://www.mozilla.org/en-US/MPL/2.0/FAQ/)
 - [GNU GPL FAQ](https://www.gnu.org/licenses/gpl-faq.html)
 - [GNU LibreDWG licensing statement](https://www.gnu.org/software/libredwg/)
+- [VS Code extension manifest dependencies](https://code.visualstudio.com/api/references/extension-manifest)
+- [VS Code platform-specific extensions](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#platformspecific-extensions)

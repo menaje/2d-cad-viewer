@@ -48,6 +48,7 @@ test("composes child model and block instances with the parent XREF insert", () 
   const outer = {
     ...collection(translationMat4(100, 20, 0)),
     handles: new BigUint64Array([700n]),
+    visibilityRows: new Uint32Array([1]),
   };
   const inner = {
     ...collection(translationMat4(5, 6, 0)),
@@ -57,6 +58,13 @@ test("composes child model and block instances with the parent XREF insert", () 
     instancesByBlock: new Map([
       [7, outer],
     ]),
+    layerVisibilityRows: [
+      new Uint8Array([1]),
+      new Uint8Array([1]),
+    ],
+    paperToModelScalesByVisibilityRow: new Float64Array([1, 5]),
+    linetypeScalesByVisibilityRow: new Float64Array([1, 5]),
+    annotationScalesByVisibilityRow: new Float64Array([0, 50]),
   };
   const child = {
     instancesByBlock: new Map([
@@ -82,6 +90,19 @@ test("composes child model and block instances with the parent XREF insert", () 
   assert.equal(block.measurementData[12], 105);
   assert.equal(model.handles[0], 700n);
   assert.equal(block.handles[0], 300n);
+  assert.equal(block.visibilityRows[0], 1);
+  assert.deepEqual(
+    [...composed.instanceGraph.paperToModelScalesByVisibilityRow],
+    [1, 5],
+  );
+  assert.deepEqual(
+    [...composed.instanceGraph.linetypeScalesByVisibilityRow],
+    [1, 5],
+  );
+  assert.deepEqual(
+    [...composed.instanceGraph.annotationScalesByVisibilityRow],
+    [0, 50],
+  );
 });
 
 test("resolves child root ByBlock and Layer 0 inheritance through an XREF", () => {
@@ -115,6 +136,35 @@ test("resolves child root ByBlock and Layer 0 inheritance through an XREF", () =
   assert.equal(nested.colors[0], ((2 << 30) | 6) >>> 0);
   assert.equal(nested.layerIndices[0], 4);
   assert.ok(Math.abs(nested.opacities[0] - 0.4) < 1e-6);
+});
+
+test("composes XREF-local mask bases inside the parent order interval", () => {
+  const outer = {
+    ...collection(translationMat4(100, 20, 0)),
+    maskBases: new Float32Array([4]),
+  };
+  const inner = {
+    ...collection(translationMat4(5, 6, 0)),
+    maskBases: new Uint32Array([3]),
+  };
+  const composed = composeExternalInstanceGraph(
+    { instancesByBlock: new Map([[7, outer]]) },
+    7,
+    { instancesByBlock: new Map([[3, inner]]) },
+    [],
+    null,
+    null,
+    0.125,
+  );
+
+  assert.equal(
+    composed.instanceGraph.instancesByBlock.get(-1).maskBases[0],
+    4,
+  );
+  assert.equal(
+    composed.instanceGraph.instancesByBlock.get(3).maskBases[0],
+    4.375,
+  );
 });
 
 test("maps XREF-dependent layers before falling back to local names", () => {

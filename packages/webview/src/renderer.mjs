@@ -22,6 +22,7 @@ import {
   transformedBounds2D,
 } from "./math.mjs";
 import {
+  DRAW_ORDER_SUBDIVISIONS,
   encodeMaskBucket,
   MAX_GLOBAL_MASK_BUCKET,
   maskBucketFor,
@@ -68,11 +69,13 @@ const MAX_INSTANCES_PER_DRAW = 16_384;
 const MAX_PRIMITIVE_GPU_BYTES = 40 * 1024 * 1024;
 const MAX_EXTERNAL_OVERVIEW_GPU_BYTES = 32 * 1024 * 1024;
 const MAX_EXTERNAL_DETAIL_GPU_BYTES = 32 * 1024 * 1024;
+const MAX_EXTERNAL_DEFERRED_GPU_BYTES = 64 * 1024 * 1024;
 const MAX_RENDER_DELTA_GPU_BYTES = 64 * 1024 * 1024;
 const MAX_RENDER_DELTA_TEXT_BYTES = 8 * 1024 * 1024;
 const MAX_RENDER_DELTA_TRANSFORM_BYTES = 8 * 1024 * 1024;
 const MAX_RENDER_DELTA_STYLE_BYTES = 8 * 1024 * 1024;
 const MAX_RENDER_DELTA_PICK_IDENTITIES = 131_072;
+const MAX_ORDERED_OVERLAY_PIXELS = 16_777_216;
 const ROOT_RENDER_DELTA_SCENE_ID = "root";
 const RENDER_DIFF_VISIBILITY_RULE = "intersect-source";
 const RENDER_DIFF_CHANGED_STATUSES = new Set([
@@ -201,7 +204,11 @@ const CAD_OPACITY_FRAGMENT_SOURCE = `
 float layerOpacity(uint layerIndex) {
   if (layerIndex >= uint(u_layerCount)) return 1.0;
   float packed =
-    texelFetch(u_layerColors, ivec2(int(layerIndex), 0), 0).a * 255.0;
+    texelFetch(
+      u_layerColors,
+      ivec2(int(layerIndex), v_visibilityRow),
+      0
+    ).a * 255.0;
   if (packed <= 0.5) return 0.0;
   return clamp((packed - 1.0) / 254.0, 0.0, 1.0);
 }
@@ -235,6 +242,7 @@ layout(location = 15) in uint a_instanceLinetype;
 
 uniform mat4 u_projection;
 uniform vec2 u_lineOffset;
+uniform float u_maskBucketScale;
 
 flat out uint v_encodedColor;
 flat out uint v_layerIndex;
@@ -254,7 +262,8 @@ void main() {
   vec4 viewPosition = a_instanceMatrix * vec4(a_localPosition, 1.0);
   gl_Position = u_projection * viewPosition;
   float orderDepth =
-    (a_maskBase + float(a_style >> 17u)) / ${MAX_GLOBAL_MASK_BUCKET}.0;
+    (a_maskBase + float(a_style >> 17u) * u_maskBucketScale) /
+    ${MAX_GLOBAL_MASK_BUCKET}.0;
   gl_Position.z = (orderDepth * 2.0 - 1.0) * gl_Position.w;
   gl_Position.xy += u_lineOffset * gl_Position.w;
   v_encodedColor = a_encodedColor;
@@ -313,6 +322,7 @@ uniform bool u_plotStylesEnabled;
 uniform bool u_curveReplacementEnabled;
 uniform float u_lineWeightThreshold;
 uniform float u_globalLinetypeScale;
+uniform float u_viewportLinetypeScale;
 uniform float u_worldPerPixel;
 uniform bool u_diffColorEnabled;
 uniform vec3 u_diffColor;
@@ -365,7 +375,7 @@ uint resolvedPlotStyleIndex() {
   return layerIndex < uint(u_layerCount)
     ? texelFetch(
         u_layerPlotStyleIndices,
-        ivec2(int(layerIndex), 0),
+        ivec2(int(layerIndex), v_visibilityRow),
         0
       ).r
     : 0u;
@@ -389,7 +399,7 @@ int resolvedLineWeight() {
     if (layerIndex < uint(u_layerCount)) {
       value = texelFetch(
         u_layerLineWeights,
-        ivec2(int(layerIndex), 0),
+        ivec2(int(layerIndex), v_visibilityRow),
         0
       ).r;
     }
@@ -404,7 +414,11 @@ uint resolvedLinetypeCode() {
   if (code == 0u) {
     uint layerIndex = resolvedLayerIndex();
     return layerIndex < uint(u_layerCount)
-      ? texelFetch(u_layerLinetypes, ivec2(int(layerIndex), 0), 0).r
+      ? texelFetch(
+          u_layerLinetypes,
+          ivec2(int(layerIndex), v_visibilityRow),
+          0
+        ).r
       : 2u;
   }
   if (code == 1u) return max(v_instanceLinetype, 2u);
@@ -416,7 +430,10 @@ bool linetypeVisible() {
   if (code <= 2u || code >= uint(u_linetypeCount)) return true;
   vec4 header =
     texelFetch(u_linetypeHeaders, ivec2(int(code), 0), 0);
-  float scale = max(u_globalLinetypeScale, 1.0e-9);
+  float scale = max(
+    u_globalLinetypeScale * u_viewportLinetypeScale,
+    1.0e-9
+  );
   float patternLength = header.x * scale;
   int firstDash = int(header.y + 0.5);
   int dashCount = int(header.z + 0.5);
@@ -457,7 +474,11 @@ vec4 resolveColor() {
     uint layerIndex = resolvedLayerIndex();
     if (layerIndex >= uint(u_layerCount)) return vec4(1.0);
     return vec4(
-      texelFetch(u_layerColors, ivec2(int(layerIndex), 0), 0).rgb,
+      texelFetch(
+        u_layerColors,
+        ivec2(int(layerIndex), v_visibilityRow),
+        0
+      ).rgb,
       1.0
     );
   }
@@ -496,7 +517,7 @@ void main() {
     resolvedLayerIndex() < uint(u_layerCount) &&
     texelFetch(
       u_layerColors,
-      ivec2(int(resolvedLayerIndex()), 0),
+      ivec2(int(resolvedLayerIndex()), v_visibilityRow),
       0
     ).a <= 0.0
   ) discard;
@@ -526,12 +547,14 @@ layout(location = 13) in uint a_instanceLayerIndex;
 layout(location = 14) in float a_instanceOpacity;
 
 uniform mat4 u_projection;
+uniform float u_maskBucketScale;
 
 flat out uint v_layerIndex;
 flat out uint v_firstColor;
 flat out uint v_lastColor;
 flat out uint v_style;
 out float v_mix;
+out vec3 v_gradientPosition;
 flat out int v_clipId;
 flat out uint v_instanceColor;
 flat out uint v_instanceLayerIndex;
@@ -543,13 +566,15 @@ void main() {
   vec4 viewPosition = a_instanceMatrix * vec4(a_localPosition, 1.0);
   gl_Position = u_projection * viewPosition;
   float orderDepth =
-    (a_maskBase + float(a_style >> 17u)) / ${MAX_GLOBAL_MASK_BUCKET}.0;
+    (a_maskBase + float(a_style >> 17u) * u_maskBucketScale) /
+    ${MAX_GLOBAL_MASK_BUCKET}.0;
   gl_Position.z = (orderDepth * 2.0 - 1.0) * gl_Position.w;
   v_layerIndex = a_layerIndex;
   v_firstColor = a_firstColor;
   v_lastColor = a_lastColor;
   v_style = a_style;
   v_mix = a_mix;
+  v_gradientPosition = a_localPosition;
   int packedClipVisibility = int(a_clipId + 0.5);
   v_clipId = packedClipVisibility & ${MAX_PACKED_CLIP_ID};
   v_visibilityRow = packedClipVisibility >> ${CLIP_ID_BITS};
@@ -570,6 +595,7 @@ flat in uint v_firstColor;
 flat in uint v_lastColor;
 flat in uint v_style;
 in float v_mix;
+in vec3 v_gradientPosition;
 flat in int v_clipId;
 flat in uint v_instanceColor;
 flat in uint v_instanceLayerIndex;
@@ -585,6 +611,12 @@ uniform int u_layerZeroIndex;
 uniform bool u_diffColorEnabled;
 uniform vec3 u_diffColor;
 uniform float u_diffOpacity;
+uniform int u_gradientKind;
+uniform vec3 u_gradientAlongAxis;
+uniform vec3 u_gradientAcrossAxis;
+uniform vec2 u_gradientAlongRange;
+uniform vec2 u_gradientAcrossRange;
+uniform float u_gradientShift;
 ${CLIP_FRAGMENT_SOURCE}
 
 out vec4 outColor;
@@ -619,7 +651,11 @@ vec4 resolveColor(uint encodedColor) {
     uint layerIndex = resolvedLayerIndex();
     if (layerIndex >= uint(u_layerCount)) return vec4(1.0);
     return vec4(
-      texelFetch(u_layerColors, ivec2(int(layerIndex), 0), 0).rgb,
+      texelFetch(
+        u_layerColors,
+        ivec2(int(layerIndex), v_visibilityRow),
+        0
+      ).rgb,
       1.0
     );
   }
@@ -647,6 +683,79 @@ vec4 resolveColor(uint encodedColor) {
   );
 }
 
+float maximumCornerDistance(vec2 center) {
+  return max(
+    max(length(center), length(vec2(1.0 - center.x, center.y))),
+    max(
+      length(vec2(center.x, 1.0 - center.y)),
+      length(vec2(1.0) - center)
+    )
+  );
+}
+
+float resolvedGradientMix() {
+  if (u_gradientKind == 0) return clamp(v_mix, 0.0, 1.0);
+  float alongSpan = u_gradientAlongRange.y - u_gradientAlongRange.x;
+  if (alongSpan <= 1.0e-12) return 0.0;
+  float acrossSpan = u_gradientAcrossRange.y - u_gradientAcrossRange.x;
+  float along = dot(v_gradientPosition, u_gradientAlongAxis);
+  float across = dot(v_gradientPosition, u_gradientAcrossAxis);
+  float u = clamp(
+    (along - u_gradientAlongRange.x) / alongSpan,
+    0.0,
+    1.0
+  );
+  float v = acrossSpan <= 1.0e-12
+    ? 0.5
+    : clamp(
+        (across - u_gradientAcrossRange.x) / acrossSpan,
+        0.0,
+        1.0
+      );
+  float centered = clamp(u_gradientShift, 0.0, 1.0);
+  vec2 center = vec2(0.25 + centered * 0.25);
+  float cylinder = clamp(
+    1.0 - abs(u - center.x) / max(center.x, 1.0 - center.x),
+    0.0,
+    1.0
+  );
+  float spherical = clamp(
+    1.0 - length(vec2(u, v) - center) / maximumCornerDistance(center),
+    0.0,
+    1.0
+  );
+  vec2 hemisphereCenter = vec2(
+    0.75 + centered * 0.25,
+    0.25 + centered * 0.25
+  );
+  float hemispherical = clamp(
+    1.0 -
+      length(vec2(u, v) - hemisphereCenter) /
+        maximumCornerDistance(hemisphereCenter),
+    0.0,
+    1.0
+  );
+  float curvedCenter = 0.25 + centered * 0.25;
+  float curved = clamp(
+    u + (0.5 - curvedCenter) -
+      0.5 * pow(2.0 * (v - curvedCenter), 2.0),
+    0.0,
+    1.0
+  );
+  if (u_gradientKind == 1) {
+    return u;
+  }
+  if (u_gradientKind == 2) return cylinder;
+  if (u_gradientKind == 3) return 1.0 - cylinder;
+  if (u_gradientKind == 4) return spherical;
+  if (u_gradientKind == 5) return hemispherical;
+  if (u_gradientKind == 6) return curved;
+  if (u_gradientKind == 7) return 1.0 - spherical;
+  if (u_gradientKind == 8) return 1.0 - hemispherical;
+  if (u_gradientKind == 9) return 1.0 - curved;
+  return u;
+}
+
 void main() {
   if (outsideInsertClips(v_clipId, v_viewPosition)) discard;
   if ((v_style & (1u << 16u)) != 0u) discard;
@@ -655,17 +764,18 @@ void main() {
     resolvedLayerIndex() < uint(u_layerCount) &&
     texelFetch(
       u_layerColors,
-      ivec2(int(resolvedLayerIndex()), 0),
+      ivec2(int(resolvedLayerIndex()), v_visibilityRow),
       0
     ).a <= 0.0
   ) discard;
   vec4 firstColor = resolveColor(v_firstColor);
   vec4 lastColor = resolveColor(v_lastColor);
-  outColor = mix(firstColor, lastColor, clamp(v_mix, 0.0, 1.0));
+  float gradientMix = resolvedGradientMix();
+  outColor = mix(firstColor, lastColor, gradientMix);
   outColor.a = mix(
     resolveOpacity(v_firstColor),
     resolveOpacity(v_lastColor),
-    clamp(v_mix, 0.0, 1.0)
+    gradientMix
   );
   if (u_diffColorEnabled) outColor.rgb = u_diffColor;
   outColor.a *= u_diffOpacity;
@@ -693,6 +803,7 @@ layout(location = 14) in float a_instanceOpacity;
 uniform mat4 u_projection;
 uniform float u_viewportHeight;
 uniform float u_pixelsPerWorld;
+uniform float u_maskBucketScale;
 
 flat out uint v_encodedColor;
 flat out uint v_layerIndex;
@@ -710,7 +821,12 @@ void main() {
   vec4 viewPosition = a_instanceMatrix * vec4(a_localPosition, 1.0);
   gl_Position = u_projection * viewPosition;
   float orderDepth =
-    (a_maskBase + float(a_style >> 17u)) / ${MAX_GLOBAL_MASK_BUCKET}.0;
+    max(
+      a_maskBase +
+      (float(a_style >> 17u) - 0.25) * u_maskBucketScale,
+      0.0
+    ) /
+    ${MAX_GLOBAL_MASK_BUCKET}.0;
   gl_Position.z = (orderDepth * 2.0 - 1.0) * gl_Position.w;
   uint mode = a_style & 65535u;
   float markerSize =
@@ -796,7 +912,11 @@ vec4 resolveColor() {
     uint layerIndex = resolvedLayerIndex();
     if (layerIndex >= uint(u_layerCount)) return vec4(1.0);
     return vec4(
-      texelFetch(u_layerColors, ivec2(int(layerIndex), 0), 0).rgb,
+      texelFetch(
+        u_layerColors,
+        ivec2(int(layerIndex), v_visibilityRow),
+        0
+      ).rgb,
       1.0
     );
   }
@@ -832,7 +952,7 @@ void main() {
     resolvedLayerIndex() < uint(u_layerCount) &&
     texelFetch(
       u_layerColors,
-      ivec2(int(resolvedLayerIndex()), 0),
+      ivec2(int(resolvedLayerIndex()), v_visibilityRow),
       0
     ).a <= 0.0
   ) discard;
@@ -872,6 +992,61 @@ void main() {
   if (u_diffColorEnabled) outColor.rgb = u_diffColor;
   outColor.a *= u_diffOpacity;
   if (outColor.a <= 0.0) discard;
+}
+`;
+
+const ORDERED_OVERLAY_VERTEX_SHADER = `#version 300 es
+precision highp float;
+
+out vec2 v_textureCoordinate;
+
+void main() {
+  const vec2 positions[3] = vec2[3](
+    vec2(-1.0, -1.0),
+    vec2(3.0, -1.0),
+    vec2(-1.0, 3.0)
+  );
+  vec2 position = positions[gl_VertexID];
+  gl_Position = vec4(position, 0.0, 1.0);
+  v_textureCoordinate = position * 0.5 + 0.5;
+}
+`;
+
+const ORDERED_OVERLAY_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+in vec2 v_textureCoordinate;
+
+uniform sampler2D u_overlayColor;
+uniform sampler2D u_overlayOrder;
+uniform float u_fallbackDepth;
+uniform float u_orderBias;
+
+out vec4 outColor;
+
+void main() {
+  vec4 color = texture(u_overlayColor, v_textureCoordinate);
+  if (color.a <= 0.0) discard;
+  vec3 encodedBytes = floor(
+    texture(u_overlayOrder, v_textureCoordinate).rgb * 255.0 + 0.5
+  );
+  float encoded =
+    encodedBytes.r + encodedBytes.g * 256.0 + encodedBytes.b * 65536.0;
+  float bucket = encoded >= 1.0
+    ? max(
+        encoded - 1.0 +
+        u_orderBias * ${DRAW_ORDER_SUBDIVISIONS}.0,
+        0.0
+      )
+    : u_fallbackDepth *
+      ${MAX_GLOBAL_MASK_BUCKET * DRAW_ORDER_SUBDIVISIONS}.0;
+  gl_FragDepth = clamp(
+    bucket /
+      ${MAX_GLOBAL_MASK_BUCKET * DRAW_ORDER_SUBDIVISIONS}.0,
+    0.0,
+    1.0
+  );
+  outColor = color;
 }
 `;
 
@@ -918,24 +1093,37 @@ function makeLayerPixels(
   layers,
   visibility,
   palette = DEFAULT_ACI_PALETTE,
+  colorRows = null,
 ) {
-  const pixels = new Uint8Array(Math.max(layers.length, 1) * 4);
+  const rows =
+    Array.isArray(colorRows) && colorRows.length > 0
+      ? colorRows
+      : [Uint32Array.from(layers, (layer) => layer.color >>> 0)];
+  const width = Math.max(layers.length, 1);
+  const pixels = new Uint8Array(width * rows.length * 4);
   if (layers.length === 0) {
-    pixels.set([235, 235, 235, 255]);
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      pixels.set([235, 235, 235, 255], rowIndex * 4);
+    }
     return pixels;
   }
-  for (let index = 0; index < layers.length; index += 1) {
-    const [red, green, blue] = decodeCadColor(layers[index].color, {
-      palette,
-    });
-    const opacity = decodeCadOpacity(layers[index].color);
-    const packedOpacity = visibility[index]
-      ? 1 + Math.round(opacity * 254)
-      : 0;
-    pixels.set(
-      [red, green, blue, packedOpacity],
-      index * 4,
-    );
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (!(row instanceof Uint32Array) || row.length !== layers.length) {
+      throw new TypeError(`viewport layer color row ${rowIndex} is invalid`);
+    }
+    for (let index = 0; index < layers.length; index += 1) {
+      const encoded = row[index];
+      const [red, green, blue] = decodeCadColor(encoded, { palette });
+      const opacity = decodeCadOpacity(encoded);
+      const packedOpacity = visibility[index]
+        ? 1 + Math.round(opacity * 254)
+        : 0;
+      pixels.set(
+        [red, green, blue, packedOpacity],
+        (rowIndex * width + index) * 4,
+      );
+    }
   }
   return pixels;
 }
@@ -1221,6 +1409,65 @@ function renderDiffInstanceGroups(
   );
 }
 
+function viewportLinetypeScaleForInstance(
+  instanceGraph,
+  instances,
+  instanceIndex,
+) {
+  const visibilityRow = instances.visibilityRows?.[instanceIndex] ?? 0;
+  const scale =
+    instanceGraph.linetypeScalesByVisibilityRow?.[visibilityRow] ?? 1;
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+function splitInstanceGroupsByViewportLinetypeScale(
+  instanceGroups,
+  instances,
+  instanceGraph,
+) {
+  if (!instanceGraph.linetypeScalesByVisibilityRow) {
+    return instanceGroups;
+  }
+  const output = [];
+  for (const group of instanceGroups) {
+    const total = group.instanceIndices?.length ?? instances.count;
+    const indicesByScale = new Map();
+    for (let index = 0; index < total; index += 1) {
+      const instanceIndex = group.instanceIndices?.[index] ?? index;
+      const scale = viewportLinetypeScaleForInstance(
+        instanceGraph,
+        instances,
+        instanceIndex,
+      );
+      let selected = indicesByScale.get(scale);
+      if (!selected) {
+        selected = [];
+        indicesByScale.set(scale, selected);
+      }
+      selected.push(instanceIndex);
+    }
+    if (indicesByScale.size === 1) {
+      output.push(
+        Object.freeze({
+          ...group,
+          linetypeScale: indicesByScale.keys().next().value,
+        }),
+      );
+      continue;
+    }
+    for (const [linetypeScale, selected] of indicesByScale) {
+      output.push(
+        Object.freeze({
+          ...group,
+          instanceIndices: Uint32Array.from(selected),
+          linetypeScale,
+        }),
+      );
+    }
+  }
+  return Object.freeze(output);
+}
+
 function overlayCameraTransform(anchor, camera, width, height) {
   if (
     !anchor ||
@@ -1266,6 +1513,15 @@ function resetOverlayTransform(overlay) {
   style.transform = "";
   style.transformOrigin = "";
   style.willChange = "";
+  return true;
+}
+
+function setOverlayComposited(overlay, composited) {
+  const style = overlay?.canvas?.style;
+  if (!style) {
+    return false;
+  }
+  style.opacity = composited ? "0" : "";
   return true;
 }
 
@@ -1428,19 +1684,42 @@ function modelOwnerHandle(blocks) {
   return modelBlocks.length === 1 ? modelBlocks[0].handle : null;
 }
 
+function batchOwnerHandle(batch, blocks) {
+  const ownerHandle =
+    batch.blockIndex === null ||
+    batch.blockIndex === undefined ||
+    batch.blockIndex < 0
+      ? modelOwnerHandle(blocks)
+      : blocks[batch.blockIndex]?.handle;
+  if (ownerHandle === null || ownerHandle === undefined) {
+    throw new Error("draw order requires one resolvable entity owner");
+  }
+  return ownerHandle;
+}
+
 function patchLineMaskBuckets(
   buffer,
   batches,
   maskOrder,
   blocks,
   firstBufferVertex = 0,
+  recordSize = VERTEX_STRIDE,
 ) {
   if (!maskOrder?.enabled || buffer.byteLength === 0) {
     return;
   }
+  if (
+    !(buffer instanceof ArrayBuffer) ||
+    !Number.isSafeInteger(recordSize) ||
+    recordSize < 32 ||
+    buffer.byteLength % recordSize !== 0 ||
+    !Number.isSafeInteger(firstBufferVertex) ||
+    firstBufferVertex < 0
+  ) {
+    throw new TypeError("line draw-order payload is inconsistent");
+  }
   const view = new DataView(buffer);
-  const vertexCount = buffer.byteLength / VERTEX_STRIDE;
-  const modelHandle = modelOwnerHandle(blocks);
+  const vertexCount = buffer.byteLength / recordSize;
   for (const batch of batches) {
     const first = Math.max(batch.firstVertex, firstBufferVertex);
     const end = Math.min(
@@ -1450,16 +1729,10 @@ function patchLineMaskBuckets(
     if (first >= end) {
       continue;
     }
-    const ownerHandle =
-      batch.blockIndex === null || batch.blockIndex === undefined
-        ? modelHandle
-        : blocks[batch.blockIndex]?.handle;
-    if (ownerHandle === null || ownerHandle === undefined) {
-      throw new Error("mask order requires one resolvable model owner");
-    }
+    const ownerHandle = batchOwnerHandle(batch, blocks);
     for (let vertex = first; vertex < end; vertex += 1) {
       const localVertex = vertex - firstBufferVertex;
-      const offset = localVertex * VERTEX_STRIDE;
+      const offset = localVertex * recordSize;
       const handle =
         BigInt(view.getUint32(offset + 20, true)) |
         (BigInt(view.getUint32(offset + 24, true)) << 32n);
@@ -1474,9 +1747,32 @@ function patchLineMaskBuckets(
   }
 }
 
-function curveHandleSet(handleWords) {
+function patchStyleMaskBucket(buffer, recordSize, bucket) {
+  if (
+    !(buffer instanceof ArrayBuffer) ||
+    !Number.isSafeInteger(recordSize) ||
+    recordSize < 32 ||
+    buffer.byteLength % recordSize !== 0
+  ) {
+    throw new TypeError("draw-order style payload is inconsistent");
+  }
+  const view = new DataView(buffer);
+  for (let offset = 0; offset < buffer.byteLength; offset += recordSize) {
+    view.setUint32(
+      offset + 28,
+      encodeMaskBucket(view.getUint32(offset + 28, true), bucket),
+      true,
+    );
+  }
+}
+
+function clearLineMaskBuckets(buffer, recordSize = VERTEX_STRIDE) {
+  patchStyleMaskBucket(buffer, recordSize, 0);
+}
+
+function handleWordSet(handleWords, label = "handle words") {
   if (!(handleWords instanceof Uint32Array) || handleWords.length % 2 !== 0) {
-    throw new TypeError("curve refinement handles must be low/high u32 pairs");
+    throw new TypeError(`${label} must be low/high u32 pairs`);
   }
   const handles = new Set();
   for (let index = 0; index < handleWords.length; index += 2) {
@@ -1698,6 +1994,45 @@ function calculateOverviewBounds(batches, instanceGraph) {
   return bounds;
 }
 
+function calculatePackedSceneBounds(batches, instanceGraph) {
+  const bounds = emptyBounds3();
+  const clipBoundsCache = new Map();
+  for (const batch of batches) {
+    const instances = instancesForBatch(batch, instanceGraph);
+    for (let index = 0; index < instances.count; index += 1) {
+      includeClippedTransformedBounds(
+        bounds,
+        batch.bounds,
+        instances,
+        index,
+        instanceGraph,
+        clipBoundsCache,
+        null,
+        null,
+      );
+    }
+  }
+  return bounds;
+}
+
+function resourceByteLength(scene) {
+  return scene?.resource?.byteLength ?? 0;
+}
+
+function externalDeferredByteLength(scene) {
+  let byteLength =
+    resourceByteLength(scene?.hatchFillScene) +
+    resourceByteLength(scene?.hatchPatternScene) +
+    resourceByteLength(scene?.pointScene) +
+    resourceByteLength(scene?.solidFillScene) +
+    resourceByteLength(scene?.solidOutlineScene) +
+    resourceByteLength(scene?.wipeoutMaskScene);
+  for (const entry of scene?.curveRefinementScene?.entries ?? []) {
+    byteLength += entry.byteLength;
+  }
+  return byteLength;
+}
+
 function includeFiniteBounds(target, source) {
   if (!source || !boundsAreFinite(source)) {
     return target;
@@ -1707,6 +2042,31 @@ function includeFiniteBounds(target, source) {
     target.max[axis] = Math.max(target.max[axis], source.max[axis]);
   }
   return target;
+}
+
+function validFillGradient(gradient) {
+  return (
+    gradient &&
+    Number.isInteger(gradient.kind) &&
+    gradient.kind >= 1 &&
+    gradient.kind <= 9 &&
+    [gradient.alongAxis, gradient.acrossAxis].every(
+      (axis) =>
+        Array.isArray(axis) &&
+        axis.length === 3 &&
+        axis.every(Number.isFinite),
+    ) &&
+    [gradient.alongRange, gradient.acrossRange].every(
+      (range) =>
+        Array.isArray(range) &&
+        range.length === 2 &&
+        range.every(Number.isFinite) &&
+        range[1] >= range[0],
+    ) &&
+    Number.isFinite(gradient.shift) &&
+    gradient.shift >= 0 &&
+    gradient.shift <= 1
+  );
 }
 
 function validatePackedScene(
@@ -1730,7 +2090,10 @@ function validatePackedScene(
     if (
       batch.firstVertex !== expectedFirstVertex ||
       batch.vertexCount <= 0 ||
-      batch.vertexCount % verticesPerPrimitive !== 0
+      batch.vertexCount % verticesPerPrimitive !== 0 ||
+      (batch.gradient !== null &&
+        batch.gradient !== undefined &&
+        !validFillGradient(batch.gradient))
     ) {
       throw new Error(`${label} batch ${batch.id} has an invalid range`);
     }
@@ -2281,6 +2644,7 @@ export class WebGlLineRenderer {
     {
       maximumExternalOverviewBytes = MAX_EXTERNAL_OVERVIEW_GPU_BYTES,
       maximumExternalDetailBytes = MAX_EXTERNAL_DETAIL_GPU_BYTES,
+      maximumExternalDeferredBytes = MAX_EXTERNAL_DEFERRED_GPU_BYTES,
       maximumRenderDeltaBytes = MAX_RENDER_DELTA_GPU_BYTES,
       maximumRenderDeltaTextBytes = MAX_RENDER_DELTA_TEXT_BYTES,
       maximumRenderDeltaTransformBytes =
@@ -2294,6 +2658,8 @@ export class WebGlLineRenderer {
       maximumExternalOverviewBytes <= 0 ||
       !Number.isSafeInteger(maximumExternalDetailBytes) ||
       maximumExternalDetailBytes <= 0 ||
+      !Number.isSafeInteger(maximumExternalDeferredBytes) ||
+      maximumExternalDeferredBytes <= 0 ||
       !Number.isSafeInteger(maximumRenderDeltaBytes) ||
       maximumRenderDeltaBytes <= 0 ||
       !Number.isSafeInteger(maximumRenderDeltaTextBytes) ||
@@ -2328,6 +2694,11 @@ export class WebGlLineRenderer {
       POINT_VERTEX_SHADER,
       POINT_FRAGMENT_SHADER,
     );
+    this.orderedOverlayProgram = createProgram(
+      gl,
+      ORDERED_OVERLAY_VERTEX_SHADER,
+      ORDERED_OVERLAY_FRAGMENT_SHADER,
+    );
     this.instanceBuffer = gl.createBuffer();
     this.layerTexture = gl.createTexture();
     this.clipTexture = gl.createTexture();
@@ -2339,15 +2710,21 @@ export class WebGlLineRenderer {
     this.linetypeHeaderTexture = gl.createTexture();
     this.linetypeDashTexture = gl.createTexture();
     this.viewportLayerVisibilityTexture = gl.createTexture();
+    this.orderedOverlayColorTexture = gl.createTexture();
+    this.orderedOverlayOrderTexture = gl.createTexture();
+    this.orderedOverlayVertexArray = gl.createVertexArray();
     this.vertexResources = new Set();
     this.detailResources = new Map();
     this.detailSelections = new Map();
     this.curveRefinementScene = null;
     this.curveReplacementHandles = new Set();
+    this.primitiveLineSuppressionKeys = new Set();
+    this.rootLineSuppressionKeys = new Set();
     this.externalScenes = new Map();
     this.supplementalBounds = new Map();
     this.maximumExternalOverviewBytes = maximumExternalOverviewBytes;
     this.maximumExternalDetailBytes = maximumExternalDetailBytes;
+    this.maximumExternalDeferredBytes = maximumExternalDeferredBytes;
     this.maximumRenderDeltaBytes = maximumRenderDeltaBytes;
     this.maximumRenderDeltaTextBytes =
       maximumRenderDeltaTextBytes;
@@ -2421,11 +2798,18 @@ export class WebGlLineRenderer {
       !this.layerLinetypeTexture ||
       !this.linetypeHeaderTexture ||
       !this.linetypeDashTexture ||
-      !this.viewportLayerVisibilityTexture
+      !this.viewportLayerVisibilityTexture ||
+      !this.orderedOverlayColorTexture ||
+      !this.orderedOverlayOrderTexture ||
+      !this.orderedOverlayVertexArray
     ) {
       throw new Error("cannot allocate WebGL buffers");
     }
     this.projectionLocation = gl.getUniformLocation(this.program, "u_projection");
+    this.maskBucketScaleLocation = gl.getUniformLocation(
+      this.program,
+      "u_maskBucketScale",
+    );
     this.layerCountLocation = gl.getUniformLocation(this.program, "u_layerCount");
     this.layerZeroIndexLocation = gl.getUniformLocation(
       this.program,
@@ -2481,6 +2865,10 @@ export class WebGlLineRenderer {
       this.program,
       "u_globalLinetypeScale",
     );
+    this.viewportLinetypeScaleLocation = gl.getUniformLocation(
+      this.program,
+      "u_viewportLinetypeScale",
+    );
     this.worldPerPixelLocation = gl.getUniformLocation(
       this.program,
       "u_worldPerPixel",
@@ -2509,6 +2897,10 @@ export class WebGlLineRenderer {
       this.fillProgram,
       "u_projection",
     );
+    this.fillMaskBucketScaleLocation = gl.getUniformLocation(
+      this.fillProgram,
+      "u_maskBucketScale",
+    );
     this.fillLayerCountLocation = gl.getUniformLocation(
       this.fillProgram,
       "u_layerCount",
@@ -2529,6 +2921,26 @@ export class WebGlLineRenderer {
       this.fillProgram,
       "u_viewportLayerVisibility",
     );
+    this.fillGradientLocations = Object.freeze({
+      kind: gl.getUniformLocation(this.fillProgram, "u_gradientKind"),
+      alongAxis: gl.getUniformLocation(
+        this.fillProgram,
+        "u_gradientAlongAxis",
+      ),
+      acrossAxis: gl.getUniformLocation(
+        this.fillProgram,
+        "u_gradientAcrossAxis",
+      ),
+      alongRange: gl.getUniformLocation(
+        this.fillProgram,
+        "u_gradientAlongRange",
+      ),
+      acrossRange: gl.getUniformLocation(
+        this.fillProgram,
+        "u_gradientAcrossRange",
+      ),
+      shift: gl.getUniformLocation(this.fillProgram, "u_gradientShift"),
+    });
     this.fillDiffLocations = Object.freeze({
       colorEnabled: gl.getUniformLocation(
         this.fillProgram,
@@ -2554,6 +2966,10 @@ export class WebGlLineRenderer {
     this.pointProjectionLocation = gl.getUniformLocation(
       this.pointProgram,
       "u_projection",
+    );
+    this.pointMaskBucketScaleLocation = gl.getUniformLocation(
+      this.pointProgram,
+      "u_maskBucketScale",
     );
     this.pointLayerCountLocation = gl.getUniformLocation(
       this.pointProgram,
@@ -2605,6 +3021,22 @@ export class WebGlLineRenderer {
       this.pointProgram,
       "u_pixelsPerWorld",
     );
+    this.orderedOverlayColorLocation = gl.getUniformLocation(
+      this.orderedOverlayProgram,
+      "u_overlayColor",
+    );
+    this.orderedOverlayOrderLocation = gl.getUniformLocation(
+      this.orderedOverlayProgram,
+      "u_overlayOrder",
+    );
+    this.orderedOverlayFallbackDepthLocation = gl.getUniformLocation(
+      this.orderedOverlayProgram,
+      "u_fallbackDepth",
+    );
+    this.orderedOverlayOrderBiasLocation = gl.getUniformLocation(
+      this.orderedOverlayProgram,
+      "u_orderBias",
+    );
     this.layerCount = 0;
     this.layerZeroIndex = -1;
     this.layers = Object.freeze([]);
@@ -2615,9 +3047,12 @@ export class WebGlLineRenderer {
     this.layerPlotStyleIndices = new Uint8Array([0]);
     this.plotStylesEnabled = false;
     this.layerLinetypeCodes = new Uint16Array([2]);
+    this.layerLinetypeTextureBytes = this.layerLinetypeCodes.byteLength;
     this.linetypeTextureData = makeLinetypeTextureData([]);
     this.globalLinetypeScale = 1;
+    this.viewportInstanceGraph = null;
     this.viewportLayerVisibilityRows = 1;
+    this.layerTextureBytes = 4;
     this.aciPalette = new Uint8Array(DEFAULT_ACI_PALETTE);
     this.uploadAciTexture();
     this.uploadPlotStyleTextures();
@@ -2648,6 +3083,7 @@ export class WebGlLineRenderer {
   }
 
   setLayers(layers) {
+    this.viewportInstanceGraph = null;
     this.layers = layers;
     this.layerZeroIndex = layers.findIndex(
       (layer) =>
@@ -2659,14 +3095,33 @@ export class WebGlLineRenderer {
     this.uploadLayerPlotStyleIndexTexture();
   }
 
-  uploadLayerTexture() {
+  uploadLayerTexture(instanceGraph = this.viewportInstanceGraph) {
     const gl = this.gl;
+    const sourceRows = instanceGraph?.layerColorsByVisibilityRow;
+    const baseRow = Uint32Array.from(
+      this.layers,
+      (layer) => layer.color >>> 0,
+    );
+    const rows =
+      Array.isArray(sourceRows) && sourceRows.length > 0
+        ? sourceRows
+        : Array.from(
+            { length: this.viewportLayerVisibilityRows },
+            () => baseRow,
+          );
+    if (rows.length !== this.viewportLayerVisibilityRows) {
+      throw new TypeError(
+        "viewport layer colors must match the visibility rows",
+      );
+    }
     const pixels = makeLayerPixels(
       this.layers,
       this.layerVisibility,
       this.aciPalette,
+      rows,
     );
     this.layerCount = this.layers.length;
+    const height = rows.length;
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -2678,15 +3133,17 @@ export class WebGlLineRenderer {
       0,
       gl.RGBA,
       Math.max(this.layers.length, 1),
-      1,
+      height,
       0,
       gl.RGBA,
       gl.UNSIGNED_BYTE,
       pixels,
     );
+    this.layerTextureBytes = pixels.byteLength;
   }
 
   setViewportLayerVisibility(instanceGraph) {
+    this.viewportInstanceGraph = instanceGraph ?? null;
     const sourceRows = instanceGraph?.layerVisibilityRows;
     const rows =
       Array.isArray(sourceRows) && sourceRows.length > 0
@@ -2743,6 +3200,10 @@ export class WebGlLineRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
     this.viewportLayerVisibilityRows = rows.length;
     this.viewportLayerVisibilityTextureBytes = data.byteLength;
+    this.uploadLayerTexture(this.viewportInstanceGraph);
+    this.uploadLineWeightTexture(this.viewportInstanceGraph);
+    this.uploadLayerPlotStyleIndexTexture(this.viewportInstanceGraph);
+    this.uploadLinetypeTextures(this.viewportInstanceGraph);
   }
 
   bindViewportLayerVisibility(location) {
@@ -2779,16 +3240,40 @@ export class WebGlLineRenderer {
     gl.activeTexture(gl.TEXTURE0);
   }
 
-  uploadLineWeightTexture() {
+  uploadLineWeightTexture(instanceGraph = this.viewportInstanceGraph) {
     const gl = this.gl;
-    this.layerLineWeights = new Int16Array(Math.max(this.layers.length, 1));
+    const sourceRows = instanceGraph?.layerLineWeightsByVisibilityRow;
+    const baseRow = Int16Array.from(this.layers, (layer) => {
+      const value = layer.lineWeight;
+      return Number.isInteger(value) && value >= -3 && value <= 211
+        ? value
+        : -3;
+    });
+    const rows =
+      Array.isArray(sourceRows) && sourceRows.length > 0
+        ? sourceRows
+        : Array.from(
+            { length: this.viewportLayerVisibilityRows },
+            () => baseRow,
+          );
+    if (rows.length !== this.viewportLayerVisibilityRows) {
+      throw new TypeError(
+        "viewport layer lineweights must match the visibility rows",
+      );
+    }
+    const width = Math.max(this.layers.length, 1);
+    this.layerLineWeights = new Int16Array(width * rows.length);
     this.layerLineWeights.fill(-3);
-    for (let index = 0; index < this.layers.length; index += 1) {
-      const value = this.layers[index].lineWeight;
-      this.layerLineWeights[index] =
-        Number.isInteger(value) && value >= -3 && value <= 211
-          ? value
-          : -3;
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
+      if (!(row instanceof Int16Array) || row.length !== this.layers.length) {
+        throw new TypeError(
+          `viewport layer lineweight row ${rowIndex} is invalid`,
+        );
+      }
+      if (this.layers.length > 0) {
+        this.layerLineWeights.set(row, rowIndex * width);
+      }
     }
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.lineWeightTexture);
@@ -2800,8 +3285,8 @@ export class WebGlLineRenderer {
       gl.TEXTURE_2D,
       0,
       gl.R16I,
-      this.layerLineWeights.length,
-      1,
+      width,
+      rows.length,
       0,
       gl.RED_INTEGER,
       gl.SHORT,
@@ -2811,12 +3296,41 @@ export class WebGlLineRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
   }
 
-  uploadLayerPlotStyleIndexTexture() {
+  uploadLayerPlotStyleIndexTexture(
+    instanceGraph = this.viewportInstanceGraph,
+  ) {
     const gl = this.gl;
-    this.layerPlotStyleIndices = Uint8Array.from(
-      this.layers.length > 0 ? this.layers : [{}],
-      (layer) => cadColorAci(layer.color ?? 0),
+    const sourceRows = instanceGraph?.layerColorsByVisibilityRow;
+    const baseRow = Uint32Array.from(
+      this.layers,
+      (layer) => layer.color >>> 0,
     );
+    const rows =
+      Array.isArray(sourceRows) && sourceRows.length > 0
+        ? sourceRows
+        : Array.from(
+            { length: this.viewportLayerVisibilityRows },
+            () => baseRow,
+          );
+    if (rows.length !== this.viewportLayerVisibilityRows) {
+      throw new TypeError(
+        "viewport layer plot styles must match the visibility rows",
+      );
+    }
+    const width = Math.max(this.layers.length, 1);
+    this.layerPlotStyleIndices = new Uint8Array(width * rows.length);
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
+      if (!(row instanceof Uint32Array) || row.length !== this.layers.length) {
+        throw new TypeError(
+          `viewport layer plot-style row ${rowIndex} is invalid`,
+        );
+      }
+      for (let layerIndex = 0; layerIndex < row.length; layerIndex += 1) {
+        this.layerPlotStyleIndices[rowIndex * width + layerIndex] =
+          cadColorAci(row[layerIndex]);
+      }
+    }
     gl.activeTexture(gl.TEXTURE0 + 9);
     gl.bindTexture(gl.TEXTURE_2D, this.layerPlotStyleIndexTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -2830,8 +3344,8 @@ export class WebGlLineRenderer {
         gl.TEXTURE_2D,
         0,
         gl.R8UI,
-        this.layerPlotStyleIndices.length,
-        1,
+        width,
+        rows.length,
         0,
         gl.RED_INTEGER,
         gl.UNSIGNED_BYTE,
@@ -2883,12 +3397,42 @@ export class WebGlLineRenderer {
     this.uploadLinetypeTextures();
   }
 
-  uploadLinetypeTextures() {
+  uploadLinetypeTextures(instanceGraph = this.viewportInstanceGraph) {
     const gl = this.gl;
-    const layerCodes =
-      this.layerLinetypeCodes.length > 0
-        ? this.layerLinetypeCodes
-        : new Uint16Array([2]);
+    const sourceRows = instanceGraph?.layerLinetypesByVisibilityRow;
+    const baseRow = Uint16Array.from(this.layers, (_, index) => {
+      const value = this.layerLinetypeCodes[index];
+      return Number.isInteger(value) && value >= 0 && value <= 2047
+        ? value
+        : 2;
+    });
+    const rows =
+      Array.isArray(sourceRows) && sourceRows.length > 0
+        ? sourceRows
+        : Array.from(
+            { length: this.viewportLayerVisibilityRows },
+            () => baseRow,
+          );
+    if (rows.length !== this.viewportLayerVisibilityRows) {
+      throw new TypeError(
+        "viewport layer linetypes must match the visibility rows",
+      );
+    }
+    const width = Math.max(this.layers.length, 1);
+    const layerCodes = new Uint16Array(width * rows.length);
+    layerCodes.fill(2);
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
+      if (!(row instanceof Uint16Array) || row.length !== this.layers.length) {
+        throw new TypeError(
+          `viewport layer linetype row ${rowIndex} is invalid`,
+        );
+      }
+      if (this.layers.length > 0) {
+        layerCodes.set(row, rowIndex * width);
+      }
+    }
+    this.layerLinetypeTextureBytes = layerCodes.byteLength;
     const { headers, dashes } = this.linetypeTextureData;
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D, this.layerLinetypeTexture);
@@ -2900,8 +3444,8 @@ export class WebGlLineRenderer {
       gl.TEXTURE_2D,
       0,
       gl.R16UI,
-      layerCodes.length,
-      1,
+      width,
+      rows.length,
       0,
       gl.RED_INTEGER,
       gl.UNSIGNED_SHORT,
@@ -2981,6 +3525,43 @@ export class WebGlLineRenderer {
     gl.uniform1i(location, 2);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
+  }
+
+  bindFillGradient(batch) {
+    const gl = this.gl;
+    const gradient = batch?.gradient;
+    if (!gradient) {
+      gl.uniform1i(this.fillGradientLocations.kind, 0);
+      return;
+    }
+    const alongOrigin = gradient.alongAxis.reduce(
+      (total, value, axis) => total + value * batch.origin[axis],
+      0,
+    );
+    const acrossOrigin = gradient.acrossAxis.reduce(
+      (total, value, axis) => total + value * batch.origin[axis],
+      0,
+    );
+    gl.uniform1i(this.fillGradientLocations.kind, gradient.kind);
+    gl.uniform3f(
+      this.fillGradientLocations.alongAxis,
+      ...gradient.alongAxis,
+    );
+    gl.uniform3f(
+      this.fillGradientLocations.acrossAxis,
+      ...gradient.acrossAxis,
+    );
+    gl.uniform2f(
+      this.fillGradientLocations.alongRange,
+      gradient.alongRange[0] - alongOrigin,
+      gradient.alongRange[1] - alongOrigin,
+    );
+    gl.uniform2f(
+      this.fillGradientLocations.acrossRange,
+      gradient.acrossRange[0] - acrossOrigin,
+      gradient.acrossRange[1] - acrossOrigin,
+    );
+    gl.uniform1f(this.fillGradientLocations.shift, gradient.shift);
   }
 
   bindLineWeightTexture() {
@@ -3136,6 +3717,7 @@ export class WebGlLineRenderer {
       );
     }
     if (this.textOverlay && this.textOverlay !== overlay) {
+      setOverlayComposited(this.textOverlay, false);
       resetOverlayTransform(this.textOverlay);
       this.textOverlay.dispose();
     }
@@ -3145,6 +3727,7 @@ export class WebGlLineRenderer {
     this.textOverlayCamera = null;
     this.lastTextMetrics = null;
     resetOverlayTransform(this.textOverlay);
+    setOverlayComposited(this.textOverlay, false);
     this.textOverlay?.setMaskVisibility?.(this.wipeoutMasksVisible);
     this.applyTextRenderDeltaState(this.renderDeltaState);
   }
@@ -3234,6 +3817,7 @@ export class WebGlLineRenderer {
       );
     }
     if (this.imageOverlay && this.imageOverlay !== overlay) {
+      setOverlayComposited(this.imageOverlay, false);
       resetOverlayTransform(this.imageOverlay);
       this.imageOverlay.dispose();
     }
@@ -3243,6 +3827,7 @@ export class WebGlLineRenderer {
     this.imageOverlayCamera = null;
     this.lastImageMetrics = null;
     resetOverlayTransform(this.imageOverlay);
+    setOverlayComposited(this.imageOverlay, false);
     this.applyImageRenderDeltaState(this.renderDeltaState);
   }
 
@@ -3733,6 +4318,18 @@ export class WebGlLineRenderer {
         `render delta GPU data exceeds the ${this.maximumRenderDeltaBytes}-byte limit`,
       );
     }
+    if (this.maskOrder) {
+      if (sceneId === ROOT_RENDER_DELTA_SCENE_ID) {
+        patchLineMaskBuckets(
+          vertices.buffer,
+          [normalizedBatch],
+          this.maskOrder,
+          this.blocks,
+        );
+      } else {
+        clearLineMaskBuckets(vertices.buffer);
+      }
+    }
     const resource = this.uploadVertices(vertices.buffer);
     const entry = Object.freeze({
       key,
@@ -3757,6 +4354,7 @@ export class WebGlLineRenderer {
     batch,
     vertices,
     instanceIndices = null,
+    entityHandle = null,
   }) {
     if (!this.overviewScene) {
       throw new Error("cannot stage a render delta before the overview");
@@ -3790,7 +4388,8 @@ export class WebGlLineRenderer {
         normalizedBatch.vertexCount * FILL_VERTEX_STRIDE ||
       vertices.buffer.byteLength !== vertices.byteLength ||
       (instanceIndices !== null &&
-        !(instanceIndices instanceof Uint32Array))
+        !(instanceIndices instanceof Uint32Array)) ||
+      (entityHandle !== null && typeof entityHandle !== "bigint")
     ) {
       throw new TypeError("render delta fill vertex payload is invalid");
     }
@@ -3812,6 +4411,21 @@ export class WebGlLineRenderer {
     ) {
       throw new RangeError(
         `render delta GPU data exceeds the ${this.maximumRenderDeltaBytes}-byte limit`,
+      );
+    }
+    if (this.maskOrder) {
+      const bucket =
+        sceneId === ROOT_RENDER_DELTA_SCENE_ID && entityHandle !== null
+          ? maskBucketFor(
+              this.maskOrder,
+              batchOwnerHandle(normalizedBatch, this.blocks),
+              entityHandle,
+            )
+          : 0;
+      patchStyleMaskBucket(
+        vertices.buffer,
+        FILL_VERTEX_STRIDE,
+        bucket,
       );
     }
     const resource = this.uploadHatchFillVertices(vertices.buffer);
@@ -3838,6 +4452,7 @@ export class WebGlLineRenderer {
     batch,
     vertices,
     instanceIndices = null,
+    entityHandle = null,
   }) {
     if (!this.overviewScene) {
       throw new Error("cannot stage a render delta before the overview");
@@ -3871,7 +4486,8 @@ export class WebGlLineRenderer {
         normalizedBatch.vertexCount * PRIMITIVE_VERTEX_STRIDE ||
       vertices.buffer.byteLength !== vertices.byteLength ||
       (instanceIndices !== null &&
-        !(instanceIndices instanceof Uint32Array))
+        !(instanceIndices instanceof Uint32Array)) ||
+      (entityHandle !== null && typeof entityHandle !== "bigint")
     ) {
       throw new TypeError("render delta point vertex payload is invalid");
     }
@@ -3893,6 +4509,21 @@ export class WebGlLineRenderer {
     ) {
       throw new RangeError(
         `render delta GPU data exceeds the ${this.maximumRenderDeltaBytes}-byte limit`,
+      );
+    }
+    if (this.maskOrder) {
+      const bucket =
+        sceneId === ROOT_RENDER_DELTA_SCENE_ID && entityHandle !== null
+          ? maskBucketFor(
+              this.maskOrder,
+              batchOwnerHandle(normalizedBatch, this.blocks),
+              entityHandle,
+            )
+          : 0;
+      patchStyleMaskBucket(
+        vertices.buffer,
+        PRIMITIVE_VERTEX_STRIDE,
+        bucket,
       );
     }
     const resource = this.uploadPointVertices(vertices.buffer);
@@ -4602,6 +5233,7 @@ export class WebGlLineRenderer {
         : emptyRenderDiffOverlayState();
     this.applyOverlayRenderDeltaState(next, nextDiffOverlay);
     this.renderDeltaState = next;
+    this.refreshRootLineSuppressionKeys();
     this.renderDiffOverlayState = nextDiffOverlay;
     this.renderDeltaTransformIndexesByGraph =
       transformIndexesByGraph;
@@ -4912,6 +5544,16 @@ export class WebGlLineRenderer {
     });
   }
 
+  refreshRootLineSuppressionKeys() {
+    this.rootLineSuppressionKeys = new Set([
+      ...this.renderDeltaState.suppressionKeys,
+      ...this.primitiveLineSuppressionKeys,
+    ]);
+    for (const scene of this.externalScenes.values()) {
+      this.refreshExternalLineSuppressionKeys(scene);
+    }
+  }
+
   renderDeltaLineRanges(
     sceneId,
     batch,
@@ -4919,7 +5561,12 @@ export class WebGlLineRenderer {
     firstBufferVertex,
     resource,
   ) {
-    if (this.renderDeltaState.suppressionKeys.size === 0) {
+    const suppressionKeys =
+      sceneId === ROOT_RENDER_DELTA_SCENE_ID
+        ? this.rootLineSuppressionKeys
+        : this.externalScenes.get(sceneId)?.lineSuppressionKeys ??
+          this.renderDeltaState.suppressionKeys;
+    if (suppressionKeys.size === 0) {
       return null;
     }
     let entries = this.renderDeltaRangeCache.get(resource);
@@ -4937,7 +5584,7 @@ export class WebGlLineRenderer {
         batch,
         firstBufferVertex,
         sceneId,
-        this.renderDeltaState.suppressionKeys,
+        suppressionKeys,
       );
       entries.set(key, ranges);
     }
@@ -5229,10 +5876,7 @@ export class WebGlLineRenderer {
     });
     if (clearExternal) {
       for (const scene of this.externalScenes.values()) {
-        this.deleteVertices(scene.resource);
-        for (const entry of scene.detailResources.values()) {
-          this.deleteVertices(entry.resource);
-        }
+        this.releaseExternalScene(scene);
       }
       this.externalScenes.clear();
     }
@@ -5248,12 +5892,88 @@ export class WebGlLineRenderer {
     return Object.freeze({ ...this.redraw(camera), camera });
   }
 
+  releasePackedScene(scene) {
+    if (scene?.resource) {
+      this.deleteVertices(scene.resource);
+    }
+  }
+
+  releaseExternalScene(scene) {
+    if (!scene) {
+      return;
+    }
+    if (scene.resource) {
+      this.deleteVertices(scene.resource);
+    }
+    for (const entry of scene.detailResources.values()) {
+      this.deleteVertices(entry.resource);
+    }
+    for (const packed of [
+      scene.hatchFillScene,
+      scene.hatchPatternScene,
+      scene.pointScene,
+      scene.solidFillScene,
+      scene.solidOutlineScene,
+      scene.wipeoutMaskScene,
+    ]) {
+      this.releasePackedScene(packed);
+    }
+    for (const entry of scene.curveRefinementScene?.entries ?? []) {
+      this.deleteVertices(entry.resource);
+    }
+  }
+
+  requireExternalDeferredBudget(previousBytes, nextBytes) {
+    const currentBytes = [...this.externalScenes.values()].reduce(
+      (total, scene) => total + externalDeferredByteLength(scene),
+      0,
+    );
+    if (
+      currentBytes - previousBytes + nextBytes >
+      this.maximumExternalDeferredBytes
+    ) {
+      throw new Error(
+        `external deferred GPU data exceeds the ${this.maximumExternalDeferredBytes}-byte limit`,
+      );
+    }
+  }
+
+  updateExternalSceneBounds(scene) {
+    const combined = emptyBounds3();
+    includeFiniteBounds(combined, scene.lineBounds);
+    for (const packed of [
+      scene.hatchFillScene,
+      scene.hatchPatternScene,
+      scene.pointScene,
+      scene.solidFillScene,
+      scene.solidOutlineScene,
+      scene.wipeoutMaskScene,
+    ]) {
+      if (packed?.batches?.length > 0) {
+        includeFiniteBounds(
+          combined,
+          calculatePackedSceneBounds(packed.batches, scene.instanceGraph),
+        );
+      }
+    }
+    for (const entry of scene.curveRefinementScene?.entries ?? []) {
+      includeFiniteBounds(
+        combined,
+        calculatePackedSceneBounds([entry.batch], scene.instanceGraph),
+      );
+    }
+    scene.bounds = boundsAreFinite(combined) ? combined : null;
+    this.recalculateCombinedBounds();
+    return scene.bounds;
+  }
+
   addExternalOverview({
     id,
     batches,
     blocks = Object.freeze([]),
     instanceGraph,
     vertices,
+    maskOrder = null,
   }) {
     if (!this.overviewScene || typeof id !== "string" || !id) {
       throw new Error("cannot add an external overview before the root scene");
@@ -5265,18 +5985,31 @@ export class WebGlLineRenderer {
     ) {
       throw new Error("external overview vertex payload is inconsistent");
     }
+    if (this.maskOrder) {
+      if (maskOrder?.enabled) {
+        patchLineMaskBuckets(
+          vertices.buffer,
+          batches,
+          maskOrder,
+          blocks,
+        );
+      } else {
+        clearLineMaskBuckets(vertices.buffer);
+      }
+    }
     const bounds = calculateOverviewBounds(batches, instanceGraph);
-    if (!boundsAreFinite(bounds)) {
+    const hasOverview = vertices.byteLength > 0;
+    if (hasOverview && !boundsAreFinite(bounds)) {
       throw new Error("external reference has no drawable overview geometry");
     }
     const previous = this.externalScenes.get(id);
     const currentBytes = [...this.externalScenes.values()].reduce(
-      (total, scene) => total + scene.resource.byteLength,
+      (total, scene) => total + (scene.resource?.byteLength ?? 0),
       0,
     );
     const nextBytes =
       currentBytes -
-      (previous?.resource.byteLength ?? 0) +
+      (previous?.resource?.byteLength ?? 0) +
       vertices.byteLength;
     if (nextBytes > this.maximumExternalOverviewBytes) {
       throw new Error(
@@ -5284,26 +6017,35 @@ export class WebGlLineRenderer {
       );
     }
     if (previous) {
-      this.deleteVertices(previous.resource);
-      for (const entry of previous.detailResources.values()) {
-        this.deleteVertices(entry.resource);
-      }
+      this.releaseExternalScene(previous);
     }
     const scene = {
       id,
       batches,
       blocks,
-      bounds,
+      bounds: hasOverview ? bounds : null,
+      lineBounds: hasOverview ? bounds : null,
       instanceGraph,
-      resource: this.uploadVertices(vertices.buffer),
+      maskOrder: maskOrder?.enabled ? maskOrder : null,
+      resource: hasOverview ? this.uploadVertices(vertices.buffer) : null,
       vertices,
       detailResources: new Map(),
       detailSelections: new Map(),
+      hatchFillScene: null,
+      hatchPatternScene: null,
+      pointScene: null,
+      solidFillScene: null,
+      solidOutlineScene: null,
+      wipeoutMaskScene: null,
+      curveRefinementScene: null,
+      curveReplacementHandles: new Set(),
+      primitiveLineSuppressionKeys: new Set(),
+      lineSuppressionKeys: new Set(this.renderDeltaState.suppressionKeys),
     };
     this.externalScenes.set(id, scene);
     this.recalculateCombinedBounds();
     return Object.freeze({
-      bounds,
+      bounds: scene.bounds,
       camera: this.fitCamera(),
       resource: scene.resource,
     });
@@ -5345,6 +6087,9 @@ export class WebGlLineRenderer {
       ],
     };
     for (const scene of this.externalScenes.values()) {
+      if (!scene.bounds || !boundsAreFinite(scene.bounds)) {
+        continue;
+      }
       for (let axis = 0; axis < 3; axis += 1) {
         combined.min[axis] = Math.min(
           combined.min[axis],
@@ -5408,6 +6153,23 @@ export class WebGlLineRenderer {
         `external GPU detail batch ${batch.id} has an invalid vertex payload`,
       );
     }
+    if (this.maskOrder) {
+      if (scene.maskOrder?.enabled) {
+        patchLineMaskBuckets(
+          vertices.buffer,
+          [batch],
+          scene.maskOrder,
+          scene.blocks,
+          batch.firstVertex,
+          vertices.recordSize ?? VERTEX_STRIDE,
+        );
+      } else {
+        clearLineMaskBuckets(
+          vertices.buffer,
+          vertices.recordSize ?? VERTEX_STRIDE,
+        );
+      }
+    }
     const currentBytes = [...this.externalScenes.values()].reduce(
       (total, externalScene) =>
         total +
@@ -5423,6 +6185,13 @@ export class WebGlLineRenderer {
     ) {
       throw new Error(
         `external detail GPU data exceeds the ${this.maximumExternalDetailBytes}-byte limit`,
+      );
+    }
+    if (scene.curveReplacementHandles.size > 0) {
+      patchCurveReplacementMarkers(
+        vertices.buffer,
+        scene.curveReplacementHandles,
+        { recordSize: vertices.recordSize ?? VERTEX_STRIDE },
       );
     }
     const entry = Object.freeze({
@@ -5454,6 +6223,327 @@ export class WebGlLineRenderer {
     scene.detailSelections = new Map(
       candidates.map((candidate) => [candidate.batch.id, candidate]),
     );
+  }
+
+  refreshExternalLineSuppressionKeys(scene) {
+    scene.lineSuppressionKeys = new Set([
+      ...this.renderDeltaState.suppressionKeys,
+      ...scene.primitiveLineSuppressionKeys,
+    ]);
+    this.renderDeltaRangeCache = new WeakMap();
+  }
+
+  setExternalPrimitiveMeshes(
+    sceneId,
+    {
+      points,
+      solidFills,
+      solidOutlines,
+      wipeoutMasks = EMPTY_PACKED_SCENE,
+      lineReplacementHandleWords = new Uint32Array(0),
+      metrics = null,
+    },
+  ) {
+    const scene = this.externalScenes.get(sceneId);
+    if (!scene) {
+      throw new Error("external scene is not available");
+    }
+    validatePackedScene(points, 1, "external POINT");
+    validatePackedScene(solidFills, 3, "external SOLID fill");
+    validatePackedScene(solidOutlines, 2, "external surface outline");
+    validatePackedScene(wipeoutMasks, 3, "external WIPEOUT mask");
+    const gpuBytes =
+      points.vertices.byteLength +
+      solidFills.vertices.byteLength +
+      solidOutlines.vertices.byteLength +
+      wipeoutMasks.vertices.byteLength;
+    if (gpuBytes > MAX_PRIMITIVE_GPU_BYTES) {
+      throw new Error(
+        `external primitive GPU payload exceeds the ${MAX_PRIMITIVE_GPU_BYTES}-byte limit`,
+      );
+    }
+    const previousBytes =
+      resourceByteLength(scene.pointScene) +
+      resourceByteLength(scene.solidFillScene) +
+      resourceByteLength(scene.solidOutlineScene) +
+      resourceByteLength(scene.wipeoutMaskScene);
+    this.requireExternalDeferredBudget(previousBytes, gpuBytes);
+    const replacementHandles = handleWordSet(
+      lineReplacementHandleWords,
+      "external primitive line replacement handles",
+    );
+    for (const packed of [
+      scene.pointScene,
+      scene.solidFillScene,
+      scene.solidOutlineScene,
+      scene.wipeoutMaskScene,
+    ]) {
+      this.releasePackedScene(packed);
+    }
+    scene.pointScene = Object.freeze({
+      batches: points.batches,
+      identityRanges: points.identityRanges,
+      resource:
+        points.vertices.byteLength > 0
+          ? this.uploadPointVertices(points.vertices.buffer)
+          : null,
+    });
+    scene.solidFillScene = Object.freeze({
+      batches: solidFills.batches,
+      identityRanges: solidFills.identityRanges,
+      resource:
+        solidFills.vertices.byteLength > 0
+          ? this.uploadHatchFillVertices(solidFills.vertices.buffer)
+          : null,
+    });
+    scene.solidOutlineScene = Object.freeze({
+      batches: solidOutlines.batches,
+      identityRanges: solidOutlines.identityRanges,
+      resource:
+        solidOutlines.vertices.byteLength > 0
+          ? this.uploadVertices(solidOutlines.vertices.buffer, {
+              stride: PRIMITIVE_VERTEX_STRIDE,
+              patternDistance: false,
+            })
+          : null,
+    });
+    scene.wipeoutMaskScene = Object.freeze({
+      batches: wipeoutMasks.batches,
+      identityRanges: wipeoutMasks.identityRanges,
+      resource:
+        wipeoutMasks.vertices.byteLength > 0
+          ? this.uploadHatchFillVertices(wipeoutMasks.vertices.buffer)
+          : null,
+    });
+    scene.primitiveLineSuppressionKeys = new Set(
+      [...replacementHandles].map((handle) =>
+        renderDeltaIdentityKey(
+          sceneId,
+          Number(handle & 0xffffffffn),
+          Number(handle >> 32n),
+        ),
+      ),
+    );
+    scene.primitiveMetrics = metrics;
+    this.refreshExternalLineSuppressionKeys(scene);
+    this.updateExternalSceneBounds(scene);
+  }
+
+  setExternalHatchFills(
+    sceneId,
+    { batches, vertices, identityRanges, metrics = null },
+  ) {
+    const scene = this.externalScenes.get(sceneId);
+    if (!scene) {
+      throw new Error("external scene is not available");
+    }
+    if (
+      !vertices ||
+      vertices.byteLength !== vertices.vertexCount * FILL_VERTEX_STRIDE ||
+      vertices.buffer.byteLength !== vertices.byteLength
+    ) {
+      throw new Error("external HATCH fill vertex payload is inconsistent");
+    }
+    let expectedFirstVertex = 0;
+    for (const batch of batches) {
+      if (
+        batch.firstVertex !== expectedFirstVertex ||
+        batch.vertexCount % 3 !== 0
+      ) {
+        throw new Error(
+          `external HATCH fill batch ${batch.id} has an invalid range`,
+        );
+      }
+      expectedFirstVertex += batch.vertexCount;
+    }
+    if (expectedFirstVertex !== vertices.vertexCount) {
+      throw new Error("external HATCH fill batches do not cover the vertex buffer");
+    }
+    validateRenderIdentityRanges(identityRanges, {
+      vertexCount: vertices.vertexCount,
+      verticesPerPrimitive: 3,
+      label: "external HATCH fill render identity ranges",
+    });
+    this.requireExternalDeferredBudget(
+      resourceByteLength(scene.hatchFillScene),
+      vertices.byteLength,
+    );
+    this.releasePackedScene(scene.hatchFillScene);
+    scene.hatchFillScene = Object.freeze({
+      batches,
+      identityRanges,
+      metrics,
+      resource:
+        vertices.byteLength > 0
+          ? this.uploadHatchFillVertices(vertices.buffer)
+          : null,
+    });
+    this.updateExternalSceneBounds(scene);
+  }
+
+  setExternalHatchPatterns(
+    sceneId,
+    { batches, vertices, identityRanges, metrics = null },
+  ) {
+    const scene = this.externalScenes.get(sceneId);
+    if (!scene) {
+      throw new Error("external scene is not available");
+    }
+    if (
+      !vertices ||
+      vertices.byteLength !==
+        vertices.vertexCount * PRIMITIVE_VERTEX_STRIDE ||
+      vertices.buffer.byteLength !== vertices.byteLength
+    ) {
+      throw new Error("external HATCH pattern vertex payload is inconsistent");
+    }
+    let expectedFirstVertex = 0;
+    for (const batch of batches) {
+      if (
+        batch.firstVertex !== expectedFirstVertex ||
+        batch.vertexCount % 2 !== 0
+      ) {
+        throw new Error(
+          `external HATCH pattern batch ${batch.id} has an invalid range`,
+        );
+      }
+      expectedFirstVertex += batch.vertexCount;
+    }
+    if (expectedFirstVertex !== vertices.vertexCount) {
+      throw new Error(
+        "external HATCH pattern batches do not cover the vertex buffer",
+      );
+    }
+    validateRenderIdentityRanges(identityRanges, {
+      vertexCount: vertices.vertexCount,
+      verticesPerPrimitive: 2,
+      label: "external HATCH pattern render identity ranges",
+    });
+    this.requireExternalDeferredBudget(
+      resourceByteLength(scene.hatchPatternScene),
+      vertices.byteLength,
+    );
+    this.releasePackedScene(scene.hatchPatternScene);
+    scene.hatchPatternScene = Object.freeze({
+      batches,
+      identityRanges,
+      metrics,
+      resource:
+        vertices.byteLength > 0
+          ? this.uploadVertices(vertices.buffer, {
+              stride: PRIMITIVE_VERTEX_STRIDE,
+              patternDistance: false,
+            })
+          : null,
+    });
+    this.updateExternalSceneBounds(scene);
+  }
+
+  applyExternalCurveReplacementHandles(scene, refinedHandles) {
+    const patch = (vertices, resource) => {
+      if (
+        !vertices ||
+        !resource ||
+        (vertices.recordSize ?? VERTEX_STRIDE) < VERTEX_STRIDE
+      ) {
+        return;
+      }
+      if (
+        patchCurveReplacementMarkers(vertices.buffer, refinedHandles, {
+          recordSize: vertices.recordSize ?? VERTEX_STRIDE,
+        })
+      ) {
+        this.updateLineVertexResource(resource, vertices);
+      }
+    };
+    patch(scene.vertices, scene.resource);
+    for (const entry of scene.detailResources.values()) {
+      patch(entry.vertices, entry.resource);
+    }
+    scene.curveReplacementHandles = refinedHandles;
+  }
+
+  setExternalCurveRefinement(
+    sceneId,
+    { entries, refinedHandleWords, cameraKey, metrics = null },
+  ) {
+    const scene = this.externalScenes.get(sceneId);
+    if (!scene) {
+      throw new Error("external scene is not available");
+    }
+    if (!Array.isArray(entries) || typeof cameraKey !== "string") {
+      throw new TypeError("external curve refinement scene is invalid");
+    }
+    const refinedHandles = handleWordSet(
+      refinedHandleWords,
+      "external curve refinement handles",
+    );
+    let byteLength = 0;
+    for (const [index, entry] of entries.entries()) {
+      const { batch, vertices } = entry ?? {};
+      if (
+        !batch ||
+        !vertices ||
+        !(vertices.buffer instanceof ArrayBuffer) ||
+        batch.id !== index ||
+        batch.firstVertex !== 0 ||
+        batch.vertexCount <= 0 ||
+        batch.vertexCount % 2 !== 0 ||
+        vertices.vertexCount !== batch.vertexCount ||
+        vertices.byteLength !== vertices.vertexCount * VERTEX_STRIDE ||
+        vertices.buffer.byteLength !== vertices.byteLength ||
+        vertices.byteLength > MAX_CURVE_REFINEMENT_BATCH_BYTES
+      ) {
+        throw new Error(`external curve refinement batch ${index} is invalid`);
+      }
+      byteLength += vertices.byteLength;
+    }
+    if (
+      byteLength > MAX_CURVE_REFINEMENT_GPU_BYTES ||
+      (refinedHandles.size === 0 && byteLength !== 0)
+    ) {
+      throw new Error("external curve refinement GPU payload exceeds its limit");
+    }
+    const previousBytes = externalDeferredByteLength({
+      curveRefinementScene: scene.curveRefinementScene,
+    });
+    this.requireExternalDeferredBudget(previousBytes, byteLength);
+    for (const entry of scene.curveRefinementScene?.entries ?? []) {
+      this.deleteVertices(entry.resource);
+    }
+    this.applyExternalCurveReplacementHandles(scene, refinedHandles);
+    scene.curveRefinementScene = Object.freeze({
+      entries: Object.freeze(
+        entries.map((entry) =>
+          Object.freeze({
+            batch: entry.batch,
+            resource: this.uploadVertices(entry.vertices.buffer),
+            byteLength: entry.vertices.byteLength,
+            vertices: entry.vertices,
+          }),
+        ),
+      ),
+      cameraKey,
+      byteLength,
+      metrics,
+    });
+    this.updateExternalSceneBounds(scene);
+    return scene.curveRefinementScene;
+  }
+
+  clearExternalCurveRefinement(sceneId) {
+    const scene = this.externalScenes.get(sceneId);
+    if (!scene) {
+      return;
+    }
+    for (const entry of scene.curveRefinementScene?.entries ?? []) {
+      this.deleteVertices(entry.resource);
+    }
+    scene.curveRefinementScene = null;
+    if (scene.curveReplacementHandles.size > 0) {
+      this.applyExternalCurveReplacementHandles(scene, new Set());
+    }
+    this.updateExternalSceneBounds(scene);
   }
 
   setMaskComposition({
@@ -5599,6 +6689,7 @@ export class WebGlLineRenderer {
     solidFills,
     solidOutlines,
     wipeoutMasks = EMPTY_PACKED_SCENE,
+    lineReplacementHandleWords = new Uint32Array(0),
     metrics = null,
   }) {
     validatePackedScene(points, 1, "POINT");
@@ -5615,6 +6706,10 @@ export class WebGlLineRenderer {
         `primitive GPU payload exceeds the ${MAX_PRIMITIVE_GPU_BYTES}-byte limit`,
       );
     }
+    const lineReplacementHandles = handleWordSet(
+      lineReplacementHandleWords,
+      "primitive line replacement handles",
+    );
     for (const scene of [
       this.pointScene,
       this.solidFillScene,
@@ -5660,6 +6755,17 @@ export class WebGlLineRenderer {
           ? this.uploadHatchFillVertices(wipeoutMasks.vertices.buffer)
           : null,
     });
+    this.primitiveLineSuppressionKeys = new Set(
+      [...lineReplacementHandles].map((handle) =>
+        renderDeltaIdentityKey(
+          ROOT_RENDER_DELTA_SCENE_ID,
+          Number(handle & 0xffffffffn),
+          Number(handle >> 32n),
+        ),
+      ),
+    );
+    this.refreshRootLineSuppressionKeys();
+    this.renderDeltaRangeCache = new WeakMap();
     this.primitiveMetrics = metrics;
   }
 
@@ -5771,7 +6877,10 @@ export class WebGlLineRenderer {
     if (!Array.isArray(entries) || typeof cameraKey !== "string") {
       throw new TypeError("curve refinement scene is invalid");
     }
-    const refinedHandles = curveHandleSet(refinedHandleWords);
+    const refinedHandles = handleWordSet(
+      refinedHandleWords,
+      "curve refinement handles",
+    );
     let byteLength = 0;
     for (const [index, entry] of entries.entries()) {
       const { batch, vertices } = entry ?? {};
@@ -5945,8 +7054,43 @@ export class WebGlLineRenderer {
     ) {
       return;
     }
+    const maskBucketScale =
+      Number.isFinite(instanceGraph.maskBucketScale) &&
+      instanceGraph.maskBucketScale > 0 &&
+      instanceGraph.maskBucketScale <= 1
+        ? instanceGraph.maskBucketScale
+        : 1;
+    const maskBucketScaleLocation =
+      primitive === gl.POINTS
+        ? this.pointMaskBucketScaleLocation
+        : primitive === gl.TRIANGLES
+          ? this.fillMaskBucketScaleLocation
+          : this.maskBucketScaleLocation;
+    if (maskBucketScaleLocation !== null) {
+      gl.uniform1f(maskBucketScaleLocation, maskBucketScale);
+    }
+    if (primitive === gl.TRIANGLES) {
+      this.bindFillGradient(batch);
+    }
+    const drawInstanceGroups =
+      primitive === gl.LINES
+        ? splitInstanceGroupsByViewportLinetypeScale(
+            instanceGroups,
+            instances,
+            instanceGraph,
+          )
+        : instanceGroups;
     gl.bindVertexArray(resource.vertexArray);
-    for (const instanceGroup of instanceGroups) {
+    for (const instanceGroup of drawInstanceGroups) {
+      if (
+        primitive === gl.LINES &&
+        this.viewportLinetypeScaleLocation !== null
+      ) {
+        gl.uniform1f(
+          this.viewportLinetypeScaleLocation,
+          instanceGroup.linetypeScale ?? 1,
+        );
+      }
       const groupRangeStyles = rangeGroups
         .map((rangeGroup) =>
           Object.freeze({
@@ -6134,6 +7278,91 @@ export class WebGlLineRenderer {
     }
   }
 
+  orderedOverlayDimensions(overlay) {
+    const colorCanvas = overlay?.canvas;
+    const orderCanvas = overlay?.orderCanvas;
+    if (
+      !colorCanvas ||
+      !orderCanvas ||
+      colorCanvas.width <= 0 ||
+      colorCanvas.height <= 0 ||
+      colorCanvas.width * colorCanvas.height >
+        MAX_ORDERED_OVERLAY_PIXELS ||
+      orderCanvas.width !== colorCanvas.width ||
+      orderCanvas.height !== colorCanvas.height
+    ) {
+      return null;
+    }
+    const gl = this.gl;
+    const maximumTextureSize = Number(
+      gl.getParameter(gl.MAX_TEXTURE_SIZE),
+    );
+    if (
+      Number.isFinite(maximumTextureSize) &&
+      maximumTextureSize > 0 &&
+      (colorCanvas.width > maximumTextureSize ||
+        colorCanvas.height > maximumTextureSize)
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      width: colorCanvas.width,
+      height: colorCanvas.height,
+      gpuBytes: colorCanvas.width * colorCanvas.height * 8,
+    });
+  }
+
+  drawOrderedOverlay(overlay, fallbackDepth) {
+    const dimensions = this.orderedOverlayDimensions(overlay);
+    if (!dimensions) {
+      return null;
+    }
+    const colorCanvas = overlay.canvas;
+    const orderCanvas = overlay.orderCanvas;
+    const gl = this.gl;
+    const upload = (texture, unit, source, filter) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        source,
+      );
+    };
+    if (Number.isInteger(gl.UNPACK_FLIP_Y_WEBGL)) {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    }
+    upload(this.orderedOverlayColorTexture, 0, colorCanvas, gl.LINEAR);
+    upload(this.orderedOverlayOrderTexture, 1, orderCanvas, gl.NEAREST);
+    if (Number.isInteger(gl.UNPACK_FLIP_Y_WEBGL)) {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    }
+    gl.useProgram(this.orderedOverlayProgram);
+    gl.uniform1i(this.orderedOverlayColorLocation, 0);
+    gl.uniform1i(this.orderedOverlayOrderLocation, 1);
+    gl.uniform1f(
+      this.orderedOverlayFallbackDepthLocation,
+      Math.max(0, Math.min(1, fallbackDepth)),
+    );
+    gl.uniform1f(
+      this.orderedOverlayOrderBiasLocation,
+      Number.isFinite(overlay.orderDepthBias)
+        ? Math.max(-0.5, Math.min(0.5, overlay.orderDepthBias))
+        : -0.25,
+    );
+    gl.bindVertexArray(this.orderedOverlayVertexArray);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 1);
+    gl.bindVertexArray(null);
+    return dimensions;
+  }
+
   redraw(
     view = this.overviewScene?.camera,
     {
@@ -6153,9 +7382,11 @@ export class WebGlLineRenderer {
     }
     let externalOverviewGpuBytes = 0;
     let externalDetailGpuBytes = 0;
+    let externalDeferredGpuBytes = 0;
     let externalDetailBatches = 0;
     for (const scene of this.externalScenes.values()) {
-      externalOverviewGpuBytes += scene.resource.byteLength;
+      externalOverviewGpuBytes += scene.resource?.byteLength ?? 0;
+      externalDeferredGpuBytes += externalDeferredByteLength(scene);
       externalDetailBatches += scene.detailResources.size;
       for (const entry of scene.detailResources.values()) {
         externalDetailGpuBytes += entry.byteLength;
@@ -6285,6 +7516,11 @@ export class WebGlLineRenderer {
       submittedVertices: 0,
       detailSubmittedVertices: 0,
       interactive,
+      orderedOverlayDrawCalls: 0,
+      orderedOverlayGpuBytes: 0,
+      orderedOverlayCompositionEnabled: false,
+      orderedImageOverlayComposited: false,
+      orderedTextOverlayComposited: false,
       instanceUploadBytes: 0,
       maximumInstanceBufferBytes: 0,
       gpuVertexBytes:
@@ -6292,6 +7528,7 @@ export class WebGlLineRenderer {
         cachedDetailGpuBytes +
         externalOverviewGpuBytes +
         externalDetailGpuBytes +
+        externalDeferredGpuBytes +
         hatchFillGpuBytes +
         hatchPatternGpuBytes +
         pointGpuBytes +
@@ -6305,14 +7542,16 @@ export class WebGlLineRenderer {
       externalScenes: this.externalScenes.size,
       externalOverviewGpuBytes,
       externalDetailGpuBytes,
+      externalDeferredGpuBytes,
       externalDetailBatches,
       bounds: this.combinedBounds ?? this.overviewScene.bounds,
       camera,
     };
 
-    const maskCompositionEnabled =
+    const drawOrderCompositionEnabled = Boolean(this.maskOrder);
+    const wipeoutMaskCompositionEnabled =
       this.wipeoutMasksVisible &&
-      Boolean(this.maskOrder) &&
+      drawOrderCompositionEnabled &&
       Boolean(this.wipeoutMaskScene?.resource) &&
       this.wipeoutMaskScene.batches.some(
         (batch) =>
@@ -6322,10 +7561,16 @@ export class WebGlLineRenderer {
             this.overviewScene.instanceGraph,
           ),
       );
+    const externalWipeoutMasksVisible =
+      this.wipeoutMasksVisible &&
+      drawOrderCompositionEnabled &&
+      [...this.externalScenes.values()].some((scene) =>
+        Boolean(scene.wipeoutMaskScene?.resource),
+      );
     gl.clearColor(0, 0, 0, 0);
     gl.clearDepth(0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (maskCompositionEnabled) {
+    if (drawOrderCompositionEnabled) {
       gl.enable(gl.DEPTH_TEST);
       gl.depthFunc(gl.GEQUAL);
       gl.depthMask(true);
@@ -6334,11 +7579,18 @@ export class WebGlLineRenderer {
     }
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
+    const externalFillsVisible = [...this.externalScenes.values()].some(
+      (scene) =>
+        Boolean(scene.solidFillScene?.resource) ||
+        Boolean(scene.hatchFillScene?.resource),
+    );
 
     if (
       this.wipeoutMaskScene?.resource ||
+      externalWipeoutMasksVisible ||
       this.solidFillScene?.resource ||
       this.hatchFillScene?.resource ||
+      externalFillsVisible ||
       this.renderDeltaState.fills.length > 0
     ) {
       gl.useProgram(this.fillProgram);
@@ -6362,34 +7614,86 @@ export class WebGlLineRenderer {
         camera,
         this.fillClipLocations,
       );
-      if (maskCompositionEnabled) {
+      if (
+        wipeoutMaskCompositionEnabled ||
+        externalWipeoutMasksVisible
+      ) {
         gl.disable(gl.BLEND);
-        for (const batch of this.wipeoutMaskScene.batches) {
-          if (
-            this.isBaseBatchInvalidated(
-              ROOT_RENDER_DELTA_SCENE_ID,
-              batch,
-              this.overviewScene.instanceGraph,
-            )
-          ) {
-            continue;
-          }
-          this.drawBatch(
-            batch,
-            this.wipeoutMaskScene.resource,
-            this.overviewScene.instanceGraph,
-            camera,
-            metrics,
-            {
-              wipeoutMask: true,
-              primitive: gl.TRIANGLES,
-              vertexRanges: this.renderDeltaIdentityRanges(
+        if (wipeoutMaskCompositionEnabled) {
+          for (const batch of this.wipeoutMaskScene.batches) {
+            if (
+              this.isBaseBatchInvalidated(
                 ROOT_RENDER_DELTA_SCENE_ID,
                 batch,
-                this.wipeoutMaskScene.identityRanges,
-                this.wipeoutMaskScene.resource,
-              ),
-            },
+                this.overviewScene.instanceGraph,
+              )
+            ) {
+              continue;
+            }
+            this.drawBatch(
+              batch,
+              this.wipeoutMaskScene.resource,
+              this.overviewScene.instanceGraph,
+              camera,
+              metrics,
+              {
+                wipeoutMask: true,
+                primitive: gl.TRIANGLES,
+                vertexRanges: this.renderDeltaIdentityRanges(
+                  ROOT_RENDER_DELTA_SCENE_ID,
+                  batch,
+                  this.wipeoutMaskScene.identityRanges,
+                  this.wipeoutMaskScene.resource,
+                ),
+              },
+            );
+          }
+        }
+        if (externalWipeoutMasksVisible) {
+          for (const scene of this.externalScenes.values()) {
+            const packed = scene.wipeoutMaskScene;
+            if (!packed?.resource) {
+              continue;
+            }
+            this.bindClipTexture(
+              scene.instanceGraph,
+              camera,
+              this.fillClipLocations,
+            );
+            for (const batch of packed.batches) {
+              if (
+                this.isBaseBatchInvalidated(
+                  scene.id,
+                  batch,
+                  scene.instanceGraph,
+                )
+              ) {
+                continue;
+              }
+              this.drawBatch(
+                batch,
+                packed.resource,
+                scene.instanceGraph,
+                camera,
+                metrics,
+                {
+                  wipeoutMask: true,
+                  diffSceneId: scene.id,
+                  primitive: gl.TRIANGLES,
+                  vertexRanges: this.renderDeltaIdentityRanges(
+                    scene.id,
+                    batch,
+                    packed.identityRanges,
+                    packed.resource,
+                  ),
+                },
+              );
+            }
+          }
+          this.bindClipTexture(
+            this.overviewScene.instanceGraph,
+            camera,
+            this.fillClipLocations,
           );
         }
       }
@@ -6469,6 +7773,58 @@ export class WebGlLineRenderer {
           );
         }
       }
+      for (const scene of this.externalScenes.values()) {
+        this.bindClipTexture(
+          scene.instanceGraph,
+          camera,
+          this.fillClipLocations,
+        );
+        for (const [packed, drawKind] of [
+          [scene.solidFillScene, "solid"],
+          [scene.hatchFillScene, "hatch"],
+        ]) {
+          if (!packed?.resource) {
+            continue;
+          }
+          for (const batch of packed.batches) {
+            if (
+              this.isBaseBatchInvalidated(
+                scene.id,
+                batch,
+                scene.instanceGraph,
+              )
+            ) {
+              continue;
+            }
+            this.drawBatch(
+              batch,
+              packed.resource,
+              scene.instanceGraph,
+              camera,
+              metrics,
+              {
+                fill: drawKind === "hatch",
+                solidFill: drawKind === "solid",
+                diffSceneId: scene.id,
+                primitive: gl.TRIANGLES,
+                vertexRanges: this.renderDeltaIdentityRanges(
+                  scene.id,
+                  batch,
+                  packed.identityRanges,
+                  packed.resource,
+                ),
+                removedVertexRanges:
+                  this.renderDiffRemovedIdentityRanges(
+                    scene.id,
+                    batch,
+                    packed.identityRanges,
+                    packed.resource,
+                  ),
+              },
+            );
+          }
+        }
+      }
       for (const entry of this.renderDeltaState.fills) {
         const scene =
           entry.sceneId === ROOT_RENDER_DELTA_SCENE_ID
@@ -6500,8 +7856,10 @@ export class WebGlLineRenderer {
     }
     if (
       !this.wipeoutMaskScene?.resource &&
+      !externalWipeoutMasksVisible &&
       !this.solidFillScene?.resource &&
       !this.hatchFillScene?.resource &&
+      !externalFillsVisible &&
       this.renderDeltaState.fills.length === 0
     ) {
       gl.enable(gl.BLEND);
@@ -6627,6 +7985,10 @@ export class WebGlLineRenderer {
         (offsetY * 2) / camera.height,
       );
       gl.uniform1f(this.lineWeightThresholdLocation, threshold);
+      gl.uniform1i(
+        this.curveReplacementEnabledLocation,
+        curveRefinementActive ? 1 : 0,
+      );
       this.bindClipTexture(
         this.overviewScene.instanceGraph,
         camera,
@@ -6745,51 +8107,110 @@ export class WebGlLineRenderer {
         );
       }
       for (const scene of this.externalScenes.values()) {
+        const externalCurveRefinementActive =
+          !interactive &&
+          Boolean(scene.curveRefinementScene) &&
+          scene.curveRefinementScene.cameraKey ===
+            curveRefinementCameraKey(camera);
+        gl.uniform1i(
+          this.curveReplacementEnabledLocation,
+          externalCurveRefinementActive ? 1 : 0,
+        );
         this.bindClipTexture(
           scene.instanceGraph,
           camera,
           this.clipLocations,
         );
-        for (const batch of scene.batches) {
-          if (batch.lodLevel !== 0) {
-            break;
-          }
-          if (
-            this.isBaseBatchInvalidated(
-              scene.id,
-              batch,
-              scene.instanceGraph,
-            )
-          ) {
+        for (const [packed, drawKind] of [
+          [scene.hatchPatternScene, "pattern"],
+          [scene.solidOutlineScene, "outline"],
+        ]) {
+          if (!packed?.resource) {
             continue;
           }
-          this.drawBatch(
-            batch,
-            scene.resource,
-            scene.instanceGraph,
-            camera,
-            metrics,
-            {
-              diffSceneId: scene.id,
-              instanceIndices:
-                externalInstanceIndices.get(scene)?.get(batch) ?? null,
-              vertexRanges: this.renderDeltaLineRanges(
+          for (const batch of packed.batches) {
+            if (
+              this.isBaseBatchInvalidated(
                 scene.id,
                 batch,
-                scene.vertices,
-                0,
-                scene.resource,
-              ),
-              removedVertexRanges:
-                this.renderDiffRemovedLineRanges(
+                scene.instanceGraph,
+              )
+            ) {
+              continue;
+            }
+            this.drawBatch(
+              batch,
+              packed.resource,
+              scene.instanceGraph,
+              camera,
+              metrics,
+              {
+                pattern: drawKind === "pattern",
+                solidOutline: drawKind === "outline",
+                diffSceneId: scene.id,
+                instanceIndices:
+                  drawKind === "pattern"
+                    ? batch.instanceIndices
+                    : null,
+                vertexRanges: this.renderDeltaIdentityRanges(
+                  scene.id,
+                  batch,
+                  packed.identityRanges,
+                  packed.resource,
+                ),
+                removedVertexRanges:
+                  this.renderDiffRemovedIdentityRanges(
+                    scene.id,
+                    batch,
+                    packed.identityRanges,
+                    packed.resource,
+                  ),
+              },
+            );
+          }
+        }
+        if (scene.resource) {
+          for (const batch of scene.batches) {
+            if (batch.lodLevel !== 0) {
+              break;
+            }
+            if (
+              this.isBaseBatchInvalidated(
+                scene.id,
+                batch,
+                scene.instanceGraph,
+              )
+            ) {
+              continue;
+            }
+            this.drawBatch(
+              batch,
+              scene.resource,
+              scene.instanceGraph,
+              camera,
+              metrics,
+              {
+                diffSceneId: scene.id,
+                instanceIndices:
+                  externalInstanceIndices.get(scene)?.get(batch) ?? null,
+                vertexRanges: this.renderDeltaLineRanges(
                   scene.id,
                   batch,
                   scene.vertices,
                   0,
                   scene.resource,
                 ),
-            },
-          );
+                removedVertexRanges:
+                  this.renderDiffRemovedLineRanges(
+                    scene.id,
+                    batch,
+                    scene.vertices,
+                    0,
+                    scene.resource,
+                  ),
+              },
+            );
+          }
         }
         for (const [batchId, candidate] of scene.detailSelections) {
           const entry = scene.detailResources.get(batchId);
@@ -6837,7 +8258,52 @@ export class WebGlLineRenderer {
             metrics.detailBatches += 1;
           }
         }
+        if (externalCurveRefinementActive) {
+          for (const entry of scene.curveRefinementScene.entries) {
+            if (
+              this.isBaseBatchInvalidated(
+                scene.id,
+                entry.batch,
+                scene.instanceGraph,
+              )
+            ) {
+              continue;
+            }
+            this.drawBatch(
+              entry.batch,
+              entry.resource,
+              scene.instanceGraph,
+              camera,
+              metrics,
+              {
+                curveRefinement: true,
+                diffSceneId: scene.id,
+                firstVertex: 0,
+                instanceIndices: entry.batch.instanceIndices,
+                vertexRanges: this.renderDeltaLineRanges(
+                  scene.id,
+                  entry.batch,
+                  entry.vertices,
+                  0,
+                  entry.resource,
+                ),
+                removedVertexRanges:
+                  this.renderDiffRemovedLineRanges(
+                    scene.id,
+                    entry.batch,
+                    entry.vertices,
+                    0,
+                    entry.resource,
+                  ),
+              },
+            );
+          }
+        }
       }
+      gl.uniform1i(
+        this.curveReplacementEnabledLocation,
+        curveRefinementActive ? 1 : 0,
+      );
       this.bindClipTexture(
         this.overviewScene.instanceGraph,
         camera,
@@ -6956,8 +8422,12 @@ export class WebGlLineRenderer {
         }
       }
     }
+    const externalPointsVisible = [...this.externalScenes.values()].some(
+      (scene) => Boolean(scene.pointScene?.resource),
+    );
     if (
       this.pointScene?.resource ||
+      externalPointsVisible ||
       this.renderDeltaState.points.length > 0
     ) {
       gl.useProgram(this.pointProgram);
@@ -7023,6 +8493,53 @@ export class WebGlLineRenderer {
           );
         }
       }
+      for (const scene of this.externalScenes.values()) {
+        const packed = scene.pointScene;
+        if (!packed?.resource) {
+          continue;
+        }
+        this.bindClipTexture(
+          scene.instanceGraph,
+          camera,
+          this.pointClipLocations,
+        );
+        for (const batch of packed.batches) {
+          if (
+            this.isBaseBatchInvalidated(
+              scene.id,
+              batch,
+              scene.instanceGraph,
+            )
+          ) {
+            continue;
+          }
+          this.drawBatch(
+            batch,
+            packed.resource,
+            scene.instanceGraph,
+            camera,
+            metrics,
+            {
+              point: true,
+              diffSceneId: scene.id,
+              primitive: gl.POINTS,
+              vertexRanges: this.renderDeltaIdentityRanges(
+                scene.id,
+                batch,
+                packed.identityRanges,
+                packed.resource,
+              ),
+              removedVertexRanges:
+                this.renderDiffRemovedIdentityRanges(
+                  scene.id,
+                  batch,
+                  packed.identityRanges,
+                  packed.resource,
+                ),
+            },
+          );
+        }
+      }
       for (const entry of this.renderDeltaState.points) {
         const scene =
           entry.sceneId === ROOT_RENDER_DELTA_SCENE_ID
@@ -7054,6 +8571,8 @@ export class WebGlLineRenderer {
     }
     gl.bindVertexArray(null);
     if (interactive) {
+      setOverlayComposited(this.imageOverlay, false);
+      setOverlayComposited(this.textOverlay, false);
       metrics.images = this.lastImageMetrics;
       metrics.text = this.lastTextMetrics;
       metrics.retainedImageOverlay = retainOverlayForCamera(
@@ -7071,20 +8590,36 @@ export class WebGlLineRenderer {
     } else {
       resetOverlayTransform(this.imageOverlay);
       resetOverlayTransform(this.textOverlay);
-      const overlayOptions = targetSize
-        ? { size: targetSize }
-        : undefined;
+      if (this.maskOrder?.generalOrderEnabled) {
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.GEQUAL);
+        gl.depthMask(true);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      }
+      const overlayOptions = (fallbackDepth) => {
+        if (!this.maskOrder?.generalOrderEnabled) {
+          return targetSize ? { size: targetSize } : undefined;
+        }
+        return {
+          ...(targetSize ? { size: targetSize } : {}),
+          canDrawOrderedLayer: (overlay) =>
+            Boolean(this.orderedOverlayDimensions(overlay)),
+          drawOrderedLayer: (overlay) =>
+            this.drawOrderedOverlay(overlay, fallbackDepth),
+        };
+      };
       this.lastImageMetrics =
         this.imageOverlay?.redraw(
           camera,
           this.layerVisibility,
-          overlayOptions,
+          overlayOptions(0),
         ) ?? null;
       this.lastTextMetrics =
         this.textOverlay?.redraw(
           camera,
           this.layerVisibility,
-          overlayOptions,
+          overlayOptions(1),
         ) ?? null;
       if (updateOverlaySnapshots) {
         this.imageOverlaySnapshot = captureOverlaySnapshot(
@@ -7102,17 +8637,43 @@ export class WebGlLineRenderer {
       metrics.text = this.lastTextMetrics;
       metrics.retainedImageOverlay = false;
       metrics.retainedTextOverlay = false;
+
+      const compose = (overlay, fallbackDepth, metricName) => {
+        if (!this.maskOrder?.generalOrderEnabled) {
+          setOverlayComposited(overlay, false);
+          return null;
+        }
+        const streamed = overlay?.lastOrderedComposition;
+        const results = streamed?.attempted
+          ? streamed.results
+          : [this.drawOrderedOverlay(overlay, fallbackDepth)];
+        const composed = results.every(Boolean);
+        setOverlayComposited(overlay, composed);
+        if (composed) {
+          metrics.drawCalls += results.length;
+          metrics.orderedOverlayDrawCalls += results.length;
+          metrics.orderedOverlayGpuBytes = Math.max(
+            metrics.orderedOverlayGpuBytes,
+            ...results.map((result) => result.gpuBytes),
+          );
+          metrics.orderedOverlayCompositionEnabled = true;
+          metrics[metricName] = true;
+        }
+        return composed ? Object.freeze(results) : null;
+      };
+      compose(this.imageOverlay, 0, "orderedImageOverlayComposited");
+      compose(this.textOverlay, 1, "orderedTextOverlayComposited");
     }
     metrics.instanceScratchBytes = this.instanceScratch.byteLength;
     metrics.instanceBufferBytes = this.instanceBufferBytes;
     metrics.peakInstanceBufferBytes = this.peakInstanceBufferBytes;
-    metrics.layerTextureBytes = Math.max(this.layerCount, 1) * 4;
+    metrics.layerTextureBytes = this.layerTextureBytes;
     metrics.lineWeightTextureBytes = this.layerLineWeights.byteLength;
     metrics.plotStyleTextureBytes =
       this.plotStyleLineWeights.byteLength +
       this.layerPlotStyleIndices.byteLength;
     metrics.layerLinetypeTextureBytes =
-      this.layerLinetypeCodes.byteLength;
+      this.layerLinetypeTextureBytes;
     metrics.linetypeTextureBytes =
       this.linetypeTextureData.headers.byteLength +
       this.linetypeTextureData.dashes.byteLength;
@@ -7134,7 +8695,8 @@ export class WebGlLineRenderer {
       metrics.linetypeTextureBytes +
       metrics.aciTextureBytes +
       metrics.clipTextureBytes +
-      metrics.viewportLayerVisibilityTextureBytes;
+      metrics.viewportLayerVisibilityTextureBytes +
+      metrics.orderedOverlayGpuBytes;
     this.peakGpuTrackedBytes = Math.max(
       this.peakGpuTrackedBytes,
       metrics.gpuTrackedBytes,
@@ -7211,13 +8773,19 @@ export class WebGlLineRenderer {
     );
     context.putImageData(imageData, 0, 0);
     context.globalCompositeOperation = "destination-over";
-    if (this.imageOverlay?.canvas) {
+    if (
+      !metrics.orderedImageOverlayComposited &&
+      this.imageOverlay?.canvas
+    ) {
       context.drawImage(this.imageOverlay.canvas, 0, 0, width, height);
     }
     context.fillStyle = background;
     context.fillRect(0, 0, width, height);
     context.globalCompositeOperation = "source-over";
-    if (this.textOverlay?.canvas) {
+    if (
+      !metrics.orderedTextOverlayComposited &&
+      this.textOverlay?.canvas
+    ) {
       context.drawImage(this.textOverlay.canvas, 0, 0, width, height);
     }
     return Object.freeze({ canvas: output, metrics });
@@ -7238,9 +8806,13 @@ export class WebGlLineRenderer {
     this.gl.deleteTexture(this.linetypeHeaderTexture);
     this.gl.deleteTexture(this.linetypeDashTexture);
     this.gl.deleteTexture(this.viewportLayerVisibilityTexture);
+    this.gl.deleteTexture(this.orderedOverlayColorTexture);
+    this.gl.deleteTexture(this.orderedOverlayOrderTexture);
+    this.gl.deleteVertexArray(this.orderedOverlayVertexArray);
     this.gl.deleteProgram(this.program);
     this.gl.deleteProgram(this.fillProgram);
     this.gl.deleteProgram(this.pointProgram);
+    this.gl.deleteProgram(this.orderedOverlayProgram);
     this.detailResources.clear();
     this.detailSelections.clear();
     this.renderDeltaResources.clear();
@@ -7273,13 +8845,17 @@ export class WebGlLineRenderer {
     this.renderDiffRangeCache = new WeakMap();
     this.curveRefinementScene = null;
     this.curveReplacementHandles.clear();
+    this.primitiveLineSuppressionKeys.clear();
+    this.rootLineSuppressionKeys.clear();
     this.externalScenes.clear();
     this.supplementalBounds.clear();
+    setOverlayComposited(this.imageOverlay, false);
     resetOverlayTransform(this.imageOverlay);
     this.imageOverlay?.dispose();
     this.imageOverlay = null;
     releaseOverlaySnapshot(this.imageOverlaySnapshot);
     this.imageOverlaySnapshot = null;
+    setOverlayComposited(this.textOverlay, false);
     resetOverlayTransform(this.textOverlay);
     this.textOverlay?.dispose();
     this.textOverlay = null;
@@ -7299,6 +8875,9 @@ export class WebGlLineRenderer {
     this.instanceBufferBytes = 0;
     this.clipTextureBytes = 0;
     this.viewportLayerVisibilityTextureBytes = 0;
+    this.layerTextureBytes = 0;
+    this.layerLinetypeTextureBytes = 0;
+    this.viewportInstanceGraph = null;
     this.boundClipGraph = null;
     this.boundClipPayload = null;
     this.boundClipOriginX = undefined;
@@ -7315,6 +8894,7 @@ export class WebGlLineRenderer {
 }
 
 export {
+  MAX_EXTERNAL_DEFERRED_GPU_BYTES,
   MAX_EXTERNAL_DETAIL_GPU_BYTES,
   MAX_EXTERNAL_OVERVIEW_GPU_BYTES,
   MAX_RENDER_DELTA_GPU_BYTES,

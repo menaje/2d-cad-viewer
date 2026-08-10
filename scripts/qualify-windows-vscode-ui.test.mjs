@@ -16,7 +16,9 @@ import {
   rectIsContained,
   viewportZoomFromStatus,
   WINDOWS_UI_CLEANUP_OPTIONS,
+  WINDOWS_UI_COMPANION_EXTENSION_ID,
   WINDOWS_UI_EXTENSION_ID,
+  WINDOWS_UI_LOCALE,
 } from "./qualify-windows-vscode-ui.mjs";
 
 test("reads the installed VS Code CLI product version", () => {
@@ -43,26 +45,29 @@ test("reads only a positive leading viewport zoom status", () => {
 
 test("parses only the bounded Windows UI qualification inputs", () => {
   const options = parseWindowsUiArguments([
-    "--adapter",
-    "./adapter.exe",
     "--drawing",
     "./drawing.dwg",
+    "--companion-vsix",
+    "./companion.vsix",
     "--vsix",
     "./viewer.vsix",
     "--output-dir",
     "./evidence",
   ]);
-  assert.equal(options.adapterPath, path.resolve("./adapter.exe"));
   assert.equal(options.drawingPath, path.resolve("./drawing.dwg"));
+  assert.equal(
+    options.companionVsixPath,
+    path.resolve("./companion.vsix"),
+  );
   assert.equal(options.vsixPath, path.resolve("./viewer.vsix"));
   assert.equal(options.outputDirectory, path.resolve("./evidence"));
   assert.throws(
     () =>
       parseWindowsUiArguments([
-        "--adapter",
-        "./adapter.exe",
         "--drawing",
         "./drawing.dwg",
+        "--companion-vsix",
+        "./companion.vsix",
         "--vsix",
         "./viewer.vsix",
         "--output-dir",
@@ -71,6 +76,10 @@ test("parses only the bounded Windows UI qualification inputs", () => {
         "value",
       ]),
     /unsupported option/u,
+  );
+  assert.equal(
+    WINDOWS_UI_COMPANION_EXTENSION_ID,
+    "menaje.dwg-viewer-libredwg",
   );
 });
 
@@ -194,13 +203,14 @@ test("adjusts the host CSS viewport by the observed editor-width delta", () => {
   );
 });
 
-test("accepts numeric coordinate and distance rows with one DWG unit", () => {
+test("accepts English-locale measurement rows with one DWG unit", () => {
+  assert.equal(WINDOWS_UI_LOCALE, "en");
   assert.deepEqual(
     parseCoordinateMeasurementRows([
       ["X", "1,234.5 mm"],
       ["Y", "-20 mm"],
       ["Z", "0 mm"],
-      ["스냅", "끝점"],
+      ["Snap", "Endpoint"],
     ]),
     {
       unit: "mm",
@@ -208,25 +218,25 @@ test("accepts numeric coordinate and distance rows with one DWG unit", () => {
         x: "1,234.5 mm",
         y: "-20 mm",
         z: "0 mm",
-        snap: "끝점",
+        snap: "Endpoint",
       },
     },
   );
   assert.deepEqual(
     parseDistanceMeasurementRows([
-      ["거리", "5 도면 단위"],
-      ["ΔX", "3 도면 단위"],
-      ["ΔY", "4 도면 단위"],
-      ["ΔZ", "0 도면 단위"],
-      ["각도", "53.1301°"],
+      ["Distance", "5 drawing units"],
+      ["ΔX", "3 drawing units"],
+      ["ΔY", "4 drawing units"],
+      ["ΔZ", "0 drawing units"],
+      ["Angle", "53.1301°"],
     ]),
     {
-      unit: "도면 단위",
+      unit: "drawing units",
       values: {
-        distance: "5 도면 단위",
-        deltaX: "3 도면 단위",
-        deltaY: "4 도면 단위",
-        deltaZ: "0 도면 단위",
+        distance: "5 drawing units",
+        deltaX: "3 drawing units",
+        deltaY: "4 drawing units",
+        deltaZ: "0 drawing units",
         angle: "53.1301°",
       },
     },
@@ -237,11 +247,11 @@ test("rejects nonnumeric or inconsistent measurement evidence", () => {
   assert.throws(
     () =>
       parseDistanceMeasurementRows([
-        ["거리", "five mm"],
+        ["Distance", "five mm"],
         ["ΔX", "3 mm"],
         ["ΔY", "4 mm"],
         ["ΔZ", "0 mm"],
-        ["각도", "53°"],
+        ["Angle", "53°"],
       ]),
     /numeric measurement/u,
   );
@@ -251,7 +261,7 @@ test("rejects nonnumeric or inconsistent measurement evidence", () => {
         ["X", "1 mm"],
         ["Y", "2 cm"],
         ["Z", "0 mm"],
-        ["스냅", "끝점"],
+        ["Snap", "Endpoint"],
       ]),
     /units are inconsistent/u,
   );

@@ -21,6 +21,8 @@ test("parses the required qualification arguments and safe defaults", () => {
     "./drawing.dwg",
     "--vsix",
     "./extension.vsix",
+    "--companion-vsix",
+    "./companion.vsix",
     "--output",
     "./report.json",
   ]);
@@ -30,6 +32,10 @@ test("parses the required qualification arguments and safe defaults", () => {
   assert.equal(options.adapterPath, path.resolve("./adapter"));
   assert.equal(options.drawingPath, path.resolve("./drawing.dwg"));
   assert.equal(options.vsixPath, path.resolve("./extension.vsix"));
+  assert.equal(
+    options.companionVsixPath,
+    path.resolve("./companion.vsix"),
+  );
   assert.equal(options.outputPath, path.resolve("./report.json"));
   assert.equal(options.scenario, "all");
   assert.equal(options.progressivePreview, false);
@@ -48,6 +54,8 @@ test("parses the required qualification arguments and safe defaults", () => {
         "./drawing.dwg",
         "--vsix",
         "./extension.vsix",
+        "--companion-vsix",
+        "./companion.vsix",
         "--output",
         "./report.json",
         "--sample-ms",
@@ -69,12 +77,37 @@ test("enables the explicit high-memory progressive preview mode", () => {
     "./drawing.dwg",
     "--vsix",
     "./extension.vsix",
+    "--companion-vsix",
+    "./companion.vsix",
     "--output",
     "./report.json",
     "--progressive-preview",
   ]);
 
   assert.equal(options.progressivePreview, true);
+});
+
+test("accepts the isolated packaged comparison scenario", () => {
+  const options = parseQualificationArgs([
+    "--code",
+    "./code",
+    "--runtime",
+    "./runtime",
+    "--adapter",
+    "./adapter",
+    "--drawing",
+    "./drawing.dwg",
+    "--vsix",
+    "./extension.vsix",
+    "--companion-vsix",
+    "./companion.vsix",
+    "--output",
+    "./report.json",
+    "--scenario",
+    "comparison",
+  ]);
+
+  assert.equal(options.scenario, "comparison");
 });
 
 test("classifies only the adapter convert process as the converter", () => {

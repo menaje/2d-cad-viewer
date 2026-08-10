@@ -8,8 +8,25 @@ drawings, Korean SHX/BigFont text, external references, and paper-space
 layouts. Your drawings and fonts stay on your computer.
 
 > This is an early public release. Editing and DWG saving are not available,
-> and the separately distributed LibreDWG converter must be connected once
-> before opening a drawing.
+> and the viewer currently supports Linux x64, macOS arm64, and Windows x64.
+
+## Why we built DWG Viewer
+
+Opening a DWG just to check one detail should not interrupt the work around it.
+A conventional viewer or CAD workflow often means leaving the current
+workspace, launching another application, waiting for it to become ready, and
+then repeating part of that wait for each drawing. A few seconds at a time can
+become a real loss of focus when many files need to be reviewed.
+
+DWG Viewer was built around VS Code's existing file workflow. Select a drawing
+in the Explorer and open it directly in an editor tab, next to the files and
+code you are already using. Local conversion and a private reusable cache are
+designed to minimize the time to a useful view and make repeat opens faster.
+
+This extension does not try to replace a full CAD editor. It aims to remove as
+much friction as possible from quick inspection, search, measurement, and
+export, so checking a drawing feels like opening another project file instead
+of starting a separate task.
 
 ## Highlights
 
@@ -34,7 +51,8 @@ layouts. Your drawings and fonts stay on your computer.
 - Use the mouse wheel or a trackpad pinch to zoom around the pointer.
 - Drag a window to zoom, return to the fitted view, move through previous and
   next views, and save named view bookmarks.
-- Compact icon tools reveal their names on hover or keyboard focus.
+- The top-right and left tool shelves can independently remain icon-only or
+  reveal every tool name together on hover or keyboard focus.
 - In-viewer controls follow the VS Code environment language for English and
   Korean.
 
@@ -63,7 +81,8 @@ layouts. Your drawings and fonts stay on your computer.
 ### Layouts and export
 
 - Switch between model space and paper-space layouts.
-- Preserve layout paper size, rotation, viewports, and frozen layers.
+- Preserve layout paper size, rotation, viewports, frozen layers, and each
+  viewport's layer colors, transparency, linetypes, and lineweights.
 - Export the current screen, current tab, or all layouts to PNG or PDF.
 - Optionally apply a referenced CTB to a layout for plot colors and
   lineweights.
@@ -76,21 +95,25 @@ layouts. Your drawings and fonts stay on your computer.
 
 - VS Code 1.125 or newer
 - Linux x64, macOS arm64, or Windows x64
-- The separately distributed LibreDWG adapter for your platform
+- The GPL LibreDWG Engine companion, installed automatically with DWG Viewer
 
 ### Installation
 
-1. Download `dwg-viewer-vscode-<version>.vsix` and the matching
-   `dwg-viewer-libredwg-0.14-<platform>.tar.gz` from
-   [GitHub Releases](https://github.com/menaje/dwg-viewer/releases).
-2. In VS Code, run **Extensions: Install from VSIX...** and select the VSIX.
-3. Extract the adapter archive into a folder controlled by your user account.
-4. Run **DWG Viewer: LibreDWG 변환기 선택** and select
-   `bin/libredwg-adapter`, or `bin\libredwg-adapter.exe` on Windows.
-5. Open a `.dwg` file from the Explorer.
+Install **DWG Viewer** from the VS Code Marketplace. VS Code also installs the
+matching **DWG Viewer — LibreDWG Engine** companion for the current platform.
+Open a `.dwg` file from the Explorer; no converter path needs to be selected.
 
-The extension checks the selected converter before saving it. You can repeat
-that check at any time with **DWG Viewer: LibreDWG 변환기 진단**.
+For a manual or offline installation, download
+`dwg-viewer-vscode-<version>.vsix` and the matching
+`dwg-viewer-libredwg-<version>-<platform>.vsix` from
+[GitHub Releases](https://github.com/menaje/dwg-viewer/releases), then install
+both with **Extensions: Install from VSIX...**. Install the GPL companion first
+when the Marketplace is unavailable.
+
+The extension checks the companion executable before using it. You can repeat
+that check at any time with **DWG Viewer: LibreDWG 변환기 진단**. The manual
+converter-selection command remains available for controlled or offline
+deployments that maintain an external adapter path.
 
 For checksums, provenance verification, macOS security approval, and
 platform-specific commands, see the
@@ -100,7 +123,9 @@ platform-specific commands, see the
 
 - **Pan:** click-drag or use a two-finger trackpad scroll.
 - **Zoom:** use the mouse wheel, trackpad pinch, or window-zoom tool.
-- **Find a tool:** hover its icon or move keyboard focus to it.
+- **Find a tool:** hover or focus a shelf to expand all of its tool names.
+- **Choose compact menus:** set **Top Toolbar Labels** and **Left Toolbar
+  Labels** under the DWG Viewer settings to `icons` or `hover` independently.
 - **Manage layers:** open the left layer panel and search or change visibility.
 - **Inspect or measure:** choose a tool, then select points or objects in the
   drawing.
@@ -108,8 +133,10 @@ platform-specific commands, see the
 - **Search drawing text:** use the Explorer **DWG 문자 검색** view.
 - **Export:** open **PNG/PDF**, choose a scope, and select output options.
 
-The tool shelf and layout tabs remain compact until hovered, keyboard-focused,
-or explicitly opened so the drawing can use most of the editor.
+The tool shelves and layout tabs remain compact until hovered,
+keyboard-focused, or explicitly opened so the drawing can use most of the
+editor. Expanding a shelf reveals all names at once without moving individual
+tool targets.
 
 ## What the viewer displays
 
@@ -118,7 +145,8 @@ or explicitly opened so the drawing can use most of the editor.
 - Solid, gradient, and patterned HATCH content
 - POINT, SOLID, 3DFACE, and WIPEOUT content
 - CAD text, attributes, Korean SHX/BigFont glyphs, and common MTEXT formatting
-- Model space, multiple layouts, viewports, and per-viewport layer freezing
+- Model space, multiple layouts, viewports, and per-viewport layer display
+  overrides
 - JPG/PNG IMAGE references and XCLIP boundaries
 - Linetypes, colors, transparency, lineweights, and optional layout CTB styles
 
@@ -145,7 +173,8 @@ equally ranked files.
 ## Current limitations
 
 - Viewing is read-only; editing, overwriting, and Save As are not available.
-- The LibreDWG adapter is a required separate download.
+- Native companions are currently published for Linux x64, macOS arm64, and
+  Windows x64.
 - Embedded OLE content such as an Excel sheet is not rendered; its placement
   frame may still be shown.
 - External raster images currently support JPG/JPEG and PNG.
@@ -160,10 +189,12 @@ along with build scripts and third-party notices. The packaged `LICENSE.txt`
 contains Mozilla's unmodified MPL 2.0 text, while `NOTICE` contains the project
 copyright notice.
 
-The GPL-3.0-or-later LibreDWG adapter is never included in the VSIX. It is
-published as a separate platform archive with its corresponding source,
-licenses, build scripts, manifest, and checksums. This separation is why the
-converter must be selected after installing the extension.
+The GPL-3.0-or-later LibreDWG adapter is never included in the MPL VSIX. VS
+Code installs it as a separately published, platform-specific GPL companion
+extension. Every companion VSIX contains its executable's complete
+corresponding source, unmodified GPLv3 and MPL 2.0 texts, build scripts,
+manifest, and checksums. The main extension starts that executable as a
+separate process; it does not load LibreDWG into the extension host.
 
 Release artifacts are reproducibly built and include SHA-256 checksums and
 GitHub build-provenance attestations. Details are in the
@@ -178,6 +209,7 @@ User documentation stays separate from implementation contracts:
 - [Architecture](https://github.com/menaje/dwg-viewer/blob/main/docs/architecture.md)
 - [Engine decision](https://github.com/menaje/dwg-viewer/blob/main/docs/engine-decision.md)
 - [Licensing policy](https://github.com/menaje/dwg-viewer/blob/main/docs/licensing.md)
+- [LibreDWG Engine companion](https://github.com/menaje/dwg-viewer/tree/main/apps/vscode-libredwg-adapter)
 - [Viewer Core](https://github.com/menaje/dwg-viewer/tree/main/packages/viewer-core)
 - [Render protocol](https://github.com/menaje/dwg-viewer/tree/main/packages/render-protocol)
 - [Viewer UI](https://github.com/menaje/dwg-viewer/tree/main/packages/viewer-ui)

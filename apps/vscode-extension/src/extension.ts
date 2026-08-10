@@ -7,6 +7,7 @@ import {
 } from "./bigfont-encoding";
 import {
   diagnoseLibreDwgAdapter,
+  LIBREDWG_ADAPTER_EXTENSION_ID,
   LibreDwgNativeSceneEngine,
   resolveLibreDwgAdapter,
 } from "./native-cache";
@@ -29,7 +30,11 @@ import {
   type QualificationFields,
   type QualificationReporter,
 } from "./qualification";
-import { renderWebviewHtml } from "./webview-html";
+import { activateRevisionComparisonQualification } from "./comparison-qualification";
+import {
+  renderWebviewHtml,
+  type MenuLabelMode,
+} from "./webview-html";
 import { XrefController } from "./xref-controller";
 import { ImageReferenceChannel } from "./image-reference-channel";
 import {
@@ -43,6 +48,21 @@ const SELECT_LIBREDWG_ADAPTER_COMMAND =
   "dwgViewer.selectLibreDwgAdapter";
 const DIAGNOSE_LIBREDWG_ADAPTER_COMMAND =
   "dwgViewer.diagnoseLibreDwgAdapter";
+
+function bundledLibreDwgExtensionPath(): string | undefined {
+  return vscode.extensions.getExtension(
+    LIBREDWG_ADAPTER_EXTENSION_ID,
+  )?.extensionPath;
+}
+
+function configuredMenuLabelMode(
+  configuration: vscode.WorkspaceConfiguration,
+  key: "topToolbarLabels" | "leftToolbarLabels",
+): MenuLabelMode {
+  return configuration.get<string>(key, "hover") === "icons"
+    ? "icons"
+    : "hover";
+}
 
 function adapterErrorDetails(error: unknown): {
   code: string;
@@ -131,6 +151,7 @@ async function diagnoseConfiguredLibreDwgAdapter(
       ),
       environmentPath: process.env.DWG_VIEWER_LIBREDWG_ADAPTER,
       extensionPath: context.extensionPath,
+      bundledExtensionPath: bundledLibreDwgExtensionPath(),
     });
     const report = await diagnoseAdapterWithProgress(adapterPath);
     output.appendLine(
@@ -382,6 +403,24 @@ class DwgEditorProvider
       .getConfiguration("dwgViewer", document.uri)
       .get<boolean>("progressivePreview", false);
 
+    const menuDisplaySettings = () => {
+      const configuration = vscode.workspace.getConfiguration(
+        "dwgViewer",
+        document.uri,
+      );
+      return {
+        type: "dwg-menu-display-settings/1",
+        topToolbarLabels: configuredMenuLabelMode(
+          configuration,
+          "topToolbarLabels",
+        ),
+        leftToolbarLabels: configuredMenuLabelMode(
+          configuration,
+          "leftToolbarLabels",
+        ),
+      } as const;
+    };
+
     let disposed = false;
     let webviewInitialized = false;
     let webviewReady = false;
@@ -422,6 +461,7 @@ class DwgEditorProvider
         localResourceRoots: [mediaRoot],
       };
       const nonce = randomBytes(24).toString("base64url");
+      const menuSettings = menuDisplaySettings();
       webviewPanel.webview.html = renderWebviewHtml(template, {
         cspSource: webviewPanel.webview.cspSource,
         nonce,
@@ -434,7 +474,16 @@ class DwgEditorProvider
           )
           .toString(),
         locale: vscode.env.language,
+        topToolbarLabels: menuSettings.topToolbarLabels,
+        leftToolbarLabels: menuSettings.leftToolbarLabels,
       });
+    };
+
+    const postMenuDisplaySettings = (): void => {
+      if (!webviewReady) {
+        return;
+      }
+      void webviewPanel.webview.postMessage(menuDisplaySettings());
     };
 
     const postState = async (
@@ -635,6 +684,7 @@ class DwgEditorProvider
           configuredPath,
           environmentPath: process.env.DWG_VIEWER_LIBREDWG_ADAPTER,
           extensionPath: this.context.extensionPath,
+          bundledExtensionPath: bundledLibreDwgExtensionPath(),
         });
         const engine = new LibreDwgNativeSceneEngine(adapterPath);
         activeEngine = engine.descriptor;
@@ -919,6 +969,7 @@ class DwgEditorProvider
         switch (raw?.type) {
           case "dwg-webview-ready/1": {
             webviewReady = true;
+            postMenuDisplaySettings();
             if (activeCacheReadyMessage) {
               void webviewPanel.webview.postMessage(
                 activeCacheReadyMessage,
@@ -1267,12 +1318,22 @@ class DwgEditorProvider
               }).finally(() => closeAfterQualification("preview"));
             }
             break;
-          case "dwg-viewer-error/1":
+          case "dwg-viewer-error/1": {
+            const code =
+              typeof raw.code === "string"
+                ? raw.code.slice(0, 80)
+                : "unknown";
             this.output.appendLine(
-              `[WEBVIEW_ERROR] ${
-                typeof raw.code === "string" ? raw.code.slice(0, 80) : "unknown"
-              }`,
+              `[WEBVIEW_ERROR] ${code}`,
             );
+            if (raw.cacheId === activeCacheId) {
+              const qualificationCode = /^[^/\\\r\n]{1,80}$/u.test(code)
+                ? code
+                : "unknown";
+              void emitQualification("render-failed", {
+                code: qualificationCode,
+              });
+            }
             if (
               typeof raw.cacheId === "string" &&
               previewReleases.has(raw.cacheId)
@@ -1280,6 +1341,7 @@ class DwgEditorProvider
               void disposePreview(raw.cacheId);
             }
             break;
+          }
         }
       });
 
@@ -1304,6 +1366,23 @@ class DwgEditorProvider
         reloadFontConfiguration();
       });
 
+    const menuConfigurationSubscription =
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (
+          !event.affectsConfiguration(
+            "dwgViewer.topToolbarLabels",
+            document.uri,
+          ) &&
+          !event.affectsConfiguration(
+            "dwgViewer.leftToolbarLabels",
+            document.uri,
+          )
+        ) {
+          return;
+        }
+        postMenuDisplaySettings();
+      });
+
     let resolutionCancellation: vscode.Disposable | undefined;
     const disposeSession = (): void => {
       if (disposed) {
@@ -1313,6 +1392,7 @@ class DwgEditorProvider
       generation += 1;
       messageSubscription.dispose();
       fontConfigurationSubscription.dispose();
+      menuConfigurationSubscription.dispose();
       resolutionCancellation?.dispose();
       resolutionCancellation = undefined;
       void emitQualification("editor-dispose-start");
@@ -1343,6 +1423,12 @@ let qualificationReporter: QualificationReporter | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   qualificationReporter = createQualificationReporter();
+  if (qualificationReporter) {
+    activateRevisionComparisonQualification(
+      context,
+      qualificationReporter,
+    );
+  }
   const output = vscode.window.createOutputChannel("DWG Viewer");
   const provider = new DwgEditorProvider(
     context,

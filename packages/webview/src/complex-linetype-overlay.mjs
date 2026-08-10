@@ -7,6 +7,16 @@ import { layerLinetypeCodes } from "./cad-linetype.mjs";
 import { transformPoint } from "./math.mjs";
 import { GpuLineBatchKind } from "./scene-cache.mjs";
 import { systemFallbackFont } from "./text-overlay.mjs";
+import { maskBucketFor } from "./mask-order.mjs";
+import {
+  drawOrderSurfaceFor,
+  resizeDrawOrderSurface,
+} from "./draw-order-overlay.mjs";
+import {
+  viewportLayerColor,
+  viewportLayerLinetype,
+  viewportStyleRow,
+} from "./viewport-layer-state.mjs";
 
 const VERTEX_STRIDE = 36;
 const NO_LAYER_OVERRIDE = 0xffffffff;
@@ -52,9 +62,15 @@ function canResolveComplex(
   layerIndex,
   definitions,
   layerCodes,
+  layerLinetypeRows,
 ) {
   if (code === 0) {
-    return definitions.has(layerCodes[layerIndex]);
+    return (
+      definitions.has(layerCodes[layerIndex]) ||
+      layerLinetypeRows?.some((row) =>
+        definitions.has(row?.[layerIndex]),
+      )
+    );
   }
   return code === 1 || definitions.has(code);
 }
@@ -64,6 +80,7 @@ export function collectComplexLinetypeSegments({
   batches,
   linetypes,
   layers,
+  layerLinetypeRows = null,
   maximumSegments = DEFAULT_MAXIMUM_SOURCE_SEGMENTS,
 }) {
   if (
@@ -119,7 +136,13 @@ export function collectComplexLinetypeSegments({
         startStyle !== endStyle ||
         (startStyle & (1 << 16)) !== 0 ||
         layerIndex >= layers.length ||
-        !canResolveComplex(code, layerIndex, definitions, layerCodes)
+        !canResolveComplex(
+          code,
+          layerIndex,
+          definitions,
+          layerCodes,
+          layerLinetypeRows,
+        )
       ) {
         continue;
       }
@@ -164,6 +187,9 @@ export function collectComplexLinetypeSegments({
           layerIndex,
           color: view.getUint32(offset + 16, true),
           linetypeCode: code,
+          handle:
+            BigInt(view.getUint32(offset + 20, true)) |
+            (BigInt(view.getUint32(offset + 24, true)) << 32n),
         }),
       );
       sourceSegments += 1;
@@ -429,6 +455,11 @@ export class ComplexLinetypeOverlay {
       maximumGlyphSegments = DEFAULT_MAXIMUM_GLYPH_SEGMENTS,
       minimumPixelHeight = DEFAULT_MINIMUM_PIXEL_HEIGHT,
       palette = DEFAULT_ACI_PALETTE,
+      blocks = Object.freeze([]),
+      maskOrder = null,
+      orderCompositionEnabled = Boolean(maskOrder?.generalOrderEnabled),
+      orderDepthBias = 0,
+      maskBucketScale = 1,
     },
   ) {
     const context = canvas.getContext("2d", { alpha: true });
@@ -451,6 +482,29 @@ export class ComplexLinetypeOverlay {
     }
     this.canvas = canvas;
     this.context = context;
+    this.orderSurface = orderCompositionEnabled
+      ? drawOrderSurfaceFor(canvas)
+      : null;
+    this.orderCanvas = this.orderSurface?.canvas ?? null;
+    this.orderDepthBias = Number.isFinite(orderDepthBias)
+      ? Math.max(-0.5, Math.min(0.5, orderDepthBias))
+      : 0;
+    this.maskBucketScale =
+      Number.isFinite(maskBucketScale) &&
+      maskBucketScale > 0 &&
+      maskBucketScale <= 1
+        ? maskBucketScale
+        : 1;
+    this.maskOrder = maskOrder?.enabled ? maskOrder : null;
+    this.blocks = blocks;
+    this.modelOwnerHandle =
+      blocks.filter(
+        (block) => block.name.toUpperCase() === "*MODEL_SPACE",
+      ).length === 1
+        ? blocks.find(
+            (block) => block.name.toUpperCase() === "*MODEL_SPACE",
+          ).handle
+        : null;
     this.linetypes = linetypes;
     this.textStyles = textStyles;
     this.layers = layers;
@@ -474,6 +528,8 @@ export class ComplexLinetypeOverlay {
       batches,
       linetypes,
       layers,
+      layerLinetypeRows:
+        instanceGraph.layerLinetypesByVisibilityRow,
       maximumSegments: maximumSourceSegments,
     });
     const discoveredLayerZero = layers.findIndex(
@@ -508,6 +564,7 @@ export class ComplexLinetypeOverlay {
     }
     const width = this.canvas.width;
     const height = this.canvas.height;
+    resizeDrawOrderSurface(this.orderSurface, width, height, { clear });
     if (clear) {
       context.clearRect(0, 0, width, height);
     }
@@ -533,6 +590,10 @@ export class ComplexLinetypeOverlay {
         group.batch,
         this.instanceGraph,
       );
+      const ownerHandle =
+        group.batch.kind === GpuLineBatchKind.BlockDefinition
+          ? this.blocks[group.batch.blockIndex]?.handle
+          : this.modelOwnerHandle;
       for (
         let instanceIndex = 0;
         instanceIndex < instances.count;
@@ -556,8 +617,10 @@ export class ComplexLinetypeOverlay {
             instanceIndex,
             this.layerZeroIndex,
           );
-          const visibilityRow =
-            instances.visibilityRows?.[instanceIndex] ?? 0;
+          const visibilityRow = viewportStyleRow(
+            instances,
+            instanceIndex,
+          );
           if (
             layerIndex >= this.layers.length ||
             layerVisibility?.[layerIndex] === false ||
@@ -567,9 +630,24 @@ export class ComplexLinetypeOverlay {
           ) {
             continue;
           }
+          const viewportLinetypeScale =
+            this.instanceGraph.linetypeScalesByVisibilityRow?.[
+              visibilityRow
+            ] ?? 1;
+          const effectiveLinetypeScale =
+            this.globalLinetypeScale *
+            (Number.isFinite(viewportLinetypeScale) &&
+            viewportLinetypeScale > 0
+              ? viewportLinetypeScale
+              : 1);
           const code =
             segment.linetypeCode === 0
-              ? this.layerCodes[layerIndex] ?? 2
+              ? viewportLayerLinetype(
+                  this.instanceGraph,
+                  visibilityRow,
+                  layerIndex,
+                  this.layerCodes[layerIndex] ?? 2,
+                )
               : segment.linetypeCode === 1
                 ? instances.linetypeCodes?.[instanceIndex] ?? 2
                 : segment.linetypeCode;
@@ -612,33 +690,42 @@ export class ComplexLinetypeOverlay {
           const lineAngle = Math.atan2(deltaY, deltaX);
           const pixelsPerPatternUnit = screenLength / patternSpan;
           const period =
-            definition.patternLength * this.globalLinetypeScale;
+            definition.patternLength * effectiveLinetypeScale;
+          const layerColor = viewportLayerColor(
+            this.instanceGraph,
+            visibilityRow,
+            layerIndex,
+            this.layers[layerIndex]?.color ?? 0,
+          );
+          const instanceLayerIndex =
+            instances.layerIndices?.[instanceIndex] ?? layerIndex;
+          const instanceLayerColor = viewportLayerColor(
+            this.instanceGraph,
+            visibilityRow,
+            instanceLayerIndex,
+            this.layers[instanceLayerIndex]?.color ?? layerColor,
+          );
           const byBlockColor = decodeCadColor(
             instances.colors?.[instanceIndex] ?? ((2 << 30) | 7),
             {
-              layer:
-                this.layers[
-                  instances.layerIndices?.[instanceIndex] ?? layerIndex
-                ],
+              layer: { color: instanceLayerColor },
               palette: this.palette,
             },
           );
           const color = decodeCadColor(segment.color, {
-            layer: this.layers[layerIndex],
+            layer: { color: layerColor },
             byBlock: byBlockColor,
             palette: this.palette,
           });
           const opacity = decodeCadOpacity(segment.color, {
-            layer: decodeCadOpacity(
-              this.layers[layerIndex]?.color ?? 0,
-            ),
+            layer: decodeCadOpacity(layerColor),
             byBlock: instances.opacities?.[instanceIndex] ?? 1,
           });
           context.strokeStyle = rgba(color, opacity);
           context.fillStyle = rgba(color, opacity);
           for (const { dash, phase } of complexDashPhases(
             definition,
-            this.globalLinetypeScale,
+            effectiveLinetypeScale,
           )) {
             const firstRepeat = Math.ceil(
               (segment.patternStart - phase) / period - 1e-9,
@@ -658,7 +745,7 @@ export class ComplexLinetypeOverlay {
               const fraction =
                 (patternPosition - segment.patternStart) / patternSpan;
               const offsetScale =
-                this.globalLinetypeScale * pixelsPerPatternUnit;
+                effectiveLinetypeScale * pixelsPerPatternUnit;
               const x =
                 screenStart[0] +
                 deltaX * fraction +
@@ -709,6 +796,14 @@ export class ComplexLinetypeOverlay {
                 break outer;
               }
               const angle = symbolAngle(dash, lineAngle);
+              const absoluteBucket =
+                (instances.maskBases?.[instanceIndex] ?? 0) +
+                maskBucketFor(
+                  this.maskOrder,
+                  ownerHandle,
+                  segment.handle,
+                ) *
+                  this.maskBucketScale;
               if ((dash.flags & 4) !== 0) {
                 const glyph = this.glyphCache.getGlyph(
                   style,
@@ -734,6 +829,18 @@ export class ComplexLinetypeOverlay {
                   pixelScale,
                   1,
                 );
+                if (this.orderSurface) {
+                  this.orderSurface.setBucket(absoluteBucket);
+                  drawVectorGlyph(
+                    this.orderSurface.proxy,
+                    glyph,
+                    x,
+                    y,
+                    angle,
+                    pixelScale,
+                    1,
+                  );
+                }
                 metrics.vectorGlyphs += 1;
               } else if ((dash.flags & 2) !== 0 && dash.text) {
                 const drawn = drawTextSymbol(
@@ -750,6 +857,20 @@ export class ComplexLinetypeOverlay {
                 metrics.segments += drawn.segments;
                 metrics.vectorGlyphs += drawn.segments > 0 ? 1 : 0;
                 metrics.fallbackGlyphs += drawn.fallbackGlyphs;
+                if (this.orderSurface) {
+                  this.orderSurface.setBucket(absoluteBucket);
+                  drawTextSymbol(
+                    this.orderSurface.proxy,
+                    this.glyphCache,
+                    style,
+                    dash.text,
+                    x,
+                    y,
+                    angle,
+                    pixelScale,
+                    this.maximumGlyphSegments,
+                  );
+                }
                 if (drawn.truncated) {
                   metrics.truncated = true;
                   break outer;

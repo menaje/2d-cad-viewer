@@ -1,7 +1,7 @@
 // Canonical Scene Cache reader shared by DwgSceneCacheSource and legacy Webview imports.
 export const CACHE_MAGIC = new Uint8Array([68, 87, 71, 83, 67, 78, 49, 0]);
 export const CACHE_VERSION_MAJOR = 1;
-export const CACHE_VERSION_MINOR = 18;
+export const CACHE_VERSION_MINOR = 20;
 export const HEADER_SIZE = 64;
 export const DIRECTORY_ENTRY_SIZE = 40;
 export const CACHE_HEADER_FLAG_PREVIEW = 1;
@@ -43,6 +43,11 @@ export const VIEWPORT_FROZEN_LAYER_RECORD_SIZE = 8;
 export const VIEWPORT_CLIP_VERTEX_RECORD_SIZE = 16;
 export const IMAGE_ENTITY_RECORD_SIZE = 176;
 export const IMAGE_CLIP_VERTEX_RECORD_SIZE = 16;
+export const TEXT_ANNOTATION_CONTEXT_RECORD_SIZE = 160;
+export const TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8;
+export const VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE = 24;
+export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_RECORDS = 10_000;
+export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_BYTES = 8 * 1024 * 1024;
 
 export const SectionKind = Object.freeze({
   Drawing: 1,
@@ -89,6 +94,9 @@ export const SectionKind = Object.freeze({
   ViewportClipVertices: 53,
   ImageEntities: 54,
   ImageClipVertices: 55,
+  TextAnnotationContexts: 56,
+  TextAnnotationColumnHeights: 57,
+  ViewportLayerOverrides: 58,
 });
 const CURRENT_SECTION_KINDS = Object.freeze(Object.values(SectionKind));
 
@@ -137,6 +145,18 @@ const FIXED_RECORD_SIZES = new Map([
     VIEWPORT_CLIP_VERTEX_RECORD_SIZE,
   ],
   [SectionKind.ImageClipVertices, IMAGE_CLIP_VERTEX_RECORD_SIZE],
+  [
+    SectionKind.TextAnnotationContexts,
+    TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
+  ],
+  [
+    SectionKind.TextAnnotationColumnHeights,
+    TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+  ],
+  [
+    SectionKind.ViewportLayerOverrides,
+    VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
+  ],
 ]);
 const MAX_METADATA_SECTION_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_STRING_BYTES = 1024 * 1024;
@@ -166,10 +186,15 @@ const MAX_VIEWPORTS = 65_536;
 const MAX_VIEWPORT_FROZEN_LAYERS = 1_048_576;
 const MAX_VIEWPORT_CLIP_VERTICES = 1_048_576;
 const MAX_VIEWPORT_CLIP_VERTICES_PER_BOUNDARY = 4_096;
+const MAX_VIEWPORT_LAYER_OVERRIDES = 1_048_576;
 const MAX_IMAGE_SOURCE_RECORDS = 65_536;
 const MAX_IMAGE_CLIP_VERTICES = 1_048_576;
+const MAX_TEXT_ANNOTATION_CONTEXTS = 262_144;
+const MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS = 1_048_576;
+const MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT = 64;
 const STRING_TABLE_HEADER_SIZE = 16;
 const STRING_TABLE_FLAG = 1;
+const EMPTY_ARRAY = Object.freeze([]);
 
 export const TextEntityKind = Object.freeze({
   Text: 0,
@@ -181,6 +206,20 @@ export const TextEntityKind = Object.freeze({
 export const InsertClipFlags = Object.freeze({
   Rectangular: 1,
   Inverted: 1 << 1,
+});
+
+export const ViewportLayerOverrideProperty = Object.freeze({
+  Color: 1,
+  Transparency: 2,
+  Linetype: 3,
+  LineWeight: 4,
+});
+
+export const ViewportLayerOverrideFlags = Object.freeze({
+  Color: 1,
+  Transparency: 1 << 1,
+  Linetype: 1 << 2,
+  LineWeight: 1 << 3,
 });
 
 export const HatchFlags = Object.freeze({
@@ -295,13 +334,21 @@ function validateStringTableDirectoryEntry(entry, expectedRecordSize) {
 }
 
 export class TextEntityTable {
-  constructor(buffer, stringOffset, recordCount, styles, columnHeights) {
+  constructor(
+    buffer,
+    stringOffset,
+    recordCount,
+    styles,
+    columnHeights,
+    annotationContextsByHandle,
+  ) {
     this.buffer = buffer;
     this.view = new DataView(buffer);
     this.stringOffset = stringOffset;
     this.recordCount = recordCount;
     this.styles = styles;
     this.columnHeights = columnHeights;
+    this.annotationContextsByHandle = annotationContextsByHandle;
     this.decoder = new TextDecoder("utf-8", { fatal: true });
   }
 
@@ -399,6 +446,9 @@ export class TextEntityTable {
       "text display column-height count",
     );
     target.columnHeightPool = this.columnHeights;
+    target.columnHeights = null;
+    target.annotationContexts =
+      this.annotationContextsByHandle.get(target.handle) ?? EMPTY_ARRAY;
     return target;
   }
 
@@ -469,6 +519,10 @@ export class TextEntityTable {
         firstColumnHeight,
         firstColumnHeight + columnHeightCount,
       ),
+      annotationContexts:
+        this.annotationContextsByHandle.get(
+          this.view.getBigUint64(offset, true),
+        ) ?? EMPTY_ARRAY,
     });
   }
 
@@ -1530,6 +1584,31 @@ export class DrawOrderSourceTable {
   }
 }
 
+export class DisplayOrderIdentitySourceTable {
+  constructor(records, { sourceRecordCount, byteLength, limited = false }) {
+    this.records = records;
+    this.sourceRecordCount = sourceRecordCount;
+    this.byteLength = byteLength;
+    this.limited = limited;
+  }
+
+  get length() {
+    return this.records.length;
+  }
+
+  readEntity(index, target) {
+    if (!Number.isInteger(index) || index < 0 || index >= this.records.length) {
+      throw new RangeError(
+        `display-order identity index is out of range: ${index}`,
+      );
+    }
+    if (!target || typeof target !== "object") {
+      throw new TypeError("display-order identity target must be an object");
+    }
+    return Object.assign(target, this.records[index], { index });
+  }
+}
+
 export class SceneCacheReader {
   constructor(source, header, sections) {
     this.source = source;
@@ -1645,7 +1724,7 @@ export class SceneCacheReader {
     }
     for (const kind of CURRENT_SECTION_KINDS) {
       if (!sections.has(kind)) {
-        throw new Error(`Scene Cache v1.18 is missing required section ${kind}`);
+        throw new Error(`Scene Cache v1.20 is missing required section ${kind}`);
       }
     }
 
@@ -1662,12 +1741,41 @@ export class SceneCacheReader {
       const textStyles = sections.get(SectionKind.TextStyles);
       const textEntities = sections.get(SectionKind.TextEntities);
       const columnHeights = sections.get(SectionKind.TextColumnHeights);
-      if (!textStyles || !textEntities || !columnHeights) {
-        throw new Error("Scene Cache v1.18 is missing required text sections");
+      const annotationContexts = sections.get(
+        SectionKind.TextAnnotationContexts,
+      );
+      const annotationColumnHeights = sections.get(
+        SectionKind.TextAnnotationColumnHeights,
+      );
+      if (
+        !textStyles ||
+        !textEntities ||
+        !columnHeights ||
+        !annotationContexts ||
+        !annotationColumnHeights
+      ) {
+        throw new Error("Scene Cache v1.20 is missing required text sections");
       }
       validateStringTableDirectoryEntry(textStyles, TEXT_STYLE_RECORD_SIZE);
       validateStringTableDirectoryEntry(textEntities, TEXT_ENTITY_RECORD_SIZE);
       validateRecordSection(columnHeights, TEXT_COLUMN_HEIGHT_RECORD_SIZE);
+      validateRecordSection(
+        annotationContexts,
+        TEXT_ANNOTATION_CONTEXT_RECORD_SIZE,
+      );
+      validateRecordSection(
+        annotationColumnHeights,
+        TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+      );
+      if (
+        annotationContexts.recordCount > MAX_TEXT_ANNOTATION_CONTEXTS ||
+        annotationColumnHeights.recordCount >
+          MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS
+      ) {
+        throw new Error(
+          "Scene Cache text annotation metadata exceeds its limits",
+        );
+      }
     }
     {
       const hatchEntities = sections.get(SectionKind.HatchEntities);
@@ -1684,7 +1792,7 @@ export class SceneCacheReader {
         !hatchGradientColors ||
         !hatchSeedPoints
       ) {
-        throw new Error("Scene Cache v1.18 is missing required HATCH sections");
+        throw new Error("Scene Cache v1.20 is missing required HATCH sections");
       }
       validateStringTableDirectoryEntry(
         hatchEntities,
@@ -1710,7 +1818,7 @@ export class SceneCacheReader {
       );
       if (!hatchPatternLines || !hatchPatternDashes) {
         throw new Error(
-          "Scene Cache v1.18 is missing required HATCH pattern sections",
+          "Scene Cache v1.20 is missing required HATCH pattern sections",
         );
       }
       validateRecordSection(
@@ -1727,7 +1835,7 @@ export class SceneCacheReader {
       const solidEntities = sections.get(SectionKind.SolidEntities);
       if (!pointEntities || !solidEntities) {
         throw new Error(
-          "Scene Cache v1.18 is missing required POINT or SOLID sections",
+          "Scene Cache v1.20 is missing required POINT or SOLID sections",
         );
       }
       validateRecordSection(pointEntities, POINT_ENTITY_RECORD_SIZE);
@@ -1737,7 +1845,7 @@ export class SceneCacheReader {
       const faceEntities = sections.get(SectionKind.FaceEntities);
       if (!faceEntities) {
         throw new Error(
-          "Scene Cache v1.18 is missing the required 3DFACE section",
+          "Scene Cache v1.20 is missing the required 3DFACE section",
         );
       }
       validateRecordSection(faceEntities, FACE_ENTITY_RECORD_SIZE);
@@ -1749,7 +1857,7 @@ export class SceneCacheReader {
       );
       if (!wipeoutEntities || !wipeoutClipVertices) {
         throw new Error(
-          "Scene Cache v1.18 is missing required WIPEOUT sections",
+          "Scene Cache v1.20 is missing required WIPEOUT sections",
         );
       }
       validateRecordSection(wipeoutEntities, WIPEOUT_ENTITY_RECORD_SIZE);
@@ -1763,7 +1871,7 @@ export class SceneCacheReader {
       const drawOrderEntries = sections.get(SectionKind.DrawOrderEntries);
       if (!drawOrderTables || !drawOrderEntries) {
         throw new Error(
-          "Scene Cache v1.18 is missing required draw-order sections",
+          "Scene Cache v1.20 is missing required draw-order sections",
         );
       }
       validateRecordSection(
@@ -1782,7 +1890,7 @@ export class SceneCacheReader {
       );
       if (!insertClips || !insertClipVertices) {
         throw new Error(
-          "Scene Cache v1.18 is missing required INSERT XCLIP sections",
+          "Scene Cache v1.20 is missing required INSERT XCLIP sections",
         );
       }
       validateRecordSection(insertClips, INSERT_CLIP_RECORD_SIZE);
@@ -1796,7 +1904,7 @@ export class SceneCacheReader {
       const linetypeDashes = sections.get(SectionKind.LinetypeDashes);
       if (!linetypes || !linetypeDashes) {
         throw new Error(
-          "Scene Cache v1.18 is missing required linetype sections",
+          "Scene Cache v1.20 is missing required linetype sections",
         );
       }
       validateStringTableDirectoryEntry(linetypes, LINETYPE_RECORD_SIZE);
@@ -1820,9 +1928,18 @@ export class SceneCacheReader {
       const clipVertices = sections.get(
         SectionKind.ViewportClipVertices,
       );
-      if (!layouts || !viewports || !frozenLayers || !clipVertices) {
+      const layerOverrides = sections.get(
+        SectionKind.ViewportLayerOverrides,
+      );
+      if (
+        !layouts ||
+        !viewports ||
+        !frozenLayers ||
+        !clipVertices ||
+        !layerOverrides
+      ) {
         throw new Error(
-          "Scene Cache v1.18 is missing required layout sections",
+          "Scene Cache v1.20 is missing required layout sections",
         );
       }
       validateStringTableDirectoryEntry(layouts, LAYOUT_RECORD_SIZE);
@@ -1835,11 +1952,16 @@ export class SceneCacheReader {
         clipVertices,
         VIEWPORT_CLIP_VERTEX_RECORD_SIZE,
       );
+      validateRecordSection(
+        layerOverrides,
+        VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE,
+      );
       if (
         layouts.recordCount > MAX_LAYOUTS ||
         viewports.recordCount > MAX_VIEWPORTS ||
         frozenLayers.recordCount > MAX_VIEWPORT_FROZEN_LAYERS ||
-        clipVertices.recordCount > MAX_VIEWPORT_CLIP_VERTICES
+        clipVertices.recordCount > MAX_VIEWPORT_CLIP_VERTICES ||
+        layerOverrides.recordCount > MAX_VIEWPORT_LAYER_OVERRIDES
       ) {
         throw new Error("Scene Cache layout metadata exceeds its limits");
       }
@@ -1851,7 +1973,7 @@ export class SceneCacheReader {
       );
       if (!imageEntities || !imageClipVertices) {
         throw new Error(
-          "Scene Cache v1.18 is missing required IMAGE sections",
+          "Scene Cache v1.20 is missing required IMAGE sections",
         );
       }
       validateStringTableDirectoryEntry(
@@ -1914,9 +2036,8 @@ export class SceneCacheReader {
           ? rawDisplaySettings & 3
           : rawDisplaySettings;
       if (
-        (rawWipeoutFrame !== 0xffffffff && rawWipeoutFrame > 2) ||
-        (rawDisplaySettings !== 0xffffffff &&
-          (rawDisplaySettings & ~0x1f) !== 0)
+        rawDisplaySettings !== 0xffffffff &&
+        (rawDisplaySettings & ~0x1f) !== 0
       ) {
         throw new Error("drawing contains invalid display settings");
       }
@@ -1968,7 +2089,7 @@ export class SceneCacheReader {
         maintenanceVersion: view.getUint32(4, true),
         insertionUnits: view.getInt32(8, true),
         wipeoutFrame:
-          rawWipeoutFrame !== 0xffffffff ? rawWipeoutFrame : null,
+          rawWipeoutFrame <= 2 ? rawWipeoutFrame : null,
         lineWeightDisplay:
           rawDisplaySettings !== 0xffffffff
             ? (rawDisplaySettings & (1 << 2)) !== 0
@@ -2175,11 +2296,15 @@ export class SceneCacheReader {
       const clipSection = this.getSection(
         SectionKind.ViewportClipVertices,
       );
+      const layerOverrideSection = this.getSection(
+        SectionKind.ViewportLayerOverrides,
+      );
       const [
         layoutRows,
         viewportRows,
         frozenBuffer,
         clipBuffer,
+        layerOverrideBuffer,
         blocks,
         layers,
       ] =
@@ -2322,11 +2447,12 @@ export class SceneCacheReader {
                 ),
                 clipVertexCount: view.getUint32(offset + 256, true),
                 clipFlags: view.getUint32(offset + 260, true),
-                reserved: view.getBigUint64(offset + 264, true),
+                annotationScale: view.getFloat64(offset + 264, true),
               }),
           ),
           this.readWholeMetadataSection(frozenSection),
           this.readWholeMetadataSection(clipSection),
+          this.readWholeMetadataSection(layerOverrideSection),
           this.readBlocks(),
           this.readLayers(),
         ]);
@@ -2349,6 +2475,106 @@ export class SceneCacheReader {
         }
         frozenLayers[index] = layerIndex;
       }
+
+      const viewportHandles = new Set(
+        viewportRows.map((viewport) => viewport.handle),
+      );
+      const mutableOverridesByViewport = new Map();
+      const layerOverrideView = new DataView(layerOverrideBuffer);
+      for (
+        let index = 0;
+        index < layerOverrideSection.recordCount;
+        index += 1
+      ) {
+        const offset = index * VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE;
+        const viewportHandle = layerOverrideView.getBigUint64(
+          offset,
+          true,
+        );
+        const layerIndex = layerOverrideView.getUint32(offset + 8, true);
+        const property = layerOverrideView.getUint16(offset + 12, true);
+        const value = layerOverrideView.getUint32(offset + 16, true);
+        let flag = 0;
+        let field = "";
+        let validValue = false;
+        if (property === ViewportLayerOverrideProperty.Color) {
+          const kind = value >>> 30;
+          const aci = value & 255;
+          flag = ViewportLayerOverrideFlags.Color;
+          field = "color";
+          validValue =
+            (value & 0x3f000000) === 0 &&
+            (kind === 3 ||
+              (kind === 2 &&
+                aci > 0 &&
+                (value & 0x00ffff00) === 0));
+        } else if (
+          property === ViewportLayerOverrideProperty.Transparency
+        ) {
+          const opacityCode = (value >>> 24) & 63;
+          flag = ViewportLayerOverrideFlags.Transparency;
+          field = "transparency";
+          validValue =
+            ((value & 0xc0ffffff) >>> 0) === 0 &&
+            opacityCode >= 3 &&
+            opacityCode <= 63;
+        } else if (
+          property === ViewportLayerOverrideProperty.Linetype
+        ) {
+          flag = ViewportLayerOverrideFlags.Linetype;
+          field = "linetypeCode";
+          validValue = value >= 2 && value <= 2047;
+        } else if (
+          property === ViewportLayerOverrideProperty.LineWeight
+        ) {
+          flag = ViewportLayerOverrideFlags.LineWeight;
+          field = "lineWeight";
+          validValue = value <= 211;
+        }
+        if (
+          viewportHandle === 0n ||
+          !viewportHandles.has(viewportHandle) ||
+          layerIndex >= layers.length ||
+          layerOverrideView.getUint16(offset + 14, true) !== 0 ||
+          layerOverrideView.getUint32(offset + 20, true) !== 0 ||
+          !validValue
+        ) {
+          throw new Error(
+            `viewport layer override ${index} contains invalid metadata`,
+          );
+        }
+        let overridesByLayer = mutableOverridesByViewport.get(
+          viewportHandle,
+        );
+        if (!overridesByLayer) {
+          overridesByLayer = new Map();
+          mutableOverridesByViewport.set(viewportHandle, overridesByLayer);
+        }
+        let layerOverride = overridesByLayer.get(layerIndex);
+        if (!layerOverride) {
+          layerOverride = { layerIndex, flags: 0 };
+          overridesByLayer.set(layerIndex, layerOverride);
+        }
+        if ((layerOverride.flags & flag) !== 0) {
+          throw new Error(
+            `viewport layer override ${index} duplicates a property`,
+          );
+        }
+        layerOverride.flags |= flag;
+        layerOverride[field] = value;
+      }
+      const layerOverridesByViewport = new Map(
+        [...mutableOverridesByViewport].map(
+          ([viewportHandle, overridesByLayer]) => [
+            viewportHandle,
+            Object.freeze(
+              [...overridesByLayer.values()]
+                .sort((left, right) => left.layerIndex - right.layerIndex)
+                .map((override) => Object.freeze(override)),
+            ),
+          ],
+        ),
+      );
 
       const clipView = new DataView(clipBuffer);
       let expectedFirstFrozenLayer = 0;
@@ -2377,7 +2603,6 @@ export class SceneCacheReader {
             viewport.clipBoundaryHandle === 0n) ||
           viewport.flags & ~0xf ||
           viewport.clipFlags !== 0 ||
-          viewport.reserved !== 0n ||
           ![
             ...viewport.center,
             viewport.width,
@@ -2392,10 +2617,12 @@ export class SceneCacheReader {
             viewport.backClip,
             viewport.brightness,
             viewport.contrast,
+            viewport.annotationScale,
           ].every(Number.isFinite) ||
           viewport.width < 0 ||
           viewport.height < 0 ||
-          viewport.viewHeight < 0
+          viewport.viewHeight < 0 ||
+          viewport.annotationScale < 0
         ) {
           throw new Error(
             `viewport ${index} contains invalid metadata`,
@@ -2438,6 +2665,8 @@ export class SceneCacheReader {
           clipBoundaryVertices: Object.freeze(
             clipBoundaryVertices,
           ),
+          layerOverrides:
+            layerOverridesByViewport.get(viewport.handle) ?? EMPTY_ARRAY,
         });
       });
       if (expectedFirstFrozenLayer !== frozenLayers.length) {
@@ -2555,11 +2784,25 @@ export class SceneCacheReader {
   async readTextEntities() {
     return this.memoize("text-entities", async () => {
       const section = this.getSection(SectionKind.TextEntities);
+      const annotationContextSection = this.getSection(
+        SectionKind.TextAnnotationContexts,
+      );
+      const annotationColumnHeightSection = this.getSection(
+        SectionKind.TextAnnotationColumnHeights,
+      );
       validateStringTableDirectoryEntry(section, TEXT_ENTITY_RECORD_SIZE);
-      const [styles, columnHeights, buffer] = await Promise.all([
+      const [
+        styles,
+        columnHeights,
+        buffer,
+        annotationContextBuffer,
+        annotationColumnHeightBuffer,
+      ] = await Promise.all([
         this.readTextStyles(),
         this.readTextColumnHeights(),
         this.readWholeMetadataSection(section),
+        this.readWholeMetadataSection(annotationContextSection),
+        this.readWholeMetadataSection(annotationColumnHeightSection),
       ]);
       const view = new DataView(buffer);
       const recordCount = view.getUint32(0, true);
@@ -2584,8 +2827,10 @@ export class SceneCacheReader {
       }
 
       const decoder = new TextDecoder("utf-8", { fatal: true });
+      const textKindsByHandle = new Map();
       for (let index = 0; index < section.recordCount; index += 1) {
         const offset = STRING_TABLE_HEADER_SIZE + index * section.recordSize;
+        const handle = view.getBigUint64(offset, true);
         const kind = view.getUint16(offset + 32, true);
         const styleIndex = view.getUint32(offset + 36, true);
         if (kind > TextEntityKind.Attribute) {
@@ -2594,6 +2839,10 @@ export class SceneCacheReader {
         if (styleIndex !== 0xffffffff && styleIndex >= styles.length) {
           throw new Error(`text entity ${index} has an invalid style reference`);
         }
+        if (handle === 0n || textKindsByHandle.has(handle)) {
+          throw new Error(`text entity ${index} has an invalid handle`);
+        }
+        textKindsByHandle.set(handle, kind);
         for (const referenceOffset of [40, 48, 56]) {
           const relativeOffset = view.getUint32(offset + referenceOffset, true);
           const byteLength = view.getUint32(offset + referenceOffset + 4, true);
@@ -2631,12 +2880,157 @@ export class SceneCacheReader {
           throw new Error(`text entity ${index} has an invalid column-height range`);
         }
       }
+
+      const annotationHeightView = new DataView(
+        annotationColumnHeightBuffer,
+      );
+      const annotationColumnHeights = new Float64Array(
+        annotationColumnHeightSection.recordCount,
+      );
+      for (
+        let index = 0;
+        index < annotationColumnHeights.length;
+        index += 1
+      ) {
+        const value = annotationHeightView.getFloat64(
+          index * TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE,
+          true,
+        );
+        if (!Number.isFinite(value)) {
+          throw new Error(
+            `text annotation column height ${index} is invalid`,
+          );
+        }
+        annotationColumnHeights[index] = value;
+      }
+
+      const annotationContextsByHandle = new Map();
+      const annotationView = new DataView(annotationContextBuffer);
+      let expectedFirstColumnHeight = 0;
+      for (
+        let index = 0;
+        index < annotationContextSection.recordCount;
+        index += 1
+      ) {
+        const offset = index * TEXT_ANNOTATION_CONTEXT_RECORD_SIZE;
+        const handle = annotationView.getBigUint64(offset, true);
+        const scale = annotationView.getFloat64(offset + 8, true);
+        const flags = annotationView.getUint32(offset + 16, true);
+        const attachment = annotationView.getInt32(offset + 20, true);
+        const insertionPoint = readVec3F64(annotationView, offset + 24);
+        const xAxisDirection = readVec3F64(annotationView, offset + 48);
+        const rectangleHeight = annotationView.getFloat64(
+          offset + 72,
+          true,
+        );
+        const rectangleWidth = annotationView.getFloat64(
+          offset + 80,
+          true,
+        );
+        const extentsWidth = annotationView.getFloat64(offset + 88, true);
+        const extentsHeight = annotationView.getFloat64(offset + 96, true);
+        const columnType = annotationView.getInt32(offset + 104, true);
+        const columnWidth = annotationView.getFloat64(offset + 112, true);
+        const columnGutter = annotationView.getFloat64(offset + 120, true);
+        const firstColumnHeight = readSafeU64(
+          annotationView,
+          offset + 128,
+          `text annotation context ${index} column-height offset`,
+        );
+        const columnHeightCount = readSafeU64(
+          annotationView,
+          offset + 136,
+          `text annotation context ${index} column-height count`,
+        );
+        const columnHeightEnd = checkedAdd(
+          firstColumnHeight,
+          columnHeightCount,
+          `text annotation context ${index} column-height range`,
+        );
+        if (
+          textKindsByHandle.get(handle) !== TextEntityKind.MText ||
+          !Number.isFinite(scale) ||
+          scale <= 0 ||
+          flags & ~0x7 ||
+          attachment < 1 ||
+          attachment > 9 ||
+          !insertionPoint.every(Number.isFinite) ||
+          !xAxisDirection.every(Number.isFinite) ||
+          Math.hypot(...xAxisDirection) <= Number.EPSILON ||
+          ![
+            rectangleHeight,
+            rectangleWidth,
+            extentsWidth,
+            extentsHeight,
+            columnWidth,
+            columnGutter,
+          ].every((value) => Number.isFinite(value) && value >= 0) ||
+          columnType < 0 ||
+          columnType > 2 ||
+          annotationView.getUint32(offset + 108, true) !== 0 ||
+          firstColumnHeight !== expectedFirstColumnHeight ||
+          columnHeightCount >
+            MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT ||
+          columnHeightEnd > annotationColumnHeights.length ||
+          annotationView.getBigUint64(offset + 144, true) !== 0n ||
+          annotationView.getBigUint64(offset + 152, true) !== 0n
+        ) {
+          throw new Error(
+            `text annotation context ${index} contains invalid metadata`,
+          );
+        }
+        const context = Object.freeze({
+          scale,
+          isDefault: Boolean(flags & 1),
+          autoHeight: Boolean(flags & 2),
+          flowReversed: Boolean(flags & 4),
+          attachment,
+          insertionPoint: Object.freeze(insertionPoint),
+          xAxisDirection: Object.freeze(xAxisDirection),
+          rectangleHeight,
+          rectangleWidth,
+          extentsWidth,
+          extentsHeight,
+          columnType,
+          columnWidth,
+          columnGutter,
+          columnHeights: annotationColumnHeights.subarray(
+            firstColumnHeight,
+            columnHeightEnd,
+          ),
+        });
+        const contexts = annotationContextsByHandle.get(handle);
+        if (contexts) {
+          contexts.push(context);
+        } else {
+          annotationContextsByHandle.set(handle, [context]);
+        }
+        expectedFirstColumnHeight = columnHeightEnd;
+      }
+      if (expectedFirstColumnHeight !== annotationColumnHeights.length) {
+        throw new Error(
+          "text annotation column-height pool contains unreferenced records",
+        );
+      }
+      for (const [handle, contexts] of annotationContextsByHandle) {
+        const defaultCount = contexts.reduce(
+          (count, context) => count + Number(context.isDefault),
+          0,
+        );
+        if (defaultCount > 1) {
+          throw new Error(
+            `text entity ${handle} has multiple default annotation contexts`,
+          );
+        }
+        annotationContextsByHandle.set(handle, Object.freeze(contexts));
+      }
       return new TextEntityTable(
         buffer,
         stringOffset,
         section.recordCount,
         styles,
         columnHeights,
+        annotationContextsByHandle,
       );
     });
   }
@@ -3607,14 +4001,281 @@ export class SceneCacheReader {
     });
   }
 
+  async readDisplayOrderIdentities({
+    maximumRecords = DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_RECORDS,
+    maximumBytes = DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_BYTES,
+  } = {}) {
+    if (!Number.isSafeInteger(maximumRecords) || maximumRecords <= 0) {
+      throw new RangeError(
+        "display-order identity record limit must be positive",
+      );
+    }
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
+      throw new RangeError(
+        "display-order identity byte limit must be positive",
+      );
+    }
+    return this.memoize(
+      `display-order-identities:${maximumRecords}:${maximumBytes}`,
+      async () => {
+        const specifications = [
+          [SectionKind.TextEntities, TEXT_ENTITY_RECORD_SIZE, true],
+          [SectionKind.HatchEntities, HATCH_ENTITY_RECORD_SIZE, true],
+          [SectionKind.PointEntities, POINT_ENTITY_RECORD_SIZE, false],
+          [SectionKind.SolidEntities, SOLID_ENTITY_RECORD_SIZE, false],
+          [SectionKind.FaceEntities, FACE_ENTITY_RECORD_SIZE, false],
+          [SectionKind.ImageEntities, IMAGE_ENTITY_RECORD_SIZE, true],
+        ].map(([kind, recordSize, stringTable]) => {
+          const section = this.getSection(kind);
+          if (stringTable) {
+            validateStringTableDirectoryEntry(section, recordSize);
+          } else {
+            validateRecordSection(section, recordSize);
+          }
+          const prefixBytes = checkedAdd(
+            stringTable ? STRING_TABLE_HEADER_SIZE : 0,
+            checkedMultiply(
+              section.recordCount,
+              recordSize,
+              "display-order identity record bytes",
+            ),
+            "display-order identity prefix bytes",
+          );
+          return { section, recordSize, stringTable, prefixBytes };
+        });
+        const sourceRecordCount = specifications.reduce(
+          (total, { section }) =>
+            checkedAdd(
+              total,
+              section.recordCount,
+              "display-order identity count",
+            ),
+          0,
+        );
+        const byteLength = specifications.reduce(
+          (total, { prefixBytes }) =>
+            checkedAdd(
+              total,
+              prefixBytes,
+              "display-order identity bytes",
+            ),
+          0,
+        );
+        if (
+          sourceRecordCount > maximumRecords ||
+          byteLength > maximumBytes
+        ) {
+          return Object.freeze(
+            new DisplayOrderIdentitySourceTable(Object.freeze([]), {
+              sourceRecordCount,
+              byteLength,
+              limited: true,
+            }),
+          );
+        }
+
+        const buffers = await Promise.all(
+          specifications.map(({ section, prefixBytes }) =>
+            this.source
+              .read(section.offset, prefixBytes)
+              .then((buffer) =>
+                requireArrayBuffer(
+                  buffer,
+                  prefixBytes,
+                  `display-order identity section ${section.kind}`,
+                ),
+              ),
+          ),
+        );
+        const records = [];
+        for (
+          let specificationIndex = 0;
+          specificationIndex < specifications.length;
+          specificationIndex += 1
+        ) {
+          const {
+            section,
+            recordSize,
+            stringTable,
+            prefixBytes,
+          } = specifications[specificationIndex];
+          const buffer = buffers[specificationIndex];
+          const view = new DataView(buffer);
+          const firstRecord = stringTable ? STRING_TABLE_HEADER_SIZE : 0;
+          if (stringTable) {
+            const recordCount = view.getUint32(0, true);
+            const storedRecordSize = view.getUint32(4, true);
+            const stringOffset = readSafeU64(
+              view,
+              8,
+              `display-order identity section ${section.kind} string offset`,
+            );
+            if (
+              recordCount !== section.recordCount ||
+              storedRecordSize !== recordSize ||
+              stringOffset < prefixBytes ||
+              stringOffset > section.byteLength
+            ) {
+              throw new Error(
+                `display-order identity section ${section.kind} has an invalid string-table header`,
+              );
+            }
+          }
+          for (let index = 0; index < section.recordCount; index += 1) {
+            const offset = firstRecord + index * recordSize;
+            records.push(
+              Object.freeze({
+                handle: view.getBigUint64(offset, true),
+                ownerHandle: view.getBigUint64(offset + 8, true),
+                commonFlags: view.getUint16(offset + 26, true),
+              }),
+            );
+          }
+        }
+        return Object.freeze(
+          new DisplayOrderIdentitySourceTable(Object.freeze(records), {
+            sourceRecordCount,
+            byteLength,
+          }),
+        );
+      },
+    );
+  }
+
+  async readPolylineSource({
+    maximumRangeBytes = MAX_CURVE_SOURCE_RANGE_BYTES,
+    maximumSourceBytes = MAX_CURVE_SOURCE_BYTES,
+  } = {}) {
+    if (
+      !Number.isSafeInteger(maximumRangeBytes) ||
+      maximumRangeBytes < POLYLINE_HEADER_RECORD_SIZE ||
+      maximumRangeBytes > MAX_CURVE_SOURCE_RANGE_BYTES
+    ) {
+      throw new RangeError(
+        `polyline source range limit must be between ${POLYLINE_HEADER_RECORD_SIZE} and ${MAX_CURVE_SOURCE_RANGE_BYTES} bytes`,
+      );
+    }
+    if (
+      !Number.isSafeInteger(maximumSourceBytes) ||
+      maximumSourceBytes < POLYLINE_HEADER_RECORD_SIZE ||
+      maximumSourceBytes > MAX_CURVE_SOURCE_BYTES
+    ) {
+      throw new RangeError(
+        `polyline source byte budget must be between ${POLYLINE_HEADER_RECORD_SIZE} and ${MAX_CURVE_SOURCE_BYTES} bytes`,
+      );
+    }
+    const specifications = [
+      [SectionKind.PolylineHeaders, "polyline headers"],
+      [SectionKind.PolylineVertices, "polyline vertices"],
+    ].map(([kind, label]) => {
+      const section = this.sections.get(kind);
+      if (!section) {
+        throw new Error(`polyline source section ${kind} is missing`);
+      }
+      return { kind, label, section };
+    });
+    const byteLength = specifications.reduce(
+      (total, { section }) =>
+        checkedAdd(total, section.byteLength, "polyline source bytes"),
+      0,
+    );
+    if (byteLength > maximumSourceBytes) {
+      throw new Error(
+        `polyline source is ${byteLength} bytes, above the ${maximumSourceBytes}-byte limit`,
+      );
+    }
+    let requestCount = 0;
+    let maximumReadBytes = 0;
+    const tables = new Map();
+    for (const { kind, label, section } of specifications) {
+      const recordsPerChunk = Math.max(
+        1,
+        Math.floor(maximumRangeBytes / section.recordSize),
+      );
+      const chunks = [];
+      for (
+        let firstRecord = 0;
+        firstRecord < section.recordCount;
+        firstRecord += recordsPerChunk
+      ) {
+        const recordCount = Math.min(
+          recordsPerChunk,
+          section.recordCount - firstRecord,
+        );
+        const chunkByteLength = checkedMultiply(
+          recordCount,
+          section.recordSize,
+          `${label} chunk bytes`,
+        );
+        const offset = checkedAdd(
+          section.offset,
+          checkedMultiply(
+            firstRecord,
+            section.recordSize,
+            `${label} chunk offset`,
+          ),
+          `${label} source offset`,
+        );
+        const buffer = requireArrayBuffer(
+          await this.source.read(offset, chunkByteLength),
+          chunkByteLength,
+          `${label} source chunk`,
+        );
+        chunks.push(
+          Object.freeze({
+            firstRecord,
+            recordCount,
+            buffer,
+            view: new DataView(buffer),
+          }),
+        );
+        requestCount += 1;
+        maximumReadBytes = Math.max(maximumReadBytes, chunkByteLength);
+      }
+      const arguments_ = [
+        Object.freeze(chunks),
+        section.recordSize,
+        section.recordCount,
+        recordsPerChunk,
+      ];
+      tables.set(
+        kind,
+        kind === SectionKind.PolylineHeaders
+          ? new PolylineHeaderSourceTable(
+              ...arguments_,
+              "polyline headers",
+            )
+          : new PolylineVertexSourceTable(
+              ...arguments_,
+              "polyline vertices",
+            ),
+      );
+    }
+    return Object.freeze({
+      polylines: tables.get(SectionKind.PolylineHeaders),
+      polylineVertices: tables.get(SectionKind.PolylineVertices),
+      byteLength,
+      requestCount,
+      maximumReadBytes,
+    });
+  }
+
   async readPrimitiveSource() {
-    const [points, solids, faces, wipeouts] = await Promise.all([
+    const [points, solids, faces, wipeouts, polylineSource] = await Promise.all([
       this.readPointEntities(),
       this.readSolidEntities(),
       this.readFaceEntities(),
       this.readWipeoutEntities(),
+      this.readPolylineSource(),
     ]);
-    return Object.freeze({ points, solids, faces, wipeouts });
+    return Object.freeze({
+      points,
+      solids,
+      faces,
+      wipeouts,
+      polylines: polylineSource.polylines,
+      polylineVertices: polylineSource.polylineVertices,
+    });
   }
 
   async readInsertClips() {
@@ -3789,6 +4450,7 @@ export class SceneCacheReader {
       [SectionKind.SplineKnots, "SPLINE knots"],
       [SectionKind.SplineWeights, "SPLINE weights"],
       [SectionKind.SplineControlPoints, "SPLINE control points"],
+      [SectionKind.SplineFitPoints, "SPLINE fit points"],
     ].map(([kind, label]) => {
       const section = this.sections.get(kind);
       if (!section) {
@@ -3895,6 +4557,7 @@ export class SceneCacheReader {
           table = new SplineScalarSourceTable(...arguments_, label);
           break;
         case SectionKind.SplineControlPoints:
+        case SectionKind.SplineFitPoints:
           table = new SplinePointSourceTable(...arguments_, label);
           break;
         default:
@@ -3912,6 +4575,7 @@ export class SceneCacheReader {
       splineKnots: tables.get(SectionKind.SplineKnots),
       splineWeights: tables.get(SectionKind.SplineWeights),
       splineControlPoints: tables.get(SectionKind.SplineControlPoints),
+      splineFitPoints: tables.get(SectionKind.SplineFitPoints),
       byteLength,
       requestCount,
       maximumReadBytes,

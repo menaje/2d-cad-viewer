@@ -19,6 +19,7 @@ self.addEventListener(
       file,
       hostSource,
       wipeoutFrame,
+      fillMode,
       maskOrder = null,
     } = event.data;
     if (type === WORKER_RANGE_RESPONSE) {
@@ -50,7 +51,7 @@ self.addEventListener(
         source,
         blocks,
         instanceGraph,
-        { wipeoutFrame, maskOrder },
+        { wipeoutFrame, fillMode, maskOrder },
       );
       self.postMessage(
         {
@@ -68,6 +69,7 @@ self.addEventListener(
           primitives.solidOutlines.identityRanges.data.buffer,
           primitives.wipeoutMasks.vertices.buffer,
           primitives.wipeoutMasks.identityRanges.data.buffer,
+          primitives.lineReplacementHandleWords.buffer,
         ],
       );
     } catch (error) {

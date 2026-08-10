@@ -25,6 +25,7 @@ import vscodeTestElectron from "@vscode/test-electron";
 import { chromium } from "playwright-core";
 
 import { writeQualificationDriver } from "../apps/vscode-extension/scripts/qualify-extension-host.mjs";
+import { EN_MESSAGES } from "../packages/webview/src/locales/en.mjs";
 
 const execFile = promisify(execFileCallback);
 const {
@@ -33,6 +34,21 @@ const {
 } = vscodeTestElectron;
 const REPORT_SCHEMA = "dwg-windows-vscode-ui-qualification/1";
 export const WINDOWS_UI_EXTENSION_ID = "menaje.dwg-viewer-vscode";
+export const WINDOWS_UI_COMPANION_EXTENSION_ID =
+  "menaje.dwg-viewer-libredwg";
+export const WINDOWS_UI_LOCALE = "en";
+const QUALIFICATION_MESSAGES = Object.freeze({
+  angle: EN_MESSAGES["review.runtime.field.angle"],
+  coordinateTitle: EN_MESSAGES["review.runtime.result.coordinate"],
+  distance: EN_MESSAGES["review.runtime.field.distance"],
+  distanceTitle: EN_MESSAGES["review.runtime.result.distance"],
+  drawingUnits: EN_MESSAGES["review.runtime.value.drawingUnits"],
+  firstPointPrefix: EN_MESSAGES["review.runtime.status.firstPoint"]
+    .split("{snap}", 1)[0]
+    .trim(),
+  snap: EN_MESSAGES["review.runtime.field.snap"],
+  type: EN_MESSAGES["review.runtime.field.type"],
+});
 export const WINDOWS_UI_CLEANUP_OPTIONS = Object.freeze({
   recursive: true,
   force: true,
@@ -47,6 +63,7 @@ const WIDTHS = Object.freeze([
 const FRAME_TIMEOUT_MS = 120_000;
 const MEASUREMENT_UNITS = new Set([
   "도면 단위",
+  QUALIFICATION_MESSAGES.drawingUnits,
   "in",
   "ft",
   "mi",
@@ -97,8 +114,8 @@ export function parseWindowsUiArguments(values) {
     const option = values[index];
     if (
       ![
-        "--adapter",
         "--drawing",
+        "--companion-vsix",
         "--vsix",
         "--output-dir",
       ].includes(option)
@@ -107,8 +124,8 @@ export function parseWindowsUiArguments(values) {
     }
     options[
       {
-        "--adapter": "adapterPath",
         "--drawing": "drawingPath",
+        "--companion-vsix": "companionVsixPath",
         "--vsix": "vsixPath",
         "--output-dir": "outputDirectory",
       }[option]
@@ -116,8 +133,8 @@ export function parseWindowsUiArguments(values) {
     index += 1;
   }
   for (const key of [
-    "adapterPath",
     "drawingPath",
+    "companionVsixPath",
     "vsixPath",
     "outputDirectory",
   ]) {
@@ -330,7 +347,11 @@ function measurementLength(value, label) {
 }
 
 export function parseCoordinateMeasurementRows(rows) {
-  const values = exactRows(rows, ["X", "Y", "Z", "스냅"], "coordinate");
+  const values = exactRows(
+    rows,
+    ["X", "Y", "Z", QUALIFICATION_MESSAGES.snap],
+    "coordinate",
+  );
   const coordinates = ["X", "Y", "Z"].map((axis) =>
     measurementLength(values.get(axis), axis),
   );
@@ -341,7 +362,7 @@ export function parseCoordinateMeasurementRows(rows) {
   ) {
     throw new Error("coordinate measurement units are inconsistent");
   }
-  const snap = values.get("스냅").trim();
+  const snap = values.get(QUALIFICATION_MESSAGES.snap).trim();
   if (!snap) {
     throw new Error("coordinate snap label is empty");
   }
@@ -359,26 +380,39 @@ export function parseCoordinateMeasurementRows(rows) {
 export function parseDistanceMeasurementRows(rows) {
   const values = exactRows(
     rows,
-    ["거리", "ΔX", "ΔY", "ΔZ", "각도"],
+    [
+      QUALIFICATION_MESSAGES.distance,
+      "ΔX",
+      "ΔY",
+      "ΔZ",
+      QUALIFICATION_MESSAGES.angle,
+    ],
     "distance",
   );
-  const lengths = ["거리", "ΔX", "ΔY", "ΔZ"].map((field) =>
-    measurementLength(values.get(field), field),
-  );
+  const lengths = [
+    QUALIFICATION_MESSAGES.distance,
+    "ΔX",
+    "ΔY",
+    "ΔZ",
+  ].map((field) => measurementLength(values.get(field), field));
   if (lengths.some((length) => length.unit !== lengths[0].unit)) {
     throw new Error("distance measurement units are inconsistent");
   }
-  if (!MEASUREMENT_ANGLE_PATTERN.test(values.get("각도"))) {
+  if (
+    !MEASUREMENT_ANGLE_PATTERN.test(
+      values.get(QUALIFICATION_MESSAGES.angle),
+    )
+  ) {
     throw new Error("distance angle is not numeric");
   }
   return Object.freeze({
     unit: lengths[0].unit,
     values: Object.freeze({
-      distance: values.get("거리"),
+      distance: values.get(QUALIFICATION_MESSAGES.distance),
       deltaX: values.get("ΔX"),
       deltaY: values.get("ΔY"),
       deltaZ: values.get("ΔZ"),
-      angle: values.get("각도"),
+      angle: values.get(QUALIFICATION_MESSAGES.angle),
     }),
   });
 }
@@ -593,7 +627,7 @@ async function findTwoMeasurementPoints(frame) {
     }
     await canvas.click({ position });
     const result = await resultSnapshot(frame);
-    if (result?.title === "점 좌표") {
+    if (result?.title === QUALIFICATION_MESSAGES.coordinateTitle) {
       const measurement = parseCoordinateMeasurementRows(result.rows);
       if (
         !points.some(
@@ -623,18 +657,21 @@ async function qualifyReviewInteractions(frame) {
   await activateTool(frame, "select");
   await frame.locator("#drawing").click({ position: points[0].position });
   const selection = await resultSnapshot(frame);
-  assert.ok(selection && selection.content.includes("종류"));
+  assert.ok(
+    selection && selection.content.includes(QUALIFICATION_MESSAGES.type),
+  );
   await clearReview(frame);
 
   await activateTool(frame, "distance");
   await frame.locator("#drawing").click({ position: points[0].position });
-  assert.match(
-    (await frame.locator("#status").textContent()) ?? "",
-    /첫 점/u,
+  assert.ok(
+    ((await frame.locator("#status").textContent()) ?? "").includes(
+      QUALIFICATION_MESSAGES.firstPointPrefix,
+    ),
   );
   await frame.locator("#drawing").click({ position: points[1].position });
   const distance = await resultSnapshot(frame);
-  assert.equal(distance?.title, "두 점 거리");
+  assert.equal(distance?.title, QUALIFICATION_MESSAGES.distanceTitle);
   const distanceMeasurement = parseDistanceMeasurementRows(
     distance.rows,
   );
@@ -700,10 +737,9 @@ async function qualifyReviewInteractions(frame) {
       after: viewportZoomFromStatus(fittedStatus),
     },
     clear: true,
-    observedSnapLabels: points.map((point) => {
-      const match = /스냅\s*\n?([^\n]+)/u.exec(point.content);
-      return match?.[1]?.trim().slice(0, 40) ?? "present";
-    }),
+    observedSnapLabels: points.map((point) =>
+      point.measurement.values.snap.slice(0, 40),
+    ),
   };
 }
 
@@ -839,7 +875,6 @@ async function terminateProcessTree(child) {
 }
 
 async function runScale({
-  adapterPath,
   drawingPath,
   driverDirectory,
   extensionsDirectory,
@@ -860,7 +895,6 @@ async function runScale({
   const port = await availablePort();
   const environment = {
     ...process.env,
-    DWG_VIEWER_LIBREDWG_ADAPTER: adapterPath,
     DWG_VIEWER_QUALIFICATION_DRAWING: drawingPath,
     DWG_VIEWER_QUALIFICATION_TOKEN:
       randomBytes(32).toString("hex"),
@@ -871,7 +905,7 @@ async function runScale({
     [
       "--new-window",
       "--locale",
-      "en",
+      WINDOWS_UI_LOCALE,
       `--user-data-dir=${userData}`,
       `--extensions-dir=${extensionsDirectory}`,
       `--extensionDevelopmentPath=${driverDirectory}`,
@@ -982,13 +1016,14 @@ export async function qualifyWindowsVsCodeUi(options) {
   if (process.platform !== "win32" || process.arch !== "x64") {
     throw new Error("Windows VS Code UI qualification requires win32 x64");
   }
-  const [adapter, drawing, vsix] = await Promise.all([
-    ensureFile(options.adapterPath),
+  const [drawing, companionVsix, vsix] = await Promise.all([
     ensureFile(options.drawingPath),
+    ensureFile(options.companionVsixPath),
     ensureFile(options.vsixPath),
   ]);
-  void adapter;
   if (
+    path.extname(options.companionVsixPath).toLocaleLowerCase("en-US") !==
+      ".vsix" ||
     path.extname(options.vsixPath).toLocaleLowerCase("en-US") !==
     ".vsix"
   ) {
@@ -1025,6 +1060,16 @@ export async function qualifyWindowsVsCodeUi(options) {
         `--user-data-dir=${installUserData}`,
         `--extensions-dir=${extensionsDirectory}`,
         "--install-extension",
+        options.companionVsixPath,
+        "--force",
+      ],
+      downloadOptions,
+    );
+    await runVSCodeCommand(
+      [
+        `--user-data-dir=${installUserData}`,
+        `--extensions-dir=${extensionsDirectory}`,
+        "--install-extension",
         options.vsixPath,
         "--force",
       ],
@@ -1048,12 +1093,20 @@ export async function qualifyWindowsVsCodeUi(options) {
       true,
       `packaged extension ${WINDOWS_UI_EXTENSION_ID} was not installed`,
     );
+    assert.equal(
+      installedExtensions
+        .split(/\r?\n/u)
+        .some((line) =>
+          line.startsWith(`${WINDOWS_UI_COMPANION_EXTENSION_ID}@`),
+        ),
+      true,
+      `companion extension ${WINDOWS_UI_COMPANION_EXTENSION_ID} was not installed`,
+    );
 
     const cases = [];
     for (const scaleFactor of SCALE_FACTORS) {
       cases.push(
         await runScale({
-          adapterPath: options.adapterPath,
           drawingPath: options.drawingPath,
           driverDirectory,
           extensionsDirectory,
@@ -1074,12 +1127,17 @@ export async function qualifyWindowsVsCodeUi(options) {
         vscodeChannel: "stable",
         vscodeVersion,
         packagedVsixInstalled: true,
+        packagedCompanionVsixInstalled: true,
       },
       input: {
         drawingBytes: drawing.size,
         drawingSha256: await sha256File(options.drawingPath),
         vsixBytes: vsix.size,
         vsixSha256: await sha256File(options.vsixPath),
+        companionVsixBytes: companionVsix.size,
+        companionVsixSha256: await sha256File(
+          options.companionVsixPath,
+        ),
         pathDisclosure: "none",
       },
       cases,

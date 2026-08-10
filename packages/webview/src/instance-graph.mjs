@@ -456,6 +456,33 @@ export function effectiveClipBounds(clipNodes, clipId) {
   });
 }
 
+function normalizeLayerStyleRows(
+  rows,
+  rowCount,
+  baseRow,
+  TypedArray,
+  label,
+) {
+  const sourceRows =
+    rows === null
+      ? Array.from({ length: rowCount }, () => baseRow)
+      : rows;
+  if (!Array.isArray(sourceRows) || sourceRows.length !== rowCount) {
+    throw new TypeError(`${label} must match the layer visibility rows`);
+  }
+  return Object.freeze(
+    sourceRows.map((row, index) => {
+      if (
+        !(row instanceof TypedArray) ||
+        row.length !== baseRow.length
+      ) {
+        throw new TypeError(`${label} row ${index} has an invalid size`);
+      }
+      return new TypedArray(row);
+    }),
+  );
+}
+
 export function buildInstanceGraph(
   blocks,
   inserts,
@@ -468,6 +495,12 @@ export function buildInstanceGraph(
     layerLinetypeCodes = Object.freeze([]),
     rootContexts = null,
     layerVisibilityRows = null,
+    paperToModelScalesByVisibilityRow = null,
+    linetypeScalesByVisibilityRow = null,
+    annotationScalesByVisibilityRow = null,
+    layerColorsByVisibilityRow = null,
+    layerLineWeightsByVisibilityRow = null,
+    layerLinetypesByVisibilityRow = null,
   } = {},
 ) {
   const blockIndexByHandle = new Map(
@@ -504,6 +537,85 @@ export function buildInstanceGraph(
       : Object.freeze([
           new Uint8Array(layers.length).fill(1),
         ]);
+  const viewportLinetypeScales =
+    linetypeScalesByVisibilityRow === null
+      ? new Float64Array(visibilityRows.length).fill(1)
+      : Float64Array.from(linetypeScalesByVisibilityRow);
+  if (
+    viewportLinetypeScales.length !== visibilityRows.length ||
+    !viewportLinetypeScales.every(
+      (scale) => Number.isFinite(scale) && scale > 0,
+    )
+  ) {
+    throw new TypeError(
+      "viewport linetype scales must match the layer visibility rows",
+    );
+  }
+  const viewportPaperToModelScales =
+    paperToModelScalesByVisibilityRow === null
+      ? new Float64Array(visibilityRows.length).fill(1)
+      : Float64Array.from(paperToModelScalesByVisibilityRow);
+  if (
+    viewportPaperToModelScales.length !== visibilityRows.length ||
+    !viewportPaperToModelScales.every(
+      (scale) => Number.isFinite(scale) && scale > 0,
+    )
+  ) {
+    throw new TypeError(
+      "viewport paper-to-model scales must match the layer visibility rows",
+    );
+  }
+  const viewportAnnotationScales =
+    annotationScalesByVisibilityRow === null
+      ? new Float64Array(visibilityRows.length)
+      : Float64Array.from(annotationScalesByVisibilityRow);
+  if (
+    viewportAnnotationScales.length !== visibilityRows.length ||
+    !viewportAnnotationScales.every(
+      (scale) => Number.isFinite(scale) && scale >= 0,
+    )
+  ) {
+    throw new TypeError(
+      "viewport annotation scales must match the layer visibility rows",
+    );
+  }
+  const baseLayerColors = Uint32Array.from(
+    layers,
+    (layer) => layer.color >>> 0,
+  );
+  const baseLayerLineWeights = Int16Array.from(layers, (layer) => {
+    const value = layer.lineWeight;
+    return Number.isInteger(value) && value >= -3 && value <= 211
+      ? value
+      : -3;
+  });
+  const baseLayerLinetypes = Uint16Array.from(layers, (_, index) => {
+    const value = layerLinetypeCodes[index];
+    return Number.isInteger(value) && value >= 0 && value <= 2047
+      ? value
+      : 2;
+  });
+  const viewportLayerColors = normalizeLayerStyleRows(
+    layerColorsByVisibilityRow,
+    visibilityRows.length,
+    baseLayerColors,
+    Uint32Array,
+    "viewport layer colors",
+  );
+  const viewportLayerLineWeights = normalizeLayerStyleRows(
+    layerLineWeightsByVisibilityRow,
+    visibilityRows.length,
+    baseLayerLineWeights,
+    Int16Array,
+    "viewport layer lineweights",
+  );
+  const viewportLayerLinetypes = normalizeLayerStyleRows(
+    layerLinetypesByVisibilityRow,
+    visibilityRows.length,
+    baseLayerLinetypes,
+    Uint16Array,
+    "viewport layer linetypes",
+  );
   const diagnostics = {
     invalidOwner: 0,
     invalidTarget: 0,
@@ -646,18 +758,20 @@ export function buildInstanceGraph(
     const insertColor =
       Number.isInteger(insert.color) ? insert.color >>> 0 : 0;
     const colorKind = insertColor >>> 30;
+    const effectiveLayerColor =
+      viewportLayerColors[parentVisibilityRow]?.[layerIndex] ??
+      layers[layerIndex]?.color ??
+      DEFAULT_BYBLOCK_COLOR;
     const color =
       colorKind === 0
-        ? layers[layerIndex]?.color ?? DEFAULT_BYBLOCK_COLOR
+        ? effectiveLayerColor
         : colorKind === 1
           ? parentColor
           : insertColor;
     const colorInherited =
       colorKind === 1 ? parentColorInherited : false;
     const opacityCode = cadOpacityCode(insertColor);
-    const layerOpacity = decodeCadOpacity(
-      layers[layerIndex]?.color ?? 0,
-    );
+    const layerOpacity = decodeCadOpacity(effectiveLayerColor);
     const opacity = decodeCadOpacity(insertColor, {
       layer: layerOpacity,
       byBlock: parentOpacity,
@@ -666,9 +780,11 @@ export function buildInstanceGraph(
       opacityCode === 2 ? parentOpacityInherited : false;
     const sourceLineWeight =
       Number.isInteger(insert.lineWeight) ? insert.lineWeight : -1;
-    const layerLineWeight = Number.isInteger(layers[layerIndex]?.lineWeight)
-      ? layers[layerIndex].lineWeight
-      : -3;
+    const layerLineWeight =
+      viewportLayerLineWeights[parentVisibilityRow]?.[layerIndex] ??
+      (Number.isInteger(layers[layerIndex]?.lineWeight)
+        ? layers[layerIndex].lineWeight
+        : -3);
     const lineWeight =
       sourceLineWeight === -1
         ? layerLineWeight >= 0
@@ -686,10 +802,11 @@ export function buildInstanceGraph(
         ? insert.linetypeCode
         : 0;
     const layerLinetypeCode =
-      Number.isInteger(layerLinetypeCodes[layerIndex]) &&
-      layerLinetypeCodes[layerIndex] >= 2
+      viewportLayerLinetypes[parentVisibilityRow]?.[layerIndex] ??
+      (Number.isInteger(layerLinetypeCodes[layerIndex]) &&
+        layerLinetypeCodes[layerIndex] >= 2
         ? layerLinetypeCodes[layerIndex]
-        : 2;
+        : 2);
     const linetypeCode =
       sourceLinetypeCode === 0
         ? layerLinetypeCode
@@ -965,6 +1082,12 @@ export function buildInstanceGraph(
     rootInstances: modelInstances,
     clipNodes: Object.freeze(clipNodes),
     layerVisibilityRows: visibilityRows,
+    paperToModelScalesByVisibilityRow: viewportPaperToModelScales,
+    linetypeScalesByVisibilityRow: viewportLinetypeScales,
+    annotationScalesByVisibilityRow: viewportAnnotationScales,
+    layerColorsByVisibilityRow: viewportLayerColors,
+    layerLineWeightsByVisibilityRow: viewportLayerLineWeights,
+    layerLinetypesByVisibilityRow: viewportLayerLinetypes,
     instanceCount,
     diagnostics: Object.freeze(diagnostics),
     layerZeroIndex:

@@ -5,7 +5,8 @@ import {
   includePoint,
   transformPoint,
 } from "./math.mjs";
-import { effectiveClipBounds } from "./instance-graph.mjs?v=1.18.8";
+import { effectiveClipBounds } from "./instance-graph.mjs?v=1.20.0";
+import { decodeCadOpacity } from "./cad-color.mjs";
 import {
   indexDwgRenderDeltaStyles,
   renderDeltaInstanceStyle,
@@ -18,6 +19,17 @@ import {
   indexDwgRenderDeltaDependencies,
   isDwgRenderDeltaOwnerInvalidated,
 } from "./render-delta-dependency.mjs";
+import { maskBucketFor } from "./mask-order.mjs";
+import {
+  createDrawOrderScratch,
+  drawOrderSurfaceFor,
+  encodedDrawOrderColor,
+  resizeDrawOrderSurface,
+} from "./draw-order-overlay.mjs";
+import {
+  viewportLayerColor,
+  viewportStyleRow,
+} from "./viewport-layer-state.mjs";
 
 const NO_LAYER = 0xffffffff;
 const DEFAULT_MAXIMUM_SOURCE_IMAGES = 65_536;
@@ -784,6 +796,10 @@ export class CanvasRasterImageOverlay {
       sourceId = "root",
       sourceLabel = "현재 도면",
       hitTestingEnabled = false,
+      maskOrder = null,
+      orderCompositionEnabled = Boolean(maskOrder?.generalOrderEnabled),
+      orderDepthBias = -0.25,
+      maskBucketScale = 1,
       maximumSourceImages = DEFAULT_MAXIMUM_SOURCE_IMAGES,
       maximumOccurrences = DEFAULT_MAXIMUM_OCCURRENCES,
       minimumScreenDimension = DEFAULT_MINIMUM_SCREEN_DIMENSION,
@@ -807,6 +823,24 @@ export class CanvasRasterImageOverlay {
     }
     this.canvas = canvas;
     this.context = context;
+    this.orderCompositionEnabled = Boolean(orderCompositionEnabled);
+    this.orderSurface = this.orderCompositionEnabled
+      ? drawOrderSurfaceFor(canvas)
+      : null;
+    this.orderCanvas = this.orderSurface?.canvas ?? null;
+    this.orderDepthBias = Number.isFinite(orderDepthBias)
+      ? Math.max(-0.5, Math.min(0.5, orderDepthBias))
+      : -0.25;
+    this.maskBucketScale =
+      Number.isFinite(maskBucketScale) &&
+      maskBucketScale > 0 &&
+      maskBucketScale <= 1
+        ? maskBucketScale
+        : 1;
+    this.orderScratch = this.orderSurface
+      ? createDrawOrderScratch(canvas)
+      : null;
+    this.maskOrder = maskOrder?.enabled ? maskOrder : null;
     this.imageEntities = imageEntities;
     this.blocks = blocks;
     this.layers = layers;
@@ -1005,6 +1039,7 @@ export class CanvasRasterImageOverlay {
     const { width, height } = this.resize(size);
     this.hitOccurrences = [];
     const context = this.context;
+    resizeDrawOrderSurface(this.orderSurface, width, height, { clear });
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.globalAlpha = 1;
     context.filter = "none";
@@ -1031,7 +1066,66 @@ export class CanvasRasterImageOverlay {
       this.imageEntities.length,
       this.maximumSourceImages,
     );
+    const orderedOccurrences = [];
     for (let imageIndex = 0; imageIndex < sourceCount; imageIndex += 1) {
+      if (!this.orderCompositionEnabled) {
+        orderedOccurrences.push({
+          imageIndex,
+          instanceIndex: null,
+          absoluteBucket: 0,
+          handle: 0n,
+        });
+        continue;
+      }
+      const sourceRecord = this.imageEntities.readEntity(
+        imageIndex,
+        this.displayRecord,
+      );
+      const ownerBlockIndex = this.blockIndexByHandle.get(
+        sourceRecord.ownerHandle,
+      );
+      const instances = imageInstances(
+        ownerBlockIndex,
+        this.instanceGraph,
+      );
+      const localBucket =
+        maskBucketFor(
+          this.maskOrder,
+          sourceRecord.ownerHandle,
+          sourceRecord.handle,
+        ) * this.maskBucketScale;
+      for (
+        let instanceIndex = 0;
+        instanceIndex < instances.count;
+        instanceIndex += 1
+      ) {
+        orderedOccurrences.push({
+          imageIndex,
+          instanceIndex,
+          absoluteBucket:
+            (instances.maskBases?.[instanceIndex] ?? 0) + localBucket,
+          handle: sourceRecord.handle,
+        });
+      }
+    }
+    if (this.orderCompositionEnabled) {
+      orderedOccurrences.sort(
+        (left, right) =>
+          left.absoluteBucket - right.absoluteBucket ||
+          (left.handle < right.handle
+            ? -1
+            : left.handle > right.handle
+              ? 1
+              : left.imageIndex - right.imageIndex ||
+                left.instanceIndex - right.instanceIndex),
+      );
+    }
+    const visitedImageIndices = new Set();
+    for (const {
+      imageIndex,
+      instanceIndex: orderedInstanceIndex,
+      absoluteBucket: orderedAbsoluteBucket,
+    } of orderedOccurrences) {
       if (metrics.visibleOccurrences >= this.maximumOccurrences) {
         metrics.truncated = true;
         break;
@@ -1040,7 +1134,10 @@ export class CanvasRasterImageOverlay {
         imageIndex,
         this.displayRecord,
       );
-      metrics.visitedSourceImages += 1;
+      if (!visitedImageIndices.has(imageIndex)) {
+        visitedImageIndices.add(imageIndex);
+        metrics.visitedSourceImages += 1;
+      }
       if (
         isDwgRenderDeltaOwnerInvalidated(
           this.renderDeltaDependencyIndex,
@@ -1068,9 +1165,14 @@ export class CanvasRasterImageOverlay {
         ownerBlockIndex,
         this.instanceGraph,
       );
+      const firstInstanceIndex = orderedInstanceIndex ?? 0;
+      const endInstanceIndex =
+        orderedInstanceIndex === null
+          ? instances.count
+          : Math.min(instances.count, orderedInstanceIndex + 1);
       for (
-        let instanceIndex = 0;
-        instanceIndex < instances.count;
+        let instanceIndex = firstInstanceIndex;
+        instanceIndex < endInstanceIndex;
         instanceIndex += 1
       ) {
         const style = renderDeltaInstanceStyle(
@@ -1325,13 +1427,26 @@ export class CanvasRasterImageOverlay {
           height,
           metrics,
         );
+        const occurrenceOpacity =
+          style?.opacity ??
+          instances.opacities?.[instanceIndex] ??
+          1;
         const opacity = Math.max(
           0,
           Math.min(
             1,
-            (style?.opacity ??
-              instances.opacities?.[instanceIndex] ??
-              1) *
+            decodeCadOpacity(record.color, {
+              layer: decodeCadOpacity(
+                viewportLayerColor(
+                  this.instanceGraph,
+                  viewportStyleRow(instances, instanceIndex),
+                  layerIndex,
+                  this.layers?.[layerIndex]?.color ?? 0,
+                ),
+              ),
+              byBlock: 1,
+            }) *
+              occurrenceOpacity *
               (1 - record.fade / 100),
           ),
         );
@@ -1349,6 +1464,76 @@ export class CanvasRasterImageOverlay {
         );
         context.drawImage(asset.bitmap, 0, 0);
         context.restore();
+        if (this.orderSurface && this.orderScratch) {
+          const scratch = this.orderScratch.canvas;
+          const scratchContext = this.orderScratch.context;
+          if (
+            scratch.width !== asset.width ||
+            scratch.height !== asset.height
+          ) {
+            scratch.width = asset.width;
+            scratch.height = asset.height;
+          }
+          scratchContext.setTransform(1, 0, 0, 1, 0, 0);
+          scratchContext.globalAlpha = 1;
+          scratchContext.globalCompositeOperation = "source-over";
+          scratchContext.filter = "none";
+          scratchContext.clearRect(0, 0, asset.width, asset.height);
+          scratchContext.drawImage(asset.bitmap, 0, 0);
+          scratchContext.globalCompositeOperation = "source-in";
+          scratchContext.fillStyle = encodedDrawOrderColor(
+            orderedInstanceIndex === null
+              ? (instances.maskBases?.[instanceIndex] ?? 0) +
+                maskBucketFor(
+                  this.maskOrder,
+                  record.ownerHandle,
+                  record.handle,
+                ) *
+                  this.maskBucketScale
+              : orderedAbsoluteBucket,
+          );
+          scratchContext.fillRect(0, 0, asset.width, asset.height);
+          scratchContext.globalCompositeOperation = "source-over";
+
+          const colorContext = this.context;
+          this.context = this.orderSurface.context;
+          this.context.save();
+          try {
+            const orderMetrics = {
+              clipOperations: 0,
+              xclipOperations: 0,
+            };
+            this.#applyXClip(
+              instances.clipIds?.[instanceIndex] ?? 0,
+              camera,
+              width,
+              height,
+              orderMetrics,
+            );
+            this.#applyImageClip(
+              record,
+              matrix,
+              camera,
+              width,
+              height,
+              orderMetrics,
+            );
+            this.context.globalAlpha = 1;
+            this.context.filter = "none";
+            this.context.setTransform(
+              (topRight[0] - topLeft[0]) / asset.width,
+              (topRight[1] - topLeft[1]) / asset.width,
+              (bottomLeft[0] - topLeft[0]) / asset.height,
+              (bottomLeft[1] - topLeft[1]) / asset.height,
+              topLeft[0],
+              topLeft[1],
+            );
+            this.context.drawImage(scratch, 0, 0);
+          } finally {
+            this.context.restore();
+            this.context = colorContext;
+          }
+        }
         metrics.loadedOccurrences += 1;
       }
     }
@@ -1562,7 +1747,14 @@ export class CanvasRasterImageOverlay {
 export class CompositeRasterImageOverlay {
   constructor(canvas) {
     this.canvas = canvas;
+    this.orderCanvas = drawOrderSurfaceFor(canvas)?.canvas ?? null;
     this.overlays = [];
+    this.aggregateScratch = createDrawOrderScratch(canvas);
+    this.lastOrderedComposition = Object.freeze({
+      attempted: false,
+      succeeded: false,
+      results: Object.freeze([]),
+    });
     this.hitTestingEnabled = false;
     this.renderDeltaTransforms = Object.freeze([]);
     this.renderDeltaStyles = Object.freeze([]);
@@ -1600,7 +1792,15 @@ export class CompositeRasterImageOverlay {
     return overlay;
   }
 
-  redraw(camera, layerVisibility, { size = null } = {}) {
+  redraw(
+    camera,
+    layerVisibility,
+    {
+      size = null,
+      canDrawOrderedLayer = null,
+      drawOrderedLayer = null,
+    } = {},
+  ) {
     const metrics = {
       sourceImages: 0,
       renderDeltaTransforms: 0,
@@ -1616,6 +1816,11 @@ export class CompositeRasterImageOverlay {
       truncated: false,
       memory: null,
     };
+    this.lastOrderedComposition = Object.freeze({
+      attempted: false,
+      succeeded: false,
+      results: Object.freeze([]),
+    });
     if (this.overlays.length === 0) {
       if (size) {
         this.canvas.width = size.width;
@@ -1623,13 +1828,15 @@ export class CompositeRasterImageOverlay {
       }
       const context = this.canvas.getContext("2d", { alpha: true });
       context?.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      resizeDrawOrderSurface(
+        drawOrderSurfaceFor(this.canvas),
+        this.canvas.width,
+        this.canvas.height,
+        { clear: true },
+      );
       return Object.freeze(metrics);
     }
-    this.overlays.forEach((overlay, index) => {
-      const current = overlay.redraw(camera, layerVisibility, {
-        clear: index === 0,
-        size,
-      });
+    const accumulate = (current) => {
       for (const name of [
         "sourceImages",
         "renderDeltaTransforms",
@@ -1647,7 +1854,75 @@ export class CompositeRasterImageOverlay {
       }
       metrics.truncated ||= Boolean(current.truncated);
       metrics.memory = current.memory ?? metrics.memory;
-    });
+    };
+    const canStreamLayers =
+      this.overlays.length > 1 &&
+      this.aggregateScratch &&
+      this.overlays.every((overlay) => overlay.orderCanvas) &&
+      typeof canDrawOrderedLayer === "function" &&
+      typeof drawOrderedLayer === "function";
+    const firstOverlay = this.overlays[0];
+    accumulate(
+      firstOverlay.redraw(camera, layerVisibility, {
+        clear: true,
+        size,
+      }),
+    );
+    if (canStreamLayers && canDrawOrderedLayer(firstOverlay)) {
+      const width = this.canvas.width;
+      const height = this.canvas.height;
+      const aggregate = this.aggregateScratch;
+      if (
+        aggregate.canvas.width !== width ||
+        aggregate.canvas.height !== height
+      ) {
+        aggregate.canvas.width = width;
+        aggregate.canvas.height = height;
+      }
+      aggregate.context.setTransform(1, 0, 0, 1, 0, 0);
+      aggregate.context.globalAlpha = 1;
+      aggregate.context.globalCompositeOperation = "source-over";
+      aggregate.context.filter = "none";
+      aggregate.context.clearRect(0, 0, width, height);
+      const results = [];
+      const composeCurrent = (overlay) => {
+        results.push(drawOrderedLayer(overlay));
+        aggregate.context.drawImage(overlay.canvas, 0, 0);
+      };
+      composeCurrent(firstOverlay);
+      for (let index = 1; index < this.overlays.length; index += 1) {
+        const overlay = this.overlays[index];
+        accumulate(
+          overlay.redraw(camera, layerVisibility, {
+            clear: true,
+            size,
+          }),
+        );
+        composeCurrent(overlay);
+      }
+      const context = this.canvas.getContext("2d", { alpha: true });
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.globalAlpha = 1;
+      context.globalCompositeOperation = "source-over";
+      context.filter = "none";
+      context.clearRect(0, 0, width, height);
+      context.drawImage(aggregate.canvas, 0, 0);
+      this.lastOrderedComposition = Object.freeze({
+        attempted: true,
+        succeeded: results.every(Boolean),
+        results: Object.freeze(results),
+      });
+    } else {
+      for (let index = 1; index < this.overlays.length; index += 1) {
+        const overlay = this.overlays[index];
+        accumulate(
+          overlay.redraw(camera, layerVisibility, {
+            clear: false,
+            size,
+          }),
+        );
+      }
+    }
     return Object.freeze(metrics);
   }
 
@@ -1762,6 +2037,15 @@ export class CompositeRasterImageOverlay {
       overlay.dispose();
     }
     this.overlays.length = 0;
+    if (this.aggregateScratch) {
+      this.aggregateScratch.canvas.width = 1;
+      this.aggregateScratch.canvas.height = 1;
+    }
+    this.lastOrderedComposition = Object.freeze({
+      attempted: false,
+      succeeded: false,
+      results: Object.freeze([]),
+    });
     this.renderDeltaTransforms = Object.freeze([]);
     this.renderDeltaStyles = Object.freeze([]);
     this.renderDeltaInvalidatedDependencyIds = Object.freeze([]);

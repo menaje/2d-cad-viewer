@@ -14,7 +14,7 @@ DWG
             -> first-frame preview sidecar
             -> validated full cache
        -> WASM Worker candidate (qualification only)
-  -> Scene Cache v1.18
+  -> Scene Cache v1.20
   -> one range reader and one WebGL renderer
 ```
 
@@ -57,7 +57,7 @@ The preview is optional and best-effort. When the caller supplies an
 preview path. The adapter:
 
 1. parses the DWG once and builds the capped overview plan;
-2. writes and closes an independent Scene Cache v1.18 preview;
+2. writes and closes an independent Scene Cache v1.20 preview;
 3. creates a separate ready marker;
 4. continues the existing disk-backed detail sort and atomic full-cache write.
 

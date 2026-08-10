@@ -1,9 +1,9 @@
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.18.8";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.20.0";
 import {
   multiplyMat4,
   transformPoint,
 } from "./math.mjs";
-import { createClipNode } from "./instance-graph.mjs?v=1.18.8";
+import { createClipNode } from "./instance-graph.mjs?v=1.20.0";
 
 const MATRIX_VALUES = 16;
 const MODEL_BLOCK_INDEX = -1;
@@ -62,12 +62,13 @@ function composeCollections(
   outputClipNodes,
   layerMap,
   linetypeMap,
+  maskBucketScale,
 ) {
   const count = outer.count * inner.count;
   const data = new Float64Array(count * MATRIX_VALUES);
   const measurementData = new Float64Array(count * MATRIX_VALUES);
   const coordinateSpaceIds = new Uint8Array(count);
-  const maskBases = new Uint32Array(count);
+  const maskBases = new Float32Array(count);
   const clipIds = new Uint32Array(count);
   const colors = new Uint32Array(count);
   const layerIndices = new Uint32Array(count);
@@ -117,7 +118,7 @@ function composeCollections(
         outer.coordinateSpaceIds?.[outerIndex] ?? 1;
       maskBases[cursor] =
         (outer.maskBases?.[outerIndex] ?? 0) +
-        (inner.maskBases?.[innerIndex] ?? 0);
+        (inner.maskBases?.[innerIndex] ?? 0) * maskBucketScale;
       const outerClipId = outer.clipIds?.[outerIndex] ?? 0;
       const innerClipId = inner.clipIds?.[innerIndex] ?? 0;
       const cacheKey = `${outerIndex}:${innerClipId}`;
@@ -239,7 +240,17 @@ export function composeExternalInstanceGraph(
   childBatches,
   layerMap = null,
   linetypeMap = null,
+  maskBucketScale = 1,
 ) {
+  if (
+    !Number.isFinite(maskBucketScale) ||
+    maskBucketScale <= 0 ||
+    maskBucketScale > 1
+  ) {
+    throw new RangeError(
+      "external draw-order scale must be greater than zero and at most one",
+    );
+  }
   const outer = parentInstanceGraph.instancesByBlock.get(parentBlockIndex);
   if (!outer || outer.count === 0) {
     return Object.freeze({
@@ -268,7 +279,22 @@ export function composeExternalInstanceGraph(
           length: 0,
         }),
         clipNodes: Object.freeze([]),
+        layerVisibilityRows:
+          parentInstanceGraph.layerVisibilityRows,
+        paperToModelScalesByVisibilityRow:
+          parentInstanceGraph.paperToModelScalesByVisibilityRow,
+        linetypeScalesByVisibilityRow:
+          parentInstanceGraph.linetypeScalesByVisibilityRow,
+        annotationScalesByVisibilityRow:
+          parentInstanceGraph.annotationScalesByVisibilityRow,
+        layerColorsByVisibilityRow:
+          parentInstanceGraph.layerColorsByVisibilityRow,
+        layerLineWeightsByVisibilityRow:
+          parentInstanceGraph.layerLineWeightsByVisibilityRow,
+        layerLinetypesByVisibilityRow:
+          parentInstanceGraph.layerLinetypesByVisibilityRow,
         instanceCount: 0,
+        maskBucketScale,
       }),
     });
   }
@@ -326,6 +352,7 @@ export function composeExternalInstanceGraph(
       clipNodes,
       layerMap,
       linetypeMap,
+      maskBucketScale,
     );
     instancesByBlock.set(blockIndex, composed);
     instanceCount += composed.count;
@@ -407,7 +434,20 @@ export function composeExternalInstanceGraph(
       clipNodes: Object.freeze(clipNodes),
       layerVisibilityRows:
         parentInstanceGraph.layerVisibilityRows,
+      paperToModelScalesByVisibilityRow:
+        parentInstanceGraph.paperToModelScalesByVisibilityRow,
+      linetypeScalesByVisibilityRow:
+        parentInstanceGraph.linetypeScalesByVisibilityRow,
+      annotationScalesByVisibilityRow:
+        parentInstanceGraph.annotationScalesByVisibilityRow,
+      layerColorsByVisibilityRow:
+        parentInstanceGraph.layerColorsByVisibilityRow,
+      layerLineWeightsByVisibilityRow:
+        parentInstanceGraph.layerLineWeightsByVisibilityRow,
+      layerLinetypesByVisibilityRow:
+        parentInstanceGraph.layerLinetypesByVisibilityRow,
       instanceCount,
+      maskBucketScale,
       diagnostics: childInstanceGraph.diagnostics,
       truncated:
         parentInstanceGraph.truncated === true ||

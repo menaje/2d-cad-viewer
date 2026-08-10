@@ -1,7 +1,7 @@
-# Scene Cache v1.18
+# Scene Cache v1.20
 
 Status: current and exclusive. Product writers and readers accept exactly
-major 1, minor 18. References to lower minor versions below describe the
+major 1, minor 20. References to lower minor versions below describe the
 additive format history only and do not define supported runtime inputs.
 The current implementation includes source geometry/text writing, resolved
 DIMENSION picture-block instances, bounded HATCH rings and asynchronous
@@ -10,9 +10,9 @@ viewport-clipped pattern, POINT marker, SOLID fill/outline and 3DFACE
 wireframe paths, plus lossless WIPEOUT source, frame display and normalized
 draw-order tables, original XREF paths, INSERT/XREF spatial clips and
 external line/text composition, CAD linetypes, paper/model layout tabs,
-viewport layer/clip state and the saved model-space view
+viewport layer/clip/annotation-scale state and the saved model-space view
 plus source IMAGE/IMAGEDEF paths, image bases and clip boundaries
-implemented;
+plus bounded MTEXT annotation-context representations implemented;
 expansion tracked by GitHub issues #3 and #9.
 
 The cache is a little-endian, versioned binary container designed for range
@@ -50,11 +50,12 @@ Header flag bit 0 (`0x00000001`) marks a display-only progressive preview.
 All other bits are reserved and must be zero; the Webview rejects a cache with
 an unknown header flag. A canonical full cache always writes flags as zero.
 
-A flagged preview is still an independently readable v1.18 container with the
+A flagged preview is still an independently readable v1.20 container with the
 complete section directory. It carries drawing, layer, block and INSERT
-metadata, INSERT clip boundaries, plus only the LOD-0 GPU line batches and
-vertices needed for the first frame. Other required sections are encoded as
-valid empty sections.
+metadata, layout/viewport state including viewport layer overrides, INSERT
+clip boundaries, plus only the LOD-0 GPU line batches and vertices needed for
+the first frame. Remaining required sections are encoded as valid empty
+sections.
 Preview geometry retains the 4 MiB overview cap and existing metadata section
 limits. The artifact is ephemeral: it is not a valid replacement for the
 canonical full conversion result, is not committed under the cache identity
@@ -120,6 +121,9 @@ Section kinds currently written:
 | 53 | non-rectangular viewport clip vertices |
 | 54 | IMAGE records and IMAGEDEF UTF-8 paths |
 | 55 | IMAGE clip-boundary `f64[2]` vertex pool |
+| 56 | MTEXT annotation-context representation records |
+| 57 | MTEXT annotation-context column-height pool |
+| 58 | sparse viewport-specific layer property overrides |
 
 Version 1.0 contains kinds 1–3 and 10–13. Version 1.1 adds kinds 14–21.
 Version 1.2 adds kinds 30–31 for straight and polyline GPU lines. Version 1.3
@@ -146,8 +150,13 @@ metadata with linetype scales and expands GPU vertices with a pattern-distance
 field. Version 1.16 adds kinds 50–53 for layouts and paper-space viewports.
 Version 1.17 extends drawing metadata with the saved model-space view.
 Version 1.18 adds kinds 54–55 for raster IMAGE placement, display metadata,
-IMAGEDEF paths and exact clip coordinates. A v1.18 writer always emits all 44
-sections, including empty pools.
+IMAGEDEF paths and exact clip coordinates. Version 1.19 adds kinds 56–57 for
+MTEXT annotation-context representations and their column heights, and uses
+the final eight bytes of the unchanged kind-51 viewport record for its exact
+annotation scale. Version 1.20 adds kind 58 for viewport-specific layer color,
+transparency, linetype and lineweight overrides. A v1.20 writer always emits
+all 47 sections, including empty
+pools.
 
 ## Shared primitive prefix
 
@@ -172,14 +181,14 @@ coordinates without replacing these source-precision records.
 
 ## Drawing record
 
-In v1.18, kind 1 contains one 160-byte record:
+In v1.20, kind 1 contains one 160-byte record:
 
 | Offset | Type | Field |
 | ---: | --- | --- |
 | 0 | `u32` | source DWG version code |
 | 4 | `u32` | source maintenance version |
 | 8 | `i32` | insertion units |
-| 12 | `u32` | display bits: WIPEOUT frame 0–1, LWDISPLAY 2, FILLMODE 3, model space active 4; or `0xffffffff` |
+| 12 | `u32` | display bits: WIPEOUT frame 0–1 (`3` unavailable), LWDISPLAY 2, FILLMODE 3, model space active 4; legacy `0xffffffff` means all unavailable |
 | 16 | `u64` | total logical entity count |
 | 24 | `u64` | serialized logical entity count |
 | 32 | `f64[3]` | drawing minimum bounds |
@@ -199,7 +208,7 @@ Before v1.10, offset 12 is reserved and must be zero. Versions 1.10–1.13 use
 only its WIPEOUT value; v1.14 adds the three display bits. Versions before
 v1.15 end at byte 80, v1.15–v1.16 end at byte 104, and v1.17 adds the saved
 view suffix. Those shorter historical records are not accepted by the current
-reader, which requires the complete 160-byte v1.18 record.
+reader, which requires the complete 160-byte v1.20 record.
 
 ## String-table sections
 
@@ -378,6 +387,81 @@ Text flag bits are 0 alignment point present, 1 rectangle height present, 2
 annotative, 3 multiline, 4 position locked and 5 really locked. Column flag
 bits are 0 automatic height and 1 reversed flow. Kind 23 is a packed `f64`
 pool; every offset/count pair is range-checked.
+
+### MTEXT annotation contexts
+
+Scene Cache v1.19+ preserves the bounded `MTEXTOBJECTCONTEXTDATA` records
+attached to MTEXT entities. Each kind-56 record is 160 bytes:
+
+| Offset | Type | Field |
+| ---: | --- | --- |
+| 0 | `u64` | owning kind-22 MTEXT entity handle |
+| 8 | `f64` | annotation scale, drawing units per paper unit |
+| 16 | `u32` | flags: bit 0 default, bit 1 automatic height, bit 2 reversed flow |
+| 20 | `i32` | attachment, 1–9 |
+| 24 | `f64[3]` | representation insertion point |
+| 48 | `f64[3]` | representation X-axis direction |
+| 72 | `f64` | rectangle height |
+| 80 | `f64` | rectangle width |
+| 88 | `f64` | extents width |
+| 96 | `f64` | extents height |
+| 104 | `i32` | column type: 0 none, 1 static, 2 dynamic |
+| 108 | `u32` | reserved; zero |
+| 112 | `f64` | column width |
+| 120 | `f64` | column gutter |
+| 128 | `u64` | first kind-57 column height |
+| 136 | `u64` | column-height count |
+| 144 | `u64[2]` | reserved; zero |
+
+Kind 57 is a packed `f64` pool. A context contains at most 64 column heights;
+the full cache is capped at 262,144 contexts and 1,048,576 context column
+heights. The reader requires finite coordinates and dimensions, positive
+annotation scales, valid MTEXT owners, contiguous pool ranges and at most one
+default context per entity.
+
+The unchanged 272-byte kind-51 viewport record stores its exact annotation
+scale as an `f64` at offset 264. Zero means the source scale was unavailable;
+the layout planner then falls back to the finite geometric paper-to-model
+ratio. Paper/model roots without a selected layout viewport use annotation
+scale zero. For a model viewport, the renderer selects only a context whose
+scale matches the viewport annotation scale. The raw kind-22 values represent
+the default context and are left unchanged for that context. A non-default
+match overrides its placement, direction, attachment, extents and column
+metadata; its text height is the raw height multiplied by the target/default
+annotation-scale ratio. If no context matches, the renderer keeps the default
+representation, matching the default all-annotation-scales-visible behavior
+without inventing geometry.
+
+### Viewport layer overrides
+
+Scene Cache v1.20 preserves AutoCAD viewport layer overrides from each LAYER
+extension dictionary. Kind 58 contains one 24-byte sparse property record for
+every valid XRECORD viewport/value pair:
+
+| Offset | Type | Field |
+| ---: | --- | --- |
+| 0 | `u64` | owning paper-space VIEWPORT handle |
+| 8 | `u32` | layer-table index |
+| 12 | `u16` | property: 1 color, 2 transparency, 3 linetype, 4 lineweight |
+| 14 | `u16` | reserved; zero |
+| 16 | `u32` | normalized property value |
+| 20 | `u32` | reserved; zero |
+
+Color uses the cache's encoded ACI/true-color representation with no opacity
+bits. Transparency uses only the explicit cache opacity bits. Linetype stores
+the normalized kind-48 code and lineweight stores hundredths of a millimetre.
+The writer accepts only actual VIEWPORT handles, known layer/linetype entries,
+ACI or true-color values, explicit transparency and lineweights from 0 through
+211. The reader rejects unknown properties, duplicate viewport/layer/property
+tuples, non-zero reserved fields and orphan viewport handles. The pool is
+capped at 1,048,576 records.
+
+The layout planner merges the sparse values with the base layer table into the
+same bounded rows used for viewport freeze state. WebGL color/opacity,
+lineweight, plot-style and linetype textures use the instance row; Canvas text,
+complex-linetype and raster-image overlays resolve the same row. Paper space
+keeps the base row, and each model viewport can therefore display its own
+layer styling without changing shared block geometry.
 
 ## Polyline normalization
 
@@ -833,9 +917,8 @@ high-zoom refinement.
 
 ## Deferred v1 work
 
-- complete MTEXT formatting, background, column and exact OCS/alignment display
-  fidelity beyond the bounded first pass;
-- linetype override table;
+- complete MTEXT formatting and exact OCS/alignment display fidelity beyond
+  the bounded source, column and annotation-context pass;
 - exact CAD draw-order parity beyond the bounded block-local/nested INSERT
   mask composition and safe fallback;
 - view-adaptive high-zoom refinement beyond the bounded v1.3 curve chords;
@@ -847,7 +930,7 @@ generated artifacts and must not be committed.
 
 ## LibreDWG qualification writer
 
-The selected LibreDWG adapter writes a valid v1.18 cache
+The selected LibreDWG adapter writes a valid v1.20 cache
 to measure the direct object-to-cache boundary. It preserves layer/block UTF-8
 names and source records for LINE, ARC, CIRCLE, INSERT/MINSERT,
 LWPOLYLINE/2D/3D POLYLINE, ELLIPSE and SPLINE, including the four SPLINE value
@@ -862,7 +945,10 @@ POINT/SOLID/3DFACE/WIPEOUT source sections, including `PDMODE`, `PDSIZE`,
 `FILLMODE`, invisible face edges, exact WIPEOUT clip vertices and the global
 frame setting, normalized draw-order tables and entries, bounded INSERT/XREF
 `SPATIAL_FILTER` boundaries, and IMAGE/IMAGEDEF paths, placement bases and
-clip vertices. The Webview
+clip vertices, MTEXT annotation contexts and exact viewport annotation scales.
+It also preserves sparse viewport layer color, transparency, linetype and
+lineweight overrides from LAYER extension dictionaries.
+The Webview
 range-reads those sections after the first line
 frame, builds POINT markers, SOLID geometry, 3DFACE wireframe edges and safe
 WIPEOUT frames in a one-shot worker, triangulates solid and gradient HATCH
@@ -882,7 +968,7 @@ This qualification writer keeps the 4 MiB overview and 512 KiB detail
 limits and uses disk-backed group-local XY Morton ordering for detail batches.
 When the extension requests progressive publication, the writer emits the
 flagged overview-only sidecar before that detail sort, then continues to the
-full v1.18 cache.
+full v1.20 cache.
 LibreDWG is the selected primary engine path. The remaining unsupported source
 families and exact CAD text-layout fidelity must be closed before that path is
 release-ready.

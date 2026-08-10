@@ -170,6 +170,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: viewer-core-packages
+          retention-days: 14
           path: |
             ${{ runner.temp }}/viewer-release/*.tgz
             ${{ runner.temp }}/viewer-release/SHA256SUMS

@@ -8,7 +8,7 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 데 초점을 맞추고 있습니다.
 
 > 현재 버전은 초기 공개 버전입니다. 도면 편집이나 DWG 저장 기능은
-> 제공하지 않으며, DWG 변환기는 확장과 별도로 한 번 연결해야 합니다.
+> 제공하지 않으며 Linux x64, macOS arm64, Windows x64를 지원합니다.
 
 ## 주요 특징
 
@@ -44,8 +44,9 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 - 마우스 휠과 트랙패드 핀치로 커서 위치를 중심으로 확대·축소합니다.
 - 사각 영역 확대, 전체 보기, 이전/다음 화면과 이름을 붙인 뷰 북마크를
   지원합니다.
-- 도구는 아이콘으로 간결하게 표시되고, 마우스를 올리거나 키보드로
-  초점을 맞추면 이름이 나타납니다.
+- 오른쪽 위와 왼쪽 도구 모음은 각각 아이콘 전용으로 유지하거나,
+  마우스를 올리고 키보드로 초점을 맞출 때 모든 이름을 한 번에
+  펼치도록 설정할 수 있습니다.
 - 뷰어 컨트롤은 VS Code 환경 언어에 따라 영어 또는 한국어를 사용합니다.
 
 ### 레이어와 외부참조를 함께 관리합니다
@@ -84,21 +85,19 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 
 - VS Code 1.125 이상
 - Linux x64, macOS arm64 또는 Windows x64
-- 확장과 별도로 배포되는 LibreDWG 변환기
+- DWG Viewer 설치 시 함께 자동 설치되는 GPL LibreDWG Engine 동반 확장
 
 ### 설치
 
-1. [GitHub Releases](https://github.com/menaje/dwg-viewer/releases)에서
-   `dwg-viewer-vscode-<version>.vsix`와 운영체제에 맞는
-   `dwg-viewer-libredwg-0.14-<platform>.tar.gz`를 받습니다.
-2. VSIX를 VS Code의 **Extensions: Install from VSIX...** 명령으로
-   설치합니다.
-3. 변환기 압축을 사용자가 관리하는 폴더에 풉니다.
-4. 명령 팔레트에서 **DWG Viewer: LibreDWG 변환기 선택**을 실행하고
-   `bin/libredwg-adapter` 또는 Windows의
-   `bin\libredwg-adapter.exe`를 선택합니다.
-5. Explorer에서 `.dwg` 파일을 열면 DWG Viewer가 읽기 전용 편집기로
-   시작됩니다.
+VS Code Marketplace에서 **DWG Viewer**를 설치하면 현재 운영체제에 맞는
+**DWG Viewer — LibreDWG Engine** 동반 확장도 자동으로 설치됩니다. 별도
+경로 설정 없이 Explorer에서 `.dwg` 파일을 열면 됩니다.
+
+수동 또는 오프라인 설치에서는
+[GitHub Releases](https://github.com/menaje/dwg-viewer/releases)의
+`dwg-viewer-vscode-<version>.vsix`와 운영체제에 맞는
+`dwg-viewer-libredwg-<version>-<platform>.vsix`를 모두 설치합니다.
+Marketplace에 연결할 수 없다면 GPL 동반 VSIX를 먼저 설치합니다.
 
 체크섬 확인, macOS 보안 승인과 플랫폼별 자세한 절차는
 [배포 및 설치 안내](docs/distribution.md)를 참고하세요.
@@ -107,7 +106,10 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 
 - **화면 이동:** 클릭 드래그 또는 트랙패드 두 손가락 스크롤
 - **확대·축소:** 마우스 휠 또는 트랙패드 핀치
-- **도구 이름 확인:** 아이콘 위에 마우스를 올리거나 키보드로 초점 이동
+- **도구 이름 확인:** 도구 모음에 마우스를 올리거나 키보드로 초점을
+  옮기면 전체 메뉴명이 함께 펼쳐짐
+- **간략 메뉴 설정:** VS Code의 DWG Viewer 설정에서 **Top Toolbar
+  Labels**와 **Left Toolbar Labels**를 각각 `icons` 또는 `hover`로 선택
 - **레이어:** 왼쪽 레이어 패널에서 검색하고 표시 상태 변경
 - **객체 확인·측정:** 화면 가장자리의 도구 아이콘 선택 후 도면 클릭
 - **배치 전환:** 화면 아래쪽 배치 탭 사용
@@ -123,7 +125,7 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 - HATCH 솔리드·그라데이션·패턴
 - POINT, SOLID, 3DFACE와 WIPEOUT
 - TEXT, MTEXT, 속성 문자와 인라인 문자 서식
-- 모델 공간, 다중 배치, 뷰포트와 레이어 동결 상태
+- 모델 공간, 다중 배치, 뷰포트별 레이어 동결·색상·투명도·선종류·선굵기
 - JPG/PNG IMAGE 참조와 XCLIP
 - 선종류, 색상, 투명도, 선굵기와 선택적 CTB 출력 스타일
 
@@ -132,7 +134,7 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 - 이 프로젝트는 뷰어입니다. 도면 편집, DWG 덮어쓰기와 Save As는
   제공하지 않습니다.
 - MPL-2.0 확장과 GPL-3.0-or-later LibreDWG 변환기는 라이선스 경계를
-  지키기 위해 별도 파일로 배포됩니다.
+  유지하기 위해 별도 VSIX로 배포되며, VS Code가 함께 설치합니다.
 - OLE 객체는 삽입 영역의 외곽선만 표시하며, 포함된 Excel이나 그림
   본문은 아직 표시하지 않습니다.
 - 외부 이미지는 현재 JPG/JPEG와 PNG를 지원합니다.
@@ -147,6 +149,7 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 - [엔진 선택 근거](docs/engine-decision.md)
 - [배포와 재현 가능한 패키징](docs/distribution.md)
 - [라이선스와 배포 경계](docs/licensing.md)
+- [LibreDWG Engine 동반 확장](apps/vscode-libredwg-adapter/README.md)
 - [Scene Cache 명세](specs/scene-cache.md)
 - [Viewer Core 경계 ADR](docs/adr/ADR-0001-viewer-core-boundary.md)
 - [`@menaje/viewer-core`](packages/viewer-core/README.md)
@@ -168,9 +171,11 @@ VSIX 빌드와 배포 재현 방법은
 ## 라이선스
 
 - VS Code 확장과 Viewer 소스: MPL-2.0
-- 별도 LibreDWG 변환기 패키지: GPL-3.0-or-later
+- 별도 LibreDWG Engine 동반 확장과 변환기 패키지: GPL-3.0-or-later
 
 공식 MPL 2.0 원문은 [LICENSE](LICENSE), 프로젝트 저작권 고지는
 [NOTICE](NOTICE)에 분리되어 있습니다. 적용 범위와 배포 시 확인 사항은
 [라이선스 안내](docs/licensing.md)를, 번들된 구성요소의 원 저작권·허가문은
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요.
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요. 각 플랫폼
+동반 VSIX에는 해당 실행 파일의 정확한 대응 소스와 원문 라이선스가 함께
+포함됩니다.

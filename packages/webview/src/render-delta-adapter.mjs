@@ -1103,9 +1103,11 @@ export class DwgRenderDeltaAdapter {
   #renderer;
   #resolvePacket;
   #resolveIdentity;
+  #base = emptyState();
   #committed = emptyState();
   #preview = null;
   #resources = new Set();
+  #presentedRevisionId = null;
   #disposed = false;
 
   constructor({
@@ -1128,6 +1130,10 @@ export class DwgRenderDeltaAdapter {
     this.#resolveIdentity = resolveIdentity;
   }
 
+  get renderer() {
+    return this.#renderer;
+  }
+
   #assertOpen() {
     if (this.#disposed) {
       throw invalidState("DWG render delta adapter is disposed");
@@ -1138,6 +1144,21 @@ export class DwgRenderDeltaAdapter {
     return this.#preview?.state ?? this.#committed;
   }
 
+  #stateForRevision(revisionId) {
+    if (
+      this.#preview?.state.revisionId === revisionId
+    ) {
+      return this.#preview.state;
+    }
+    if (this.#committed.revisionId === revisionId) {
+      return this.#committed;
+    }
+    if (this.#base.revisionId === revisionId) {
+      return this.#base;
+    }
+    return null;
+  }
+
   #activate(state) {
     const pickIdentities = [...state.identities.values()].map(
       (identity) =>
@@ -1146,7 +1167,7 @@ export class DwgRenderDeltaAdapter {
           revisionId: state.revisionId,
         }),
     );
-    return synchronous(
+    const result = synchronous(
       this.#renderer.activateRenderDelta({
         revisionId: state.revisionId,
         pickIdentities,
@@ -1164,6 +1185,8 @@ export class DwgRenderDeltaAdapter {
       }),
       "DWG renderer activateRenderDelta",
     );
+    this.#presentedRevisionId = state.revisionId;
+    return result;
   }
 
   #release(resources) {
@@ -1309,11 +1332,23 @@ export class DwgRenderDeltaAdapter {
     const textsByOperation = new Map();
     const transformsByOperation = new Map();
     const stylesByOperation = new Map();
+    const operationsById = new Map(
+      delta.operations.map((operation) => [
+        operation.operationId,
+        operation,
+      ]),
+    );
     try {
       for (const [
         operationId,
         packetOperation,
       ] of packetOperations) {
+        const operation = operationsById.get(operationId);
+        if (!operation) {
+          throw new TypeError(
+            "DWG render delta packet operation is unavailable",
+          );
+        }
         const byRenderId = new Map();
         for (const [index, line] of packetOperation.lines.entries()) {
           const entry = this.#own(
@@ -1349,6 +1384,9 @@ export class DwgRenderDeltaAdapter {
                 batch: fill.batch,
                 vertices: fill.vertices,
                 instanceIndices: fill.instanceIndices,
+                entityHandle: identities.get(
+                  logicalKey(operation.layerId, fill.renderId),
+                ).handle,
               }),
               "DWG renderer stageRenderDeltaFill",
             ),
@@ -1373,6 +1411,9 @@ export class DwgRenderDeltaAdapter {
                 batch: point.batch,
                 vertices: point.vertices,
                 instanceIndices: point.instanceIndices,
+                entityHandle: identities.get(
+                  logicalKey(operation.layerId, point.renderId),
+                ).handle,
               }),
               "DWG renderer stageRenderDeltaPoint",
             ),
@@ -1646,6 +1687,11 @@ export class DwgRenderDeltaAdapter {
         "DWG render delta apply failed and rollback did not complete",
       );
     }
+    if (this.#base.revisionId === null) {
+      const base = emptyState();
+      base.revisionId = delta.fromRevisionId;
+      this.#base = base;
+    }
     if (preview) {
       if (this.#committed.revisionId === null) {
         const base = cloneState(this.#committed);
@@ -1659,6 +1705,33 @@ export class DwgRenderDeltaAdapter {
     } else {
       this.#committed = next;
     }
+    return this.snapshot();
+  }
+
+  presentRevision(revisionId) {
+    this.#assertOpen();
+    if (
+      typeof revisionId !== "string" ||
+      revisionId.length === 0 ||
+      revisionId.length > 1_024
+    ) {
+      throw new TypeError(
+        "DWG presentation revision must be a bounded identifier",
+      );
+    }
+    const state = this.#stateForRevision(revisionId);
+    if (!state) {
+      throw invalidState(
+        "DWG presentation revision is not retained",
+      );
+    }
+    this.#activate(state);
+    return this.snapshot();
+  }
+
+  restoreActivePresentation() {
+    this.#assertOpen();
+    this.#activate(this.#activeState());
     return this.snapshot();
   }
 
@@ -1704,7 +1777,10 @@ export class DwgRenderDeltaAdapter {
     this.#assertOpen();
     const state = this.#activeState();
     return Object.freeze({
+      baseRevisionId: this.#base.revisionId,
+      committedRevisionId: this.#committed.revisionId,
       revisionId: state.revisionId,
+      presentedRevisionId: this.#presentedRevisionId,
       sequence: state.sequence,
       previewId: this.#preview?.deltaId ?? null,
       overlayEntities: state.overlays.size,
@@ -1770,6 +1846,14 @@ export class DwgRenderDeltaAdapter {
   applyDiffOverlay(presentation) {
     this.#assertOpen();
     if (
+      this.#presentedRevisionId !==
+      this.#activeState().revisionId
+    ) {
+      throw invalidState(
+        "DWG diff overlay requires the active presentation revision",
+      );
+    }
+    if (
       typeof this.#renderer.activateRenderDiffOverlay !== "function"
     ) {
       throw new TypeError(
@@ -1821,6 +1905,7 @@ export class DwgRenderDeltaAdapter {
       );
     }
     this.#preview = null;
+    this.#base = emptyState();
     this.#committed = emptyState();
     this.#disposed = true;
     return true;

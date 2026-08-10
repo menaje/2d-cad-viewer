@@ -4,7 +4,7 @@ This process-isolated adapter implements the `dwg-engine-adapter/1` inspection
 and conversion contract. It traverses LibreDWG's object model directly instead
 of creating a full JSON dump.
 
-The `convert` path writes Scene Cache v1.18 without a whole-drawing intermediate
+The `convert` path writes Scene Cache v1.20 without a whole-drawing intermediate
 model. It repeatedly traverses LibreDWG objects and streams sections and
 bounded GPU batches directly to a new cache file. For large drawings, it
 spills fixed-size detail records into private unnamed temporary files, sorts
@@ -43,8 +43,11 @@ This is a deliberately partial conversion milestone:
 - valid SPLINE definitions use one segment for linear spans or two per
   non-empty curved knot span, capped at 256 segments per entity; malformed
   definitions fall back to bounded fit/control-point chords;
-- HATCH line, circular, elliptic, bulge and spline boundaries share those
-  chord rules and are capped at 65,536 segments per HATCH; reports expose
+- HATCH line, circular, elliptic, bulge and spline boundaries use a denser
+  bounded pass: circular curves and bulges use at most 64 segments per
+  revolution, curved spline spans use eight segments, and fit-point-only
+  boundary splines use a tangent-aware cubic interpolation with periodic
+  closure; one HATCH remains capped at 65,536 segments and reports expose
   rendered boundary segments and any capped entities;
 - bounded HATCH entity records retain pattern/gradient metadata, closed `f64`
   rings, gradient colors and seed points; rings are capped at 65,536 vertices
@@ -53,13 +56,15 @@ This is a deliberately partial conversion milestone:
   sequence in packed source sections; one HATCH is capped at 4,096 definition
   lines and 65,536 dash values, with global caps of 262,144 and 1,048,576;
 - POINT retains WCS location, normal, thickness, X-axis angle and drawing
-  `PDMODE`/`PDSIZE`; SOLID retains four OCS corners, normal, thickness and
-  drawing `FILLMODE`;
+  `PDMODE`/`PDSIZE`; SOLID retains four OCS corners in 1-2-4-3 perimeter
+  order, normal, thickness and drawing `FILLMODE`;
 - 3DFACE retains four WCS corners and all four invisible-edge bits; its current
   wireframe display emits only visible, non-degenerate edges;
 - WIPEOUT retains its image basis, display properties, exact rectangular or
   polygonal clip vertices, definition handles and the drawing-wide frame
-  setting; enabled frames are displayed while masks remain explicitly
+  setting; a missing WIPEOUT variables object leaves only that frame setting
+  unavailable while preserving independent LWDISPLAY, FILLMODE and model-space
+  state; enabled frames are displayed while masks remain explicitly
   deferred until draw-order-aware rendering exists;
 - IMAGE retains the IMAGEDEF path, insertion/U/V basis, source pixel size,
   brightness/contrast/fade, definition handles and exact rectangular or
@@ -70,6 +75,8 @@ This is a deliberately partial conversion milestone:
   including bounded complex-linetype text/shape metadata;
 - named paper-space layouts retain their paper settings, active viewport and
   bounded VIEWPORT records so every saved layout can be selected independently;
+- LAYER extension dictionaries retain sparse per-viewport color, transparency,
+  linetype and lineweight overrides, capped at 1,048,576 property records;
 - XLINE, MULTILEADER and classic LEADER geometry is displayed with bounded
   approximations, including LEADER arrows and hook lines;
 - OLE2FRAME uses the embedded four-corner placement when available and falls
@@ -88,7 +95,10 @@ This is a deliberately partial conversion milestone:
   stacked horizontal/diagonal fractions and tolerances. The Webview also
   applies bounded paragraph indents, left/center/right tab stops and upright
   top-to-bottom MTEXT flow. Single-line TEXT uses its OCS plane and
-  DWG-adjusted insertion point, applying endpoint width only to Align/Fit;
+  preserves both raw placement points so the Webview can apply measured
+  center/right/vertical justification, while endpoint width and direction are
+  reserved for Align/Fit. Multiline ATTRIB/ATTDEF records preserve their
+  embedded MTEXT insertion point and basis;
   external image baselines for every OCS/justification combination remain
   open in GitHub issues #5 and #7.
 
@@ -104,10 +114,11 @@ range-read limit.
 ## Progressive first frame
 
 When the VS Code host supplies both private preview paths, the same conversion
-process emits a Scene Cache v1.18 first-frame sidecar immediately after parsing
+process emits a Scene Cache v1.20 first-frame sidecar immediately after parsing
 and overview planning, before the disk-backed full-detail sort. The sidecar
-contains drawing/layer/block/INSERT metadata and overview-only GPU line data;
-all other required sections are schema-valid and empty. Header flag bit 0
+contains drawing/layer/block/INSERT and layout/viewport metadata, including
+viewport layer overrides, plus overview-only GPU line data; remaining required
+sections are schema-valid and empty. Header flag bit 0
 prevents it from being mistaken for a canonical cache.
 
 The adapter closes the preview before creating its ready marker. It then
@@ -172,6 +183,35 @@ compatibility, static/dynamic linkage and target platform as one bounded JSON
 record. The VS Code extension runs this only when the user selects or explicitly
 diagnoses an adapter, so it adds no work to the normal drawing-open path.
 
+### Actual DWG viewport override qualification
+
+Use a redistributable synthetic DWG with one `Layout1` paper viewport, one model
+viewport and one `TARGET` layer. The model viewport must override the layer with
+RGB `#40c4ff`,
+40% transparency, `DASHED` linetype and 0.50 mm lineweight, with drawing
+lineweight display enabled. The qualification runs the product adapter, opens
+its output with the canonical Scene Cache reader and requires all four sparse
+records to merge into the same viewport/layer row:
+
+```bash
+pnpm run qualify:viewport-layer-overrides -- \
+  --adapter /absolute/path/to/libredwg-adapter \
+  --fixture /absolute/path/to/viewport-layer-overrides.dwg
+```
+
+Alternative fixture names or normalized values can be supplied with `--layout`,
+`--layer`, `--linetype`, `--color`, `--transparency` and `--lineweight`. The
+fixture must still contain exactly the four properties being qualified. Private
+working drawings are not accepted as repository fixtures.
+
+The R2004 round-trip qualification used the repository's
+[`generate-viewport-layer-overrides.py`](../../tests/fixtures/generate-viewport-layer-overrides.py)
+definition and a separate write-enabled LibreDWG 0.14 build. The read-only
+product adapter emitted a valid 47-section Scene Cache v1.20, and the canonical
+reader recovered true color `0xc040c4ff`, transparency `0x27000000`, `DASHED`
+and lineweight `50` on the original viewport handle. The write-enabled build is
+only a fixture producer; it is not part of the product or release package.
+
 ## Separate GPL package
 
 The output binary links to LibreDWG and must be distributed in compliance with
@@ -202,8 +242,11 @@ private delete-on-close native temporary files and non-inheritable handles.
 Its qualification also exercises cancellation plus drive, UNC, relative,
 Unicode, normalization, and case-insensitive paths on the Windows runner.
 
-The MPL-only VSIX never bundles this executable. The complete reviewed
-publication and verification procedure is in
+The MPL-only VSIX never bundles this executable. A separate, platform-specific
+GPL companion VSIX is staged only from this verified source-complete package;
+it keeps the executable, exact corresponding source, licenses, manifest and
+checksums together. The complete reviewed publication and verification
+procedure is in
 [`docs/distribution.md`](../../docs/distribution.md). This packaging policy is
 engineering guidance, not legal advice.
 
@@ -308,9 +351,9 @@ corners. `example_2018.dwg` also contains two polygonal WIPEOUT records with
 byte-identical between both engines. `2018/Dynblocks.dwg` matched at one
 solid and three pattern
 HATCHes, eight loops, 104 fill vertices and four definition lines, again with
-byte-identical pattern sections. `2004/HatchG.dwg` matched at two gradient
-HATCHes, two loops and 269 fill vertices. None of those fixtures reached a cap
-or skipped an invalid source record.
+byte-identical pattern sections. With the denser HATCH-only chord pass,
+`2004/HatchG.dwg` produces two gradient HATCHes, two loops and 1,064 fill
+vertices. It reaches neither a cap nor an invalid-source skip.
 
 The browser first-frame path opens the cache with eight range reads totaling
 5,001,837 bytes,

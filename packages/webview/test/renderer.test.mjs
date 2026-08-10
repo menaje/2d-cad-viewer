@@ -79,6 +79,7 @@ function makeFakeGl() {
     TEXTURE_WRAP_S: 14,
     TEXTURE_WRAP_T: 15,
     NEAREST: 16,
+    LINEAR: 42,
     CLAMP_TO_EDGE: 17,
     RGBA: 18,
     R16I: 30,
@@ -91,6 +92,7 @@ function makeFakeGl() {
     UNSIGNED_SHORT: 39,
     UNSIGNED_BYTE: 19,
     UNPACK_ALIGNMENT: 41,
+    UNPACK_FLIP_Y_WEBGL: 43,
     COLOR_BUFFER_BIT: 20,
     DEPTH_BUFFER_BIT: 1 << 8,
     DEPTH_TEST: 21,
@@ -472,6 +474,58 @@ test("maps a retained Canvas overlay from its stable camera to the interaction c
   });
 });
 
+test("uploads Canvas color and order maps for depth-tested overlay composition", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const colorCanvas = { width: 20, height: 10 };
+  const orderCanvas = { width: 20, height: 10 };
+
+  const result = renderer.drawOrderedOverlay(
+    { canvas: colorCanvas, orderCanvas },
+    0.75,
+  );
+
+  assert.deepEqual(result, {
+    width: 20,
+    height: 10,
+    gpuBytes: 1_600,
+  });
+  assert.equal(calls.texImage2D.at(-2).at(-1), colorCanvas);
+  assert.equal(calls.texImage2D.at(-1).at(-1), orderCanvas);
+  assert.deepEqual(calls.drawArraysInstanced.at(-1), {
+    mode: gl.TRIANGLES,
+    first: 0,
+    count: 3,
+    instances: 1,
+  });
+  assert.deepEqual(calls.uniform1f.at(-1), {
+    name: "u_orderBias",
+    value: -0.25,
+  });
+  assert.deepEqual(calls.uniform1f.at(-2), {
+    name: "u_fallbackDepth",
+    value: 0.75,
+  });
+  renderer.drawOrderedOverlay(
+    { canvas: colorCanvas, orderCanvas, orderDepthBias: 0 },
+    0.75,
+  );
+  assert.deepEqual(calls.uniform1f.at(-1), {
+    name: "u_orderBias",
+    value: 0,
+  });
+  renderer.dispose();
+});
+
 test("culls offscreen layout instances in a full-quality redraw", () => {
   const { gl, calls } = makeFakeGl();
   const canvas = {
@@ -574,13 +628,221 @@ test("uploads odd-width viewport visibility rows without WebGL padding", () => {
   const integerByteUploads = calls.texImage2D.filter(
     (arguments_) => arguments_[2] === gl.R8UI,
   );
-  assert.equal(integerByteUploads.length, 2);
-  assert.equal(integerByteUploads[1][3], 70);
-  assert.equal(integerByteUploads[1][4], 2);
-  assert.equal(integerByteUploads[1][8].byteLength, 140);
+  const visibilityUpload = integerByteUploads.find(
+    (arguments_) =>
+      arguments_[4] === 2 &&
+      arguments_[8][0] === 1 &&
+      arguments_[8].at(-1) === 0,
+  );
+  assert.ok(visibilityUpload);
+  assert.equal(visibilityUpload[3], 70);
+  assert.equal(visibilityUpload[4], 2);
+  assert.equal(visibilityUpload[8].byteLength, 140);
+  const layerColorUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.RGBA && arguments_[3] === 70,
+    )
+    .at(-1);
+  const layerLineWeightUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R16I && arguments_[3] === 70,
+    )
+    .at(-1);
+  const layerLinetypeUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R16UI && arguments_[3] === 70,
+    )
+    .at(-1);
+  const layerPlotStyleUpload = integerByteUploads.at(-1);
+  for (const upload of [
+    layerColorUpload,
+    layerLineWeightUpload,
+    layerLinetypeUpload,
+    layerPlotStyleUpload,
+  ]) {
+    assert.equal(upload[4], 2);
+  }
+  assert.equal(layerColorUpload[8].byteLength, 560);
+  assert.equal(layerLineWeightUpload[8].byteLength, 280);
+  assert.equal(layerLinetypeUpload[8].byteLength, 280);
+  assert.equal(layerPlotStyleUpload[8].byteLength, 140);
   assert.deepEqual(
     calls.pixelStorei.map(({ value }) => value),
-    [1, 4, 1, 4],
+    [1, 4, 1, 4, 1, 4],
+  );
+  renderer.dispose();
+});
+
+test("uploads viewport-specific layer style rows", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const baseColors = new Uint32Array([
+    (2 << 30) | 1,
+    (2 << 30) | 2,
+  ]);
+  const overrideColors = new Uint32Array([
+    ((3 << 30) | 0x11_22_33) >>> 0,
+    (2 << 30) | 3,
+  ]);
+
+  const rendered = renderer.renderOverview({
+    batches: [
+      batch({
+        id: 0,
+        kind: GpuLineBatchKind.ModelOverview,
+        lodLevel: 0,
+        firstVertex: 0,
+      }),
+    ],
+    layers: [
+      { color: baseColors[0], flags: 0, lineWeight: 13 },
+      { color: baseColors[1], flags: 0, lineWeight: 25 },
+    ],
+    instanceGraph: {
+      instancesByBlock: new Map(),
+      layerVisibilityRows: [
+        new Uint8Array([1, 1]),
+        new Uint8Array([1, 1]),
+      ],
+      layerColorsByVisibilityRow: [baseColors, overrideColors],
+      layerLineWeightsByVisibilityRow: [
+        new Int16Array([13, 25]),
+        new Int16Array([50, 100]),
+      ],
+      layerLinetypesByVisibilityRow: [
+        new Uint16Array([2, 2]),
+        new Uint16Array([3, 4]),
+      ],
+    },
+    layerLinetypeCodes: new Uint16Array([2, 2]),
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+  });
+
+  const layerColorUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.RGBA &&
+        arguments_[3] === 2 &&
+        arguments_[4] === 2,
+    )
+    .at(-1);
+  const layerLineWeightUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R16I &&
+        arguments_[3] === 2 &&
+        arguments_[4] === 2,
+    )
+    .at(-1);
+  const layerLinetypeUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R16UI &&
+        arguments_[3] === 2 &&
+        arguments_[4] === 2,
+    )
+    .at(-1);
+  const layerPlotStyleUpload = calls.texImage2D
+    .filter(
+      (arguments_) =>
+        arguments_[2] === gl.R8UI &&
+        arguments_[3] === 2 &&
+        arguments_[4] === 2,
+    )
+    .at(-1);
+
+  assert.deepEqual([...layerColorUpload[8].slice(8, 16)], [
+    17, 34, 51, 255, 0, 255, 0, 255,
+  ]);
+  assert.deepEqual([...layerLineWeightUpload[8]], [13, 25, 50, 100]);
+  assert.deepEqual([...layerLinetypeUpload[8]], [2, 2, 3, 4]);
+  assert.deepEqual([...layerPlotStyleUpload[8]], [1, 2, 0, 3]);
+  assert.equal(rendered.layerTextureBytes, 16);
+  assert.equal(rendered.lineWeightTextureBytes, 8);
+  assert.equal(rendered.layerLinetypeTextureBytes, 8);
+  renderer.dispose();
+});
+
+test("draws layout viewport linetypes with their paper-space scales", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const matrices = new Float64Array(32);
+  matrices.set(identityMat4(), 0);
+  matrices.set(identityMat4(), 16);
+  const renderer = new WebGlLineRenderer(canvas);
+
+  const rendered = renderer.renderOverview({
+    batches: [
+      batch({
+        id: 0,
+        kind: GpuLineBatchKind.ModelOverview,
+        lodLevel: 0,
+        firstVertex: 0,
+      }),
+    ],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: {
+      instancesByBlock: new Map(),
+      modelInstances: {
+        data: matrices,
+        visibilityRows: new Uint32Array([0, 1]),
+        count: 2,
+        length: 2,
+      },
+      layerVisibilityRows: [
+        new Uint8Array([1]),
+        new Uint8Array([1]),
+      ],
+      linetypeScalesByVisibilityRow: new Float64Array([1, 5]),
+    },
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+    preferredView: {
+      center: [0, 0, 0],
+      height: 10,
+    },
+  });
+
+  assert.equal(rendered.drawCalls, 2);
+  assert.deepEqual(
+    calls.uniform1f
+      .filter(({ name }) => name === "u_viewportLinetypeScale")
+      .map(({ value }) => value),
+    [1, 5],
+  );
+  assert.ok(
+    calls.shaderSources.some((source) =>
+      source.includes(
+        "u_globalLinetypeScale * u_viewportLinetypeScale",
+      ),
+    ),
   );
   renderer.dispose();
 });
@@ -810,6 +1072,60 @@ test("redraws overview and independently uploaded detail vertex ranges", () => {
   assert.equal(interactive.detailDrawCalls, 1);
 
   assert.equal(renderer.deleteDetailBatch(detail.id), true);
+  renderer.dispose();
+});
+
+test("wide polyline meshes suppress only their matching native centerlines", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const overviewBatch = {
+    ...batch({
+      id: 0,
+      kind: GpuLineBatchKind.ModelOverview,
+      lodLevel: 0,
+      firstVertex: 0,
+    }),
+    vertexCount: 4,
+    bounds: { min: [0, 0, 0], max: [2, 1, 0] },
+  };
+  const first = renderer.renderOverview({
+    batches: [overviewBatch],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: lineVerticesForHandles([0x2an, 0x2bn]),
+  });
+  const empty = {
+    batches: [],
+    vertices: {
+      buffer: new ArrayBuffer(0),
+      byteLength: 0,
+      vertexCount: 0,
+    },
+    identityRanges: identityRangesFor(0),
+  };
+  renderer.setPrimitiveMeshes({
+    points: empty,
+    solidFills: empty,
+    solidOutlines: empty,
+    lineReplacementHandleWords: new Uint32Array([0x2a, 0]),
+  });
+
+  const callCount = calls.drawArraysInstanced.length;
+  const redrawn = renderer.redraw(first.camera);
+
+  assert.deepEqual(calls.drawArraysInstanced.slice(callCount), [
+    { mode: gl.LINES, first: 2, count: 2, instances: 1 },
+  ]);
+  assert.equal(redrawn.submittedVertices, 2);
   renderer.dispose();
 });
 
@@ -2901,6 +3217,155 @@ test("draws independently cached XREF overview and detail geometry", () => {
   renderer.dispose();
 });
 
+test("draws deferred XREF fills, patterns, primitives, and refined curves without linework", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const rootOverview = batch({
+    id: 0,
+    kind: GpuLineBatchKind.ModelOverview,
+    lodLevel: 0,
+    firstVertex: 0,
+  });
+  const rootBlocks = [
+    {
+      index: 0,
+      handle: 100n,
+      name: "*Model_Space",
+      basePoint: [0, 0, 0],
+    },
+  ];
+  const rootGraph = {
+    instancesByBlock: new Map(),
+    modelBlockIndices: new Set([0]),
+  };
+  const rootVertices = {
+    buffer: new ArrayBuffer(72),
+    byteLength: 72,
+    vertexCount: 2,
+  };
+  const root = renderer.renderOverview({
+    batches: [rootOverview],
+    blocks: rootBlocks,
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: rootGraph,
+    vertices: rootVertices,
+  });
+  renderer.setMaskComposition({
+    maskOrder: oneMaskPlan(),
+    instanceGraph: { ...rootGraph, maskOrderEnabled: true },
+    blocks: rootBlocks,
+    overviewVertices: rootVertices,
+  });
+  const identity = identityMat4();
+  const instanceGraph = {
+    instancesByBlock: new Map([
+      [
+        9,
+        {
+          data: identity,
+          measurementData: identity,
+          clipIds: new Uint32Array([0]),
+          count: 1,
+          length: 1,
+        },
+      ],
+    ]),
+    modelInstances: {
+      data: identity,
+      measurementData: identity,
+      clipIds: new Uint32Array([0]),
+      count: 1,
+      length: 1,
+    },
+  };
+  renderer.addExternalOverview({
+    id: "xref-only-deferred",
+    batches: [],
+    blocks: [],
+    instanceGraph,
+    vertices: {
+      buffer: new ArrayBuffer(0),
+      byteLength: 0,
+      vertexCount: 0,
+    },
+  });
+  const externalBatch = (vertexCount) => ({
+    id: 0,
+    kind: GpuLineBatchKind.BlockDefinition,
+    lodLevel: 1,
+    firstVertex: 0,
+    vertexCount,
+    blockIndex: 9,
+    origin: [0, 0, 0],
+    bounds: { min: [20, 0, 0], max: [21, 1, 0] },
+  });
+  const packed = (vertexCount, stride = 32) => ({
+    batches: vertexCount > 0 ? [externalBatch(vertexCount)] : [],
+    vertices: {
+      buffer: new ArrayBuffer(vertexCount * stride),
+      byteLength: vertexCount * stride,
+      vertexCount,
+    },
+    identityRanges: identityRangesFor(vertexCount),
+  });
+  renderer.setExternalPrimitiveMeshes("xref-only-deferred", {
+    points: packed(1),
+    solidFills: packed(3),
+    solidOutlines: packed(2),
+    wipeoutMasks: packed(3),
+  });
+  renderer.setExternalHatchFills("xref-only-deferred", packed(3));
+  renderer.setExternalHatchPatterns("xref-only-deferred", packed(2));
+  renderer.setExternalCurveRefinement("xref-only-deferred", {
+    entries: [
+      {
+        batch: { ...externalBatch(2), firstVertex: 0 },
+        vertices: {
+          ...lineVerticesForHandles([0x2an]),
+          recordSize: GPU_LINE_VERTEX_RECORD_SIZE,
+        },
+      },
+    ],
+    refinedHandleWords: new Uint32Array([0x2a, 0]),
+    cameraKey: curveRefinementCameraKey(root.camera),
+  });
+
+  const redrawn = renderer.redraw(root.camera);
+
+  assert.equal(redrawn.externalScenes, 1);
+  assert.equal(redrawn.externalOverviewGpuBytes, 0);
+  assert.equal(redrawn.externalDeferredGpuBytes, 520);
+  assert.equal(redrawn.gpuVertexBytes, 592);
+  assert.equal(redrawn.wipeoutMaskDrawCalls, 1);
+  assert.equal(redrawn.solidFillDrawCalls, 1);
+  assert.equal(redrawn.hatchFillDrawCalls, 1);
+  assert.equal(redrawn.hatchPatternDrawCalls, 1);
+  assert.equal(redrawn.solidOutlineDrawCalls, 1);
+  assert.equal(redrawn.curveRefinementDrawCalls, 1);
+  assert.equal(redrawn.pointDrawCalls, 1);
+  assert.deepEqual(calls.drawArraysInstanced.slice(-8), [
+    { mode: gl.TRIANGLES, first: 0, count: 3, instances: 1 },
+    { mode: gl.TRIANGLES, first: 0, count: 3, instances: 1 },
+    { mode: gl.TRIANGLES, first: 0, count: 3, instances: 1 },
+    { mode: gl.LINES, first: 0, count: 2, instances: 1 },
+    { mode: gl.LINES, first: 0, count: 2, instances: 1 },
+    { mode: gl.LINES, first: 0, count: 2, instances: 1 },
+    { mode: gl.LINES, first: 0, count: 2, instances: 1 },
+    { mode: gl.POINTS, first: 0, count: 1, instances: 1 },
+  ]);
+  assert.ok(redrawn.bounds.max[0] >= 21);
+  renderer.dispose();
+});
+
 test("atomically invalidates scene-scoped block and type caches", () => {
   const { gl } = makeFakeGl();
   const canvas = {
@@ -3218,6 +3683,14 @@ test("draws HATCH fills then patterns before boundary geometry", () => {
         blockIndex: null,
         origin: [0, 0, 0],
         bounds: { min: [0, 0, 0], max: [1, 1, 0] },
+        gradient: {
+          kind: 4,
+          alongAxis: [1, 0, 0],
+          acrossAxis: [0, 1, 0],
+          alongRange: [0, 1],
+          acrossRange: [0, 1],
+          shift: 1,
+        },
       },
     ],
     vertices: {
@@ -3259,6 +3732,11 @@ test("draws HATCH fills then patterns before boundary geometry", () => {
   assert.equal(redrawn.hatchPatternSubmittedVertices, 2);
   assert.equal(redrawn.hatchPatternGpuBytes, 64);
   assert.equal(redrawn.gpuVertexBytes, 232);
+  assert.equal(
+    calls.uniform1i.filter(({ name }) => name === "u_gradientKind").at(-1)
+      .value,
+    4,
+  );
   assert.deepEqual(calls.drawArraysInstanced.slice(-3), [
     { mode: gl.TRIANGLES, first: 0, count: 3, instances: 1 },
     { mode: gl.LINES, first: 0, count: 2, instances: 1 },
@@ -3743,6 +4221,234 @@ test("patches line buckets and draws WIPEOUT masks before depth-tested geometry"
 
   renderer.activateRenderDelta();
   assert.equal(renderer.redraw(first.camera).wipeoutMaskDrawCalls, 1);
+  renderer.dispose();
+});
+
+test("clears diagnostic style bits on XREF lines in draw-order mode", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const rootBatch = batch({
+    id: 0,
+    kind: GpuLineBatchKind.ModelOverview,
+    lodLevel: 0,
+    firstVertex: 0,
+  });
+  const rootVertices = {
+    buffer: new ArrayBuffer(72),
+    byteLength: 72,
+    vertexCount: 2,
+  };
+  const blocks = [
+    {
+      index: 0,
+      handle: 100n,
+      name: "*Model_Space",
+      basePoint: [0, 0, 0],
+    },
+  ];
+  const rootGraph = {
+    instancesByBlock: new Map(),
+    modelBlockIndices: new Set([0]),
+  };
+  renderer.renderOverview({
+    batches: [rootBatch],
+    blocks,
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: rootGraph,
+    vertices: rootVertices,
+  });
+  renderer.setMaskComposition({
+    maskOrder: oneMaskPlan(),
+    instanceGraph: { ...rootGraph, maskOrderEnabled: true },
+    blocks,
+    overviewVertices: rootVertices,
+  });
+
+  const externalBuffer = new ArrayBuffer(72);
+  const detailBuffer = new ArrayBuffer(72);
+  for (const buffer of [externalBuffer, detailBuffer]) {
+    const view = new DataView(buffer);
+    view.setUint32(28, (123 << 17) | 7, true);
+    view.setUint32(64, (456 << 17) | 7, true);
+  }
+  const externalBatch = {
+    ...batch({
+      id: 0,
+      kind: GpuLineBatchKind.BlockDefinition,
+      lodLevel: 0,
+      firstVertex: 0,
+    }),
+    blockIndex: 1,
+  };
+  const externalDetail = {
+    ...externalBatch,
+    id: 1,
+    lodLevel: 1,
+    firstVertex: 2,
+  };
+  const identity = identityMat4();
+  const externalGraph = {
+    instancesByBlock: new Map([
+      [
+        1,
+        {
+          data: identity,
+          measurementData: identity,
+          maskBases: new Uint32Array([1]),
+          clipIds: new Uint32Array([0]),
+          count: 1,
+          length: 1,
+        },
+      ],
+    ]),
+  };
+  renderer.addExternalOverview({
+    id: "xref-order",
+    batches: [externalBatch, externalDetail],
+    instanceGraph: externalGraph,
+    vertices: {
+      buffer: externalBuffer,
+      byteLength: 72,
+      vertexCount: 2,
+    },
+  });
+  renderer.addExternalDetailBatch("xref-order", externalDetail, {
+    buffer: detailBuffer,
+    byteLength: 72,
+    vertexCount: 2,
+  });
+
+  assert.deepEqual(
+    [externalBuffer, detailBuffer].flatMap((buffer) => {
+      const view = new DataView(buffer);
+      return [
+        decodeMaskBucket(view.getUint32(28, true)),
+        decodeMaskBucket(view.getUint32(64, true)),
+      ];
+    }),
+    [0, 0, 0, 0],
+  );
+
+  const orderedBuffer = lineVerticesForHandles([15n]);
+  const orderedBatch = {
+    ...batch({
+      id: 2,
+      kind: GpuLineBatchKind.BlockDefinition,
+      lodLevel: 0,
+      firstVertex: 0,
+    }),
+    blockIndex: -1,
+  };
+  renderer.addExternalOverview({
+    id: "xref-ordered",
+    batches: [orderedBatch],
+    blocks,
+    instanceGraph: {
+      ...externalGraph,
+      instancesByBlock: new Map([
+        [-1, externalGraph.instancesByBlock.get(1)],
+      ]),
+      maskBucketScale: 0.25,
+    },
+    maskOrder: oneMaskPlan(),
+    vertices: orderedBuffer,
+  });
+  assert.deepEqual(
+    [
+      decodeMaskBucket(
+        new DataView(orderedBuffer.buffer).getUint32(28, true),
+      ),
+      decodeMaskBucket(
+        new DataView(orderedBuffer.buffer).getUint32(64, true),
+      ),
+    ],
+    [1, 1],
+  );
+  renderer.dispose();
+});
+
+test("inherits draw-order buckets in staged line, fill, and point replacements", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const rootBatch = batch({
+    id: 0,
+    kind: GpuLineBatchKind.ModelOverview,
+    lodLevel: 0,
+    firstVertex: 0,
+  });
+  const rootVertices = lineVerticesForHandles([15n]);
+  const blocks = [
+    {
+      index: 0,
+      handle: 100n,
+      name: "*Model_Space",
+      basePoint: [0, 0, 0],
+    },
+  ];
+  const rootGraph = {
+    instancesByBlock: new Map(),
+    modelBlockIndices: new Set([0]),
+  };
+  renderer.renderOverview({
+    batches: [rootBatch],
+    blocks,
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: rootGraph,
+    vertices: rootVertices,
+  });
+  renderer.setMaskComposition({
+    maskOrder: oneMaskPlan(),
+    instanceGraph: { ...rootGraph, maskOrderEnabled: true },
+    blocks,
+    overviewVertices: rootVertices,
+  });
+  const lines = lineVerticesForHandles([15n]);
+  const fills = deltaFillVertices();
+  const points = deltaPointVertices();
+  renderer.stageRenderDeltaLine({
+    key: "ordered-line",
+    batch: rootBatch,
+    vertices: lines,
+  });
+  renderer.stageRenderDeltaFill({
+    key: "ordered-fill",
+    batch: { ...rootBatch, id: 1, vertexCount: 3 },
+    vertices: fills,
+    entityHandle: 15n,
+  });
+  renderer.stageRenderDeltaPoint({
+    key: "ordered-point",
+    batch: { ...rootBatch, id: 2, vertexCount: 1 },
+    vertices: points,
+    entityHandle: 15n,
+  });
+
+  assert.deepEqual(
+    [
+      new DataView(lines.buffer).getUint32(28, true),
+      new DataView(fills.buffer).getUint32(28, true),
+      new DataView(points.buffer).getUint32(28, true),
+    ].map(decodeMaskBucket),
+    [1, 1, 1],
+  );
   renderer.dispose();
 });
 

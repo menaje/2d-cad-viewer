@@ -31,12 +31,13 @@ test("publishes a stable Viewer WebGL package identity", () => {
 
 test("mounts and idempotently disposes an injected WebGL presentation", async () => {
   const events = [];
+  const viewerContext = context();
   const renderer = {
     dispose() {
       events.push("renderer.dispose");
     },
   };
-  const presentation = await mountWebGlPresentation(context(), {
+  const presentation = await mountWebGlPresentation(viewerContext, {
     canvas: canvas(),
     renderer,
     async load(input) {
@@ -52,6 +53,7 @@ test("mounts and idempotently disposes an injected WebGL presentation", async ()
     },
   });
 
+  assert.equal(presentation.context, viewerContext);
   assert.equal(presentation.renderer, renderer);
   assert.equal(presentation.scene.renderer, renderer);
   await presentation.dispose();

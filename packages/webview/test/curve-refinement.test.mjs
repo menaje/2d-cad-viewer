@@ -152,6 +152,11 @@ function sourceWithAllCurveKinds() {
         controlPointCount: 4,
         firstWeight: 0,
         weightCount: 0,
+        firstFitPoint: 0,
+        fitPointCount: 0,
+        knotParameterization: 0,
+        beginTangent: [0, 0, 0],
+        endTangent: [0, 0, 0],
       },
     ]),
     splineKnots: scalarTable([0, 0, 0, 0, 1, 1, 1, 1]),
@@ -162,6 +167,7 @@ function sourceWithAllCurveKinds() {
       [5, -12, 0],
       [10, 5, 0],
     ]),
+    splineFitPoints: pointTable([]),
   };
 }
 
@@ -193,6 +199,30 @@ function decodedSegments(refinement, handle) {
             view.getFloat32(offset + 36 + axis * 4, true),
         ),
       ]);
+    }
+  }
+  return output;
+}
+
+function decodedPatternDistances(refinement, handle) {
+  const output = [];
+  for (const entry of refinement.entries) {
+    const view = new DataView(entry.vertices.buffer);
+    for (
+      let vertex = 0;
+      vertex < entry.vertices.vertexCount;
+      vertex += 2
+    ) {
+      const offset = vertex * 36;
+      const vertexHandle =
+        BigInt(view.getUint32(offset + 20, true)) |
+        (BigInt(view.getUint32(offset + 24, true)) << 32n);
+      if (vertexHandle === handle) {
+        output.push([
+          view.getFloat32(offset + 32, true),
+          view.getFloat32(offset + 68, true),
+        ]);
+      }
     }
   }
   return output;
@@ -249,6 +279,208 @@ test("refines ARC, CIRCLE, ELLIPSE, bulge and NURBS within the GPU budget", () =
   const polylineEnd = decodedSegments(refinement, 4n).at(-1)[1];
   assert.ok(Math.hypot(polylineEnd[0] - 7, polylineEnd[1]) <= 1e-6);
   assert.equal(polylineEnd[2], 0);
+});
+
+test("uses generated display vertices for legacy spline-fit polylines", () => {
+  const { blocks, instanceGraph, camera } = modelScene();
+  const source = sourceWithAllCurveKinds();
+  source.arcs = entityTable([]);
+  source.circles = entityTable([]);
+  source.ellipses = entityTable([]);
+  source.splines = entityTable([]);
+  source.polylines = entityTable([
+    {
+      ...common(41n),
+      firstVertex: 0,
+      vertexCount: 4,
+      polylineKind: 2,
+      polylineFlags: 4,
+      elevation: 0,
+      normal: [0, 0, 1],
+    },
+  ]);
+  source.polylineVertices = vertexTable([
+    { position: [100, 100, 0], bulge: 0, flags: 16 },
+    { position: [0, 0, 0], bulge: 1, flags: 8 },
+    { position: [10, 0, 0], bulge: 0, flags: 8 },
+    { position: [-100, 100, 0], bulge: 0, flags: 16 },
+  ]);
+
+  const refinement = buildCurveRefinementMesh(
+    source,
+    blocks,
+    instanceGraph,
+    camera,
+  );
+  const segments = decodedSegments(refinement, 41n);
+
+  assert.ok(segments.length > 1);
+  assert.ok(
+    segments.flat(2).every((coordinate) => Math.abs(coordinate) <= 10.000001),
+  );
+  assert.ok(Math.hypot(...segments[0][0]) <= 1e-6);
+  assert.ok(
+    Math.hypot(
+      segments.at(-1)[1][0] - 10,
+      segments.at(-1)[1][1],
+      segments.at(-1)[1][2],
+    ) <= 1e-6,
+  );
+});
+
+test("refines a fit-point-only SPLINE instead of joining its points", () => {
+  const { blocks, instanceGraph, camera } = modelScene();
+  const source = sourceWithAllCurveKinds();
+  source.arcs = entityTable([]);
+  source.circles = entityTable([]);
+  source.ellipses = entityTable([]);
+  source.polylines = entityTable([]);
+  source.splines = entityTable([
+    {
+      ...common(51n),
+      degree: 3,
+      splineFlags: 0,
+      knotParameterization: 0,
+      firstKnot: 0,
+      knotCount: 0,
+      firstControlPoint: 0,
+      controlPointCount: 0,
+      firstWeight: 0,
+      weightCount: 0,
+      firstFitPoint: 0,
+      fitPointCount: 4,
+      beginTangent: [8, 0, 0],
+      endTangent: [8, 0, 0],
+    },
+  ]);
+  source.splineKnots = scalarTable([]);
+  source.splineWeights = scalarTable([]);
+  source.splineControlPoints = pointTable([]);
+  const fitPoints = [
+    [-10, 0, 0],
+    [-4, 8, 0],
+    [4, -6, 0],
+    [10, 0, 0],
+  ];
+  source.splineFitPoints = pointTable(fitPoints);
+
+  const refinement = buildCurveRefinementMesh(
+    source,
+    blocks,
+    instanceGraph,
+    camera,
+  );
+  const segments = decodedSegments(refinement, 51n);
+
+  assert.equal(refinement.metrics.refined, 1);
+  assert.ok(segments.length > fitPoints.length - 1);
+  for (const point of fitPoints) {
+    assert.ok(distanceToSegments(point, segments) <= 0.03);
+  }
+  const firstDelta = [
+    segments[0][1][0] - segments[0][0][0],
+    segments[0][1][1] - segments[0][0][1],
+  ];
+  assert.ok(firstDelta[0] > 0);
+  assert.ok(Math.abs(firstDelta[1]) < firstDelta[0] * 0.2);
+});
+
+test("closes a periodic fit-point SPLINE with a smooth refined seam", () => {
+  const { blocks, instanceGraph, camera } = modelScene();
+  const source = sourceWithAllCurveKinds();
+  source.arcs = entityTable([]);
+  source.circles = entityTable([]);
+  source.ellipses = entityTable([]);
+  source.polylines = entityTable([]);
+  source.splines = entityTable([
+    {
+      ...common(52n),
+      degree: 3,
+      splineFlags: 3,
+      knotParameterization: 2,
+      firstKnot: 0,
+      knotCount: 0,
+      firstControlPoint: 0,
+      controlPointCount: 0,
+      firstWeight: 0,
+      weightCount: 0,
+      firstFitPoint: 0,
+      fitPointCount: 4,
+      beginTangent: [0, 0, 0],
+      endTangent: [0, 0, 0],
+    },
+  ]);
+  source.splineKnots = scalarTable([]);
+  source.splineWeights = scalarTable([]);
+  source.splineControlPoints = pointTable([]);
+  const fitPoints = [
+    [-6, 0, 0],
+    [0, 6, 0],
+    [6, 0, 0],
+    [0, -6, 0],
+  ];
+  source.splineFitPoints = pointTable(fitPoints);
+
+  const refinement = buildCurveRefinementMesh(
+    source,
+    blocks,
+    instanceGraph,
+    camera,
+  );
+  const segments = decodedSegments(refinement, 52n);
+
+  assert.ok(segments.length > fitPoints.length);
+  assert.ok(Math.hypot(...segments[0][0].map((value, axis) => value - fitPoints[0][axis])) <= 1e-6);
+  assert.ok(Math.hypot(...segments.at(-1)[1].map((value, axis) => value - fitPoints[0][axis])) <= 1e-6);
+  for (const point of fitPoints) {
+    assert.ok(distanceToSegments(point, segments) <= 0.03);
+  }
+});
+
+test("restarts polyline linetype distance at vertices unless PLINEGEN is set", () => {
+  const { blocks, instanceGraph, camera } = modelScene();
+  const makeSource = (polylineFlags) => {
+    const source = sourceWithAllCurveKinds();
+    source.arcs = entityTable([]);
+    source.circles = entityTable([]);
+    source.ellipses = entityTable([]);
+    source.splines = entityTable([]);
+    source.polylines = entityTable([
+      {
+        ...common(42n),
+        firstVertex: 0,
+        vertexCount: 3,
+        polylineKind: 1,
+        polylineFlags,
+        elevation: 0,
+        normal: [0, 0, 1],
+      },
+    ]);
+    source.polylineVertices = vertexTable([
+      { position: [0, 0, 0], bulge: 0, flags: 0 },
+      { position: [10, 0, 0], bulge: 1, flags: 0 },
+      { position: [20, 0, 0], bulge: 0, flags: 0 },
+    ]);
+    return source;
+  };
+  const restarted = buildCurveRefinementMesh(
+    makeSource(0),
+    blocks,
+    instanceGraph,
+    camera,
+  );
+  const continuous = buildCurveRefinementMesh(
+    makeSource(128),
+    blocks,
+    instanceGraph,
+    camera,
+  );
+  const restartedDistances = decodedPatternDistances(restarted, 42n);
+  const continuousDistances = decodedPatternDistances(continuous, 42n);
+
+  assert.deepEqual(restartedDistances[0], [0, 10]);
+  assert.equal(restartedDistances[1][0], 0);
+  assert.ok(continuousDistances[1][0] >= 9.999);
 });
 
 test("circular sagitta plus f32 position error stays within 0.5 pixels", () => {
