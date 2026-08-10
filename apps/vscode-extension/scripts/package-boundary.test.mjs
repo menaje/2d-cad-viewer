@@ -70,6 +70,7 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   const manifest = JSON.parse(manifestText);
   const repositoryManifest = JSON.parse(repositoryManifestText);
 
+  assert.equal(manifest.displayName, "Coni DWG Viewer");
   assert.equal(manifest.license, "MPL-2.0");
   assert.equal(manifest.icon, "images/icon.png");
   assert.deepEqual(manifest.extensionKind, ["workspace"]);
