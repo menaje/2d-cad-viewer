@@ -4,20 +4,25 @@ This process-isolated adapter implements the `dwg-engine-adapter/1` inspection
 and conversion contract. It traverses LibreDWG's object model directly instead
 of creating a full JSON dump.
 
-The `convert` path writes Scene Cache v1.20 without a whole-drawing intermediate
+The `convert` path writes Scene Cache v1.21 without a whole-drawing intermediate
 model. It repeatedly traverses LibreDWG objects and streams sections and
 bounded GPU batches directly to a new cache file. For large drawings, it
 spills fixed-size detail records into private unnamed temporary files, sorts
 8,192-record runs, and performs one buffered merge into group-local XY Morton
-order. The in-memory sort working set stays bounded below 0.8 MB; the
-temporary files are mode `0600`, close-on-exec, and removed automatically.
+order. The in-memory sort working set stays bounded to one fixed run buffer per
+selected worker; the temporary files are mode `0600`, close-on-exec, and
+removed automatically.
+GPU batch metadata and its packed 36-byte vertices are generated together in
+one geometry pass, with each bounded batch written as one vertex buffer rather
+than one field at a time. The final batch and vertex sections retain their
+existing deterministic byte layout.
 HATCH sections use repeated bounded passes and retain at most one 65,536-point
 ring (about 1.5 MiB) while streaming. Pattern-definition lines and dash values
 are streamed in separate bounded passes, and no whole-drawing fill or pattern
 mesh is built in the converter. DIMENSION picture blocks reuse the existing
 fixed-size block-instance stream and do not copy their geometry.
 
-This is a deliberately partial conversion milestone:
+The current conversion coverage is corpus-qualified rather than format-wide:
 
 - layer, linetype, block, style and entity strings are converted from the
   DWG code page to valid UTF-8 before serialization, including `ANSI_949`;
@@ -58,6 +63,22 @@ This is a deliberately partial conversion milestone:
 - POINT retains WCS location, normal, thickness, X-axis angle and drawing
   `PDMODE`/`PDSIZE`; SOLID retains four OCS corners in 1-2-4-3 perimeter
   order, normal, thickness and drawing `FILLMODE`;
+- TRACE retains the same 1-2-4-3 perimeter order as SOLID, and finite RAY
+  display extends only in its forward direction;
+- POLYLINE mesh rows and columns retain their declared M/N topology and closed
+  directions; MLINE display retains styled parallel elements, cut parameters,
+  start/end caps and joined miters;
+- REGION, 3DSOLID and BODY display reads bounded SAT plus ACIS/ASM SAB topology
+  and emits transformed straight, elliptic and exact rational NURBS edge
+  chords. The checksum-pinned LibreDWG 0.14 source is patched during every
+  Native and WASM build so complete ACDS SAB payloads are extracted before an
+  optional schema decoder can reject them;
+- an unsupported class with valid official proxy graphics can still display
+  safely: bounded model transforms, colors, lineweights, linetypes,
+  polylines/polygons and UTF-16 `UNICODE_TEXT2` records are streamed into the
+  ordinary line and text sections. This currently preserves the complete
+  `ACAD_TABLE` display found in the private qualification corpus without
+  enabling LibreDWG's unstable TABLE object decoder;
 - 3DFACE retains four WCS corners and all four invisible-edge bits; its current
   wireframe display emits only visible, non-degenerate edges;
 - WIPEOUT retains its image basis, display properties, exact rectangular or
@@ -79,9 +100,10 @@ This is a deliberately partial conversion milestone:
   linetype and lineweight overrides, capped at 1,048,576 property records;
 - XLINE, MULTILEADER and classic LEADER geometry is displayed with bounded
   approximations, including LEADER arrows and hook lines;
-- OLE2FRAME uses the embedded four-corner placement when available and falls
-  back to its public rectangle; the embedded CFB/Excel/image body is not
-  decoded and only the placement boundary is currently displayed;
+- OLE2FRAME accepts both observed embedded four-corner preamble markers,
+  extracts bounded BMP/DIB presentations and reconstructs strictly validated
+  chunked EMF presentations from Excel OLE previews; unsupported presentations
+  retain their placement as an explicit crossed placeholder;
 - after the first line frame, the Webview fills solid/gradient rings and
   clips pattern strokes to the current viewport in one persistent worker;
 - a preceding one-shot worker builds instanced POINT markers, SOLID
@@ -102,11 +124,12 @@ This is a deliberately partial conversion milestone:
   external image baselines for every OCS/justification combination remain
   open in GitHub issues #5 and #7.
 
-This writer is the selected primary engine path, but its remaining source
-families and exact text layout are not yet release-ready. Its large-drawing
-detail batches use group-local midpoint quantization and a 16-bit XY Morton
-key, with original source order as the deterministic tie breaker. The current
-36-byte vertex record caps the
+This writer is the selected primary engine path. Entities outside the
+qualified families remain observable through `coverage.deferred_entities`, so
+new corpora cannot silently turn an unsupported object into a successful
+conversion claim. Its large-drawing detail batches use group-local midpoint
+quantization and a 16-bit XY Morton key, with original source order as the
+deterministic tie breaker. The current 36-byte vertex record caps the
 first-frame overview at 58,254 segments and 4 MiB. Each detail GPU batch is
 capped at 7,281 segments (524,232 bytes), below the Webview's 512 KiB
 range-read limit.
@@ -114,7 +137,7 @@ range-read limit.
 ## Progressive first frame
 
 When the VS Code host supplies both private preview paths, the same conversion
-process emits a Scene Cache v1.20 first-frame sidecar immediately after parsing
+process emits a Scene Cache v1.21 first-frame sidecar immediately after parsing
 and overview planning, before the disk-backed full-detail sort. The sidecar
 contains drawing/layer/block/INSERT and layout/viewport metadata, including
 viewport layer overrides, plus overview-only GPU line data; remaining required
@@ -142,9 +165,10 @@ graph or a higher parser memory class.
 ## Portable build and self-diagnosis
 
 The reproducible path downloads checksum-pinned LibreDWG and pkgconf sources,
-builds a stripped adapter with LibreDWG linked statically under a new private
-directory, and writes the adapter to a new path. It never installs a system
-package:
+applies the repository's reviewed ACDS SAT/SAB and R2007 high-compression
+patches, builds a stripped adapter with LibreDWG linked statically under a new
+private directory, and writes the adapter to a new path. It never installs a
+system package:
 
 ```bash
 adapters/libredwg/prepare.sh \
@@ -207,7 +231,7 @@ working drawings are not accepted as repository fixtures.
 The R2004 round-trip qualification used the repository's
 [`generate-viewport-layer-overrides.py`](../../tests/fixtures/generate-viewport-layer-overrides.py)
 definition and a separate write-enabled LibreDWG 0.14 build. The read-only
-product adapter emitted a valid 47-section Scene Cache v1.20, and the canonical
+product adapter emitted a valid 49-section Scene Cache v1.21, and the canonical
 reader recovered true color `0xc040c4ff`, transparency `0x27000000`, `DASHED`
 and lineweight `50` on the original viewport handle. The write-enabled build is
 only a fixture producer; it is not part of the product or release package.
@@ -229,24 +253,28 @@ The packager refuses to overwrite a file, rejects a dynamic LibreDWG
 dependency, local build paths, a wrong source checksum or an incompatible
 doctor report. The archive includes the executable, unmodified GPL and MPL
 license texts, the DWG Viewer project notice, checksums, a machine-readable
-manifest, all adapter build sources and the exact LibreDWG 0.14 source archive.
+manifest, all adapter build sources (including both reviewed source patches)
+and the exact LibreDWG 0.14 source archive.
 Fixed metadata and sorted entries make repeated packaging from the same target
 binary byte-identical. The included repository license, notice and package
 metadata also let the packaged `package.mjs` run from the extracted source tree
 instead of depending on files outside the archive.
 
-GitHub's release workflow qualifies Linux x64, macOS arm64, and Windows x64
-packages, reproduces the archives, verifies their extracted contents, and
-creates keyless GitHub build-provenance attestations. The Windows writer uses
-private delete-on-close native temporary files and non-inheritable handles.
-Its qualification also exercises cancellation plus drive, UNC, relative,
-Unicode, normalization, and case-insensitive paths on the Windows runner.
+GitHub's release workflow qualifies Linux x64, macOS arm64, macOS Intel x64,
+and Windows x64 packages, reproduces the archives, verifies their extracted
+contents, and creates keyless GitHub build-provenance attestations. Intel
+macOS builds run on GitHub's `macos-15-intel` standard runner. The Windows
+writer uses private delete-on-close native temporary files and non-inheritable
+handles. Its qualification also exercises cancellation plus drive, UNC,
+relative, Unicode, normalization, and case-insensitive paths on the Windows
+runner.
 
-The MPL-only VSIX never bundles this executable. A separate, platform-specific
-GPL companion VSIX is staged only from this verified source-complete package;
-it keeps the executable, exact corresponding source, licenses, manifest and
-checksums together. The complete reviewed publication and verification
-procedure is in
+The MPL-only VSIX never bundles this executable. The release workflow copies
+the verified executable to a viewer-versioned raw converter asset and publishes
+the source-complete archive beside it in the same immutable GitHub Release.
+The main VSIX records both files' exact names, sizes, and SHA-256 digests, then
+downloads and runs the converter as a separate process. The complete reviewed
+publication and verification procedure is in
 [`docs/distribution.md`](../../docs/distribution.md). This packaging policy is
 engineering guidance, not legal advice.
 
@@ -277,6 +305,16 @@ Reports never include the input name, drawing text samples, diagnostic
 messages, or a block name. LibreDWG parsing, analysis and cache writing stay in
 the adapter process so all transient memory is reclaimed when the process
 exits.
+
+The native writer resolves LibreDWG object references before parallel work,
+sorts copied spatial records across available cores, and writes seven
+independent contiguous section groups concurrently before deterministic
+concatenation. The GPU section group fuses batch-directory and packed-vertex
+generation into one traversal and buffers each batch before writing.
+`DWG_VIEWER_CONVERSION_WORKERS=1..8` can override the automatic
+online-CPU count for qualification. The conversion report records the selected
+worker count, actual sort and section concurrency, coarse stages, spatial-sort
+sub-stages, and each section-group duration under `performance`.
 
 LibreDWG exposes block markers, polyline vertices and attached attributes as
 separate raw entities. The adapter keeps raw counts under `drawing.raw_*` and

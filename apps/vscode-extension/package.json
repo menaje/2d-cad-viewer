@@ -1,8 +1,8 @@
 {
   "name": "dwg-viewer-vscode",
-  "displayName": "Coni DWG Viewer",
+  "displayName": "DWG Viewer for VS Code",
   "description": "Open-source, local-first DWG viewing with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "menaje",
   "license": "MPL-2.0",
   "private": true,
@@ -33,10 +33,8 @@
   "extensionKind": [
     "workspace"
   ],
-  "extensionDependencies": [
-    "menaje.dwg-viewer-libredwg"
-  ],
   "activationEvents": [
+    "onStartupFinished",
     "onCustomEditor:dwgViewer.dwg",
     "onCommand:dwgViewer.addShxFontFolders",
     "onCommand:dwgViewer.selectLibreDwgAdapter",
@@ -126,13 +124,45 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Optional absolute path overriding the GPL LibreDWG adapter installed automatically with DWG Viewer."
+          "description": "Optional absolute path used only as an offline fallback when the version-matched LibreDWG converter cannot be installed automatically."
         },
         "dwgViewer.progressivePreview": {
           "type": "boolean",
           "default": false,
           "scope": "window",
           "description": "Show an overview while full conversion continues. This improves first-frame latency but substantially increases concurrent memory."
+        },
+        "dwgViewer.renderResolution": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "quality",
+            "performance"
+          ],
+          "enumDescriptions": [
+            "Dynamically reduce backing pixels on high-DPI and interactive frames, then restore bounded detail when interaction stops.",
+            "Keep up to 2 device pixels per CSS pixel without a display pixel budget.",
+            "Prefer lower backing resolution for the smallest GPU fill and overlay cost."
+          ],
+          "default": "auto",
+          "scope": "window",
+          "description": "Control the drawing surface resolution used by WebGL and canvas overlays. Raster exports keep their requested output size."
+        },
+        "dwgViewer.interactionRendering": {
+          "type": "string",
+          "enum": [
+            "continuous",
+            "hybrid",
+            "maximumPerformance"
+          ],
+          "enumDescriptions": [
+            "Redraw low-resolution geometry on every interaction frame so newly exposed areas remain visible. This uses the most GPU and CPU time.",
+            "Move the completed frame immediately and refresh low-resolution geometry periodically. This is the recommended balance of responsiveness and coverage.",
+            "Move only the completed frame until interaction stops. This minimizes rendering work, but newly exposed areas can remain blank temporarily."
+          ],
+          "default": "hybrid",
+          "scope": "window",
+          "description": "Choose how the viewer redraws while panning or zooming. Conversion and export performance are unaffected."
         },
         "dwgViewer.topToolbarLabels": {
           "type": "string",

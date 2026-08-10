@@ -52,6 +52,7 @@ test("recognizes idempotent platform prerelease publication", () => {
       responseFor([
         version("0.1.3", "linux-x64", true),
         version("0.1.3", "darwin-arm64", true),
+        version("0.1.3", "darwin-x64", true),
         version("0.1.2", "win32-x64", true),
       ]),
       "menaje.dwg-viewer-libredwg",
@@ -59,7 +60,7 @@ test("recognizes idempotent platform prerelease publication", () => {
       "prerelease",
     ),
     {
-      existingTargets: ["linux-x64", "darwin-arm64"],
+      existingTargets: ["linux-x64", "darwin-arm64", "darwin-x64"],
       exists: true,
     },
   );

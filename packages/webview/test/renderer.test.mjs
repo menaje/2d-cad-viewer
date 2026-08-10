@@ -390,6 +390,41 @@ test("limits fitted bounds and packs camera-relative INSERT clips", () => {
   assert.deepEqual([...payload.data.slice(4, 6)], [0, 0]);
 });
 
+test("does not fit an unresolved root INSERT clip without drawable geometry", () => {
+  const clipNodes = [
+    createClipNode(1, 0, [
+      [1000, 1000, 0],
+      [1020, 1000, 0],
+      [1020, 1020, 0],
+      [1000, 1020, 0],
+    ]),
+  ];
+  const instanceGraph = {
+    modelInstances: Object.freeze({
+      data: identityMat4(),
+      clipIds: new Uint32Array([0]),
+      count: 1,
+      length: 1,
+    }),
+    instancesByBlock: new Map(),
+    clipNodes,
+  };
+  const modelBatch = {
+    ...batch({
+      id: 0,
+      kind: GpuLineBatchKind.ModelOverview,
+      lodLevel: 0,
+      firstVertex: 0,
+    }),
+    bounds: { min: [0, 0, 0], max: [100, 50, 0] },
+  };
+
+  assert.deepEqual(calculateOverviewBounds([modelBatch], instanceGraph), {
+    min: [0, 0, 0],
+    max: [100, 50, 0],
+  });
+});
+
 test("culls offscreen and sub-pixel instances during interaction", () => {
   const matrices = new Float64Array(32);
   matrices.set(identityMat4(), 0);
@@ -472,6 +507,170 @@ test("maps a retained Canvas overlay from its stable camera to the interaction c
     translateX: -140,
     translateY: -70,
   });
+});
+
+test("switches between hybrid, continuous, and maximum-performance interaction rendering", () => {
+  const { gl, calls } = makeFakeGl();
+  let contextOptions;
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    style: {},
+    getContext(name, options) {
+      contextOptions = options;
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const snapshotContext = {
+    drawImages: [],
+    setTransform() {},
+    clearRect() {},
+    drawImage(...values) {
+      this.drawImages.push(values);
+    },
+  };
+  const interactionCanvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    style: {},
+    getContext(name) {
+      return name === "2d" ? snapshotContext : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas, {
+    interactionCanvas,
+  });
+  const stable = renderer.renderOverview({
+    batches: [
+      batch({
+        id: 0,
+        kind: GpuLineBatchKind.ModelOverview,
+        lodLevel: 0,
+        firstVertex: 0,
+      }),
+    ],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+  });
+  const stableDraws = calls.drawArraysInstanced.length;
+  const movedView = {
+    ...stable.camera,
+    origin: [stable.camera.origin[0] + 1, stable.camera.origin[1], 0],
+    worldHeight: stable.camera.worldHeight * 0.5,
+  };
+
+  const interactive = renderer.redraw(movedView, { interactive: true });
+
+  assert.equal(contextOptions.antialias, false);
+  assert.equal(stable.interactionFrameCaptured, true);
+  assert.equal(stable.interactionRenderingMode, "hybrid");
+  assert.equal(interactive.interactionFrameReused, true);
+  assert.equal(interactive.drawCalls, 0);
+  assert.equal(calls.drawArraysInstanced.length, stableDraws);
+  assert.equal(canvas.style.opacity, "0");
+  assert.equal(interactionCanvas.style.opacity, "1");
+  assert.match(interactionCanvas.style.transform, /^matrix\(/u);
+
+  renderer.lastHybridRefreshAt = Number.NEGATIVE_INFINITY;
+  const hybridRefresh = renderer.redraw(movedView, {
+    interactive: true,
+  });
+  assert.equal(hybridRefresh.interactionFrameReused, false);
+  assert.equal(hybridRefresh.interactionFrameCaptured, true);
+  assert.ok(calls.drawArraysInstanced.length > stableDraws);
+  assert.equal(canvas.style.opacity, "");
+  assert.equal(interactionCanvas.style.opacity, "0");
+
+  const refreshedDraws = calls.drawArraysInstanced.length;
+  renderer.lastHybridRefreshAt = Number.POSITIVE_INFINITY;
+  const hybridReuse = renderer.redraw(
+    {
+      ...movedView,
+      origin: [movedView.origin[0] + 1, movedView.origin[1], 0],
+    },
+    { interactive: true },
+  );
+  assert.equal(hybridReuse.interactionFrameReused, true);
+  assert.equal(calls.drawArraysInstanced.length, refreshedDraws);
+
+  const settled = renderer.redraw(movedView);
+  assert.equal(settled.interactionFrameCaptured, true);
+  assert.ok(calls.drawArraysInstanced.length > refreshedDraws);
+  assert.equal(canvas.style.opacity, "");
+  assert.equal(interactionCanvas.style.opacity, "0");
+  assert.equal(snapshotContext.drawImages.length, 3);
+
+  assert.equal(
+    renderer.setInteractionRenderingMode("continuous"),
+    "continuous",
+  );
+  const continuousDraws = calls.drawArraysInstanced.length;
+  const continuous = renderer.redraw(movedView, { interactive: true });
+  assert.equal(continuous.interactionFrameReused, false);
+  assert.equal(continuous.interactionFrameCaptured, false);
+  assert.equal(continuous.interactionRenderingMode, "continuous");
+  assert.ok(calls.drawArraysInstanced.length > continuousDraws);
+  assert.equal(canvas.style.opacity, "");
+  assert.equal(interactionCanvas.style.opacity, "0");
+
+  renderer.redraw(movedView);
+  assert.equal(
+    renderer.setInteractionRenderingMode("maximumPerformance"),
+    "maximumPerformance",
+  );
+  const maximumPerformanceDraws = calls.drawArraysInstanced.length;
+  const maximumPerformance = renderer.redraw(
+    {
+      ...movedView,
+      origin: [movedView.origin[0] + 2, movedView.origin[1], 0],
+    },
+    { interactive: true },
+  );
+  assert.equal(maximumPerformance.interactionFrameReused, true);
+  assert.equal(
+    maximumPerformance.interactionRenderingMode,
+    "maximumPerformance",
+  );
+  assert.equal(
+    calls.drawArraysInstanced.length,
+    maximumPerformanceDraws,
+  );
+  renderer.dispose();
+});
+
+test("requests WebGL MSAA only for quality mode", () => {
+  for (const [mode, expected] of [
+    ["auto", false],
+    ["performance", false],
+    ["quality", true],
+  ]) {
+    const { gl } = makeFakeGl();
+    let contextOptions;
+    const canvas = {
+      clientWidth: 200,
+      clientHeight: 100,
+      width: 0,
+      height: 0,
+      getContext(name, options) {
+        contextOptions = options;
+        return name === "webgl2" ? gl : null;
+      },
+    };
+    const renderer = new WebGlLineRenderer(canvas, {
+      renderResolutionMode: mode,
+    });
+    assert.equal(contextOptions.antialias, expected);
+    renderer.dispose();
+  }
 });
 
 test("uploads Canvas color and order maps for depth-tested overlay composition", () => {
@@ -847,7 +1046,7 @@ test("draws layout viewport linetypes with their paper-space scales", () => {
   renderer.dispose();
 });
 
-test("uses the saved model view without expanding to distant geometry", () => {
+test("rejects a saved model view that does not intersect drawable geometry", () => {
   const { gl } = makeFakeGl();
   const canvas = {
     clientWidth: 200,
@@ -886,17 +1085,13 @@ test("uses the saved model view without expanding to distant geometry", () => {
     },
   });
 
-  assert.deepEqual(first.camera.origin, [
-    1_903_111.95,
-    -372_937.28,
-    0,
-  ]);
-  assert.equal(first.camera.worldHeight, 144_557.99);
+  assert.deepEqual(first.camera.origin, [0, 0, 0]);
+  assert.equal(first.camera.worldHeight, 2_160_000);
   assert.deepEqual(renderer.fitCamera().origin, first.camera.origin);
   assert.equal(renderer.fitCamera().worldHeight, first.camera.worldHeight);
   assert.deepEqual(renderer.fitAllCamera().origin, [0, 0, 0]);
   assert.equal(renderer.fitAllCamera().worldHeight, 2_160_000);
-  renderer.setInstanceGraph(
+  const switched = renderer.setInstanceGraph(
     { instancesByBlock: new Map() },
     {
       preferredBounds: {
@@ -910,8 +1105,186 @@ test("uses the saved model view without expanding to distant geometry", () => {
     },
   );
   assert.deepEqual(renderer.overviewScene.bounds, overview.bounds);
+  assert.deepEqual(switched.camera.origin, [300, 250, 0]);
+  assert.equal(switched.camera.worldHeight, 648);
   assert.deepEqual(renderer.fitAllCamera().origin, [300, 250, 0]);
   assert.equal(renderer.fitAllCamera().worldHeight, 648);
+  renderer.dispose();
+});
+
+test("preserves the complete width of a saved model view", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const rendered = renderer.renderOverview({
+    batches: [
+      {
+        ...batch({
+          id: 0,
+          kind: GpuLineBatchKind.ModelOverview,
+          lodLevel: 0,
+          firstVertex: 0,
+        }),
+        bounds: { min: [-50, -5, 0], max: [50, 5, 0] },
+      },
+    ],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+    preferredView: {
+      center: [0, 0, 0],
+      height: 10,
+      width: 100,
+    },
+  });
+
+  assert.equal(rendered.camera.worldHeight, 50);
+  assert.equal(rendered.camera.worldWidth, 100);
+  renderer.dispose();
+});
+
+test("rejects a saved view that only grazes geometry at an unusable scale", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const overview = {
+    ...batch({
+      id: 0,
+      kind: GpuLineBatchKind.ModelOverview,
+      lodLevel: 0,
+      firstVertex: 0,
+    }),
+    bounds: { min: [-300, 0, 0], max: [1_140, 600, 0] },
+  };
+  const rendered = renderer.renderOverview({
+    batches: [overview],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+    preferredView: {
+      center: [42_050, 29_700, 0],
+      height: 59_400,
+      width: 841,
+      twist: 0,
+    },
+  });
+
+  assert.deepEqual(rendered.camera.origin, [420, 300, 0]);
+  assert.equal(rendered.camera.worldHeight, 777.6);
+  assert.equal(renderer.overviewScene.preferredView, null);
+  renderer.dispose();
+});
+
+test("rejects a zoomed-out saved view that clips substantial geometry", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const overview = {
+    ...batch({
+      id: 0,
+      kind: GpuLineBatchKind.ModelOverview,
+      lodLevel: 0,
+      firstVertex: 0,
+    }),
+    bounds: { min: [0, 0, 0], max: [841, 594, 0] },
+  };
+  const rendered = renderer.renderOverview({
+    batches: [overview],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+    preferredView: {
+      center: [1_124, 380, 0],
+      height: 609,
+      width: 1_442,
+      twist: 0,
+    },
+  });
+
+  assert.deepEqual(rendered.camera.origin, [420.5, 297, 0]);
+  assert.ok(Math.abs(rendered.camera.worldHeight - 641.52) < 1e-9);
+  assert.equal(renderer.overviewScene.preferredView, null);
+  renderer.dispose();
+});
+
+test("keeps an intentional zoomed-in saved view", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const rendered = renderer.renderOverview({
+    batches: [
+      {
+        ...batch({
+          id: 0,
+          kind: GpuLineBatchKind.ModelOverview,
+          lodLevel: 0,
+          firstVertex: 0,
+        }),
+        bounds: { min: [0, 0, 0], max: [100, 100, 0] },
+      },
+    ],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+    preferredView: {
+      center: [20, 20, 0],
+      height: 20,
+      width: 40,
+      twist: 0,
+    },
+  });
+
+  assert.deepEqual(rendered.camera.origin, [20, 20, 0]);
+  assert.equal(rendered.camera.worldHeight, 20);
+  assert.notEqual(renderer.overviewScene.preferredView, null);
   renderer.dispose();
 });
 

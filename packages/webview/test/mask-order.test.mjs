@@ -4,7 +4,12 @@ import test from "node:test";
 import {
   applyMaskOrderToInstanceGraph,
   buildInstanceGraph,
+  CoordinateSpaceKind,
 } from "../src/instance-graph.mjs";
+import {
+  identityMat4,
+  translationMat4,
+} from "../src/math.mjs";
 import {
   buildMaskOrderPlan,
   decodeMaskBucket,
@@ -175,6 +180,98 @@ test("compresses nested and array INSERT draw order into mask buckets", () => {
   assert.deepEqual(
     [...attached.instancesByBlock.get(2).maskBases],
     [2, 3],
+  );
+});
+
+test("attaches mask order to paper and repeated model viewport roots", () => {
+  const layoutBlocks = [
+    blocks[0],
+    {
+      index: 1,
+      handle: 101n,
+      name: "*Paper_Space",
+      basePoint: [0, 0, 0],
+    },
+    { index: 2, handle: 102n, name: "A", basePoint: [0, 0, 0] },
+  ];
+  const layoutInserts = [
+    insert({ handle: 10n, ownerHandle: 100n, blockIndex: 2 }),
+    insert({ handle: 11n, ownerHandle: 101n, blockIndex: 2 }),
+  ];
+  const plan = buildMaskOrderPlan(
+    makeDrawOrder([]),
+    makeWipeouts([
+      wipeout(5n, 100n),
+      wipeout(6n, 101n),
+    ]),
+    layoutBlocks,
+    layoutInserts,
+  );
+  const rootContexts = [
+    {
+      blockIndex: 1,
+      matrix: identityMat4(),
+      measurementMatrix: identityMat4(),
+      coordinateSpace: CoordinateSpaceKind.Paper,
+      includeRootBatch: true,
+      modelSpace: false,
+      visibilityRow: 0,
+    },
+    {
+      blockIndex: 0,
+      matrix: identityMat4(),
+      measurementMatrix: identityMat4(),
+      coordinateSpace: CoordinateSpaceKind.Model,
+      includeRootBatch: false,
+      modelSpace: true,
+      visibilityRow: 0,
+    },
+    {
+      blockIndex: 0,
+      matrix: translationMat4(100, 0, 0),
+      measurementMatrix: identityMat4(),
+      coordinateSpace: CoordinateSpaceKind.Model,
+      includeRootBatch: false,
+      modelSpace: true,
+      visibilityRow: 0,
+    },
+  ];
+  const options = {
+    layers: [],
+    rootContexts,
+    layerVisibilityRows: [new Uint8Array(0)],
+  };
+  const expected = buildInstanceGraph(layoutBlocks, layoutInserts, {
+    ...options,
+    maskOrder: plan,
+  });
+  const base = buildInstanceGraph(
+    layoutBlocks,
+    layoutInserts,
+    options,
+  );
+  const attached = applyMaskOrderToInstanceGraph(
+    base,
+    layoutBlocks,
+    plan,
+  );
+
+  assert.equal(attached.maskOrderEnabled, true);
+  assert.equal(
+    attached.instancesByBlock.get(2).data,
+    base.instancesByBlock.get(2).data,
+  );
+  assert.deepEqual(
+    [...attached.instancesByBlock.get(1).maskBases],
+    [...expected.instancesByBlock.get(1).maskBases],
+  );
+  assert.deepEqual(
+    [...attached.instancesByBlock.get(2).maskBases],
+    [...expected.instancesByBlock.get(2).maskBases],
+  );
+  assert.deepEqual(
+    [...attached.modelInstances.maskBases],
+    [...expected.modelInstances.maskBases],
   );
 });
 

@@ -7,7 +7,7 @@ export const EN_MESSAGES = Object.freeze({
   "common.noPath": "(no path)",
   "common.unknownError": "Unknown error",
   "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.20",
+  "page.eyebrow": "DWG Viewer · Scene Cache v1.21",
   "page.heading": "Large drawing first-frame verifier",
   "page.hostHeading": "DWG drawing viewer",
   "toolbar.more.open": "Open drawing tools",
@@ -223,6 +223,10 @@ export const EN_MESSAGES = Object.freeze({
   "xrefs.imageConnectFailed": "The image file could not be connected.",
   "xrefs.imageDataUnsafe": "The image data could not be accepted safely.",
   "xrefs.imageDecodeFailed": "The image could not be decoded for display.",
+  "xrefs.embeddedImageUnavailable":
+    "This embedded OLE preview cannot be decoded safely.",
+  "xrefs.embeddedImageHashUnavailable":
+    "Embedded image verification is unavailable in this environment.",
   "export.panel": "Drawing PNG/PDF export",
   "export.heading": "Drawing export",
   "export.close": "Close drawing export",
@@ -396,6 +400,8 @@ export const EN_MESSAGES = Object.freeze({
   "review.runtime.kind.viewportBoundary": "Viewport boundary",
   "review.runtime.kind.leader": "Leader",
   "review.runtime.kind.oleBoundary": "OLE boundary",
+  "review.runtime.kind.polygonMesh": "Polygon mesh",
+  "review.runtime.kind.multiline": "Multiline",
   "review.runtime.kind.text": "Text",
   "review.runtime.kind.image": "Image",
   "review.runtime.kind.blockReference": "Block reference",

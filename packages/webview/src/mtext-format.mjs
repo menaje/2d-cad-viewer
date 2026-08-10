@@ -439,6 +439,12 @@ export function parseCadMTextRuns(
 
   ) {
     const character = value[index];
+    if (character === "\r" || character === "\n") {
+      paragraph();
+      index +=
+        character === "\r" && value[index + 1] === "\n" ? 2 : 1;
+      continue;
+    }
     if (character === "{") {
       if (formatStack.length < MAXIMUM_FORMAT_DEPTH) {
         formatStack.push(format);

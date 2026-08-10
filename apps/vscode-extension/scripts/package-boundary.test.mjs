@@ -26,6 +26,9 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
     repositoryNotices,
     shxLicense,
     earcutLicense,
+    emfLicense,
+    webviewManifestText,
+    emfManifestText,
     marketplaceIcon,
   ] = await Promise.all([
     readFile(path.join(extensionRoot, "package.json"), "utf8"),
@@ -65,18 +68,48 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
       ),
       "utf8",
     ),
+    readFile(
+      path.join(
+        repositoryRoot,
+        "packages",
+        "webview",
+        "node_modules",
+        "emf-converter",
+        "LICENSE",
+      ),
+      "utf8",
+    ),
+    readFile(
+      path.join(repositoryRoot, "packages", "webview", "package.json"),
+      "utf8",
+    ),
+    readFile(
+      path.join(
+        repositoryRoot,
+        "packages",
+        "webview",
+        "node_modules",
+        "emf-converter",
+        "package.json",
+      ),
+      "utf8",
+    ),
     readFile(path.join(extensionRoot, "images", "icon.png")),
   ]);
   const manifest = JSON.parse(manifestText);
   const repositoryManifest = JSON.parse(repositoryManifestText);
+  const webviewManifest = JSON.parse(webviewManifestText);
+  const emfManifest = JSON.parse(emfManifestText);
 
-  assert.equal(manifest.displayName, "Coni DWG Viewer");
+  assert.equal(manifest.displayName, "DWG Viewer for VS Code");
   assert.equal(manifest.license, "MPL-2.0");
   assert.equal(manifest.icon, "images/icon.png");
   assert.deepEqual(manifest.extensionKind, ["workspace"]);
-  assert.deepEqual(manifest.extensionDependencies, [
-    "menaje.dwg-viewer-libredwg",
-  ]);
+  assert.equal(manifest.extensionDependencies, undefined);
+  assert.equal(webviewManifest.dependencies["emf-converter"], "2.0.2");
+  assert.equal(emfManifest.version, "2.0.2");
+  assert.equal(emfManifest.license, "Apache-2.0");
+  assert.ok(manifest.activationEvents.includes("onStartupFinished"));
   assert.deepEqual(
     [...marketplaceIcon.subarray(0, 8)],
     [137, 80, 78, 71, 13, 10, 26, 10],
@@ -96,6 +129,10 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
     readme,
     /GPL-3\.0-or-later LibreDWG adapter is never included in the MPL VSIX/u,
   );
+  assert.match(
+    readme,
+    /matching GitHub Release[\s\S]*SHA-256/iu,
+  );
   assert.deepEqual(packagedLicense, repositoryLicense);
   assert.equal(
     createHash("sha256").update(repositoryLicense).digest("hex"),
@@ -113,6 +150,12 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   );
   assert.equal(
     packagedNotices.split(earcutLicense.trimEnd()).length,
+    2,
+  );
+  assert.equal(
+    packagedNotices.split(
+      emfLicense.replace(/^\n/u, "").trimEnd(),
+    ).length,
     2,
   );
   assert.match(repositoryReadme, /오픈소스/u);
@@ -137,5 +180,9 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   assert.match(
     packagedNotices,
     /Permission to use, copy, modify, and\/or distribute/u,
+  );
+  assert.match(
+    packagedNotices,
+    /Copyright 2025-present pptx-viewer contributors/u,
   );
 });

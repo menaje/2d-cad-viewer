@@ -1,9 +1,9 @@
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.20.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.21.0";
 import {
   multiplyMat4,
   transformPoint,
 } from "./math.mjs";
-import { createClipNode } from "./instance-graph.mjs?v=1.20.0";
+import { createClipNode } from "./instance-graph.mjs?v=1.21.0";
 
 const MATRIX_VALUES = 16;
 const MODEL_BLOCK_INDEX = -1;

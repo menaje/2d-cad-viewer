@@ -36,7 +36,7 @@ test("renders a nonce-protected VS Code webview without an import map", () => {
   assert.match(html, /data-host="vscode"/u);
   assert.match(
     html,
-    /<body data-host="vscode" data-top-toolbar-labels="hover" data-left-toolbar-labels="hover">/u,
+    /<body data-host="vscode" data-top-toolbar-labels="hover" data-left-toolbar-labels="hover" data-render-resolution="auto" data-interaction-rendering="hybrid">/u,
   );
   assert.match(html, /<html lang="ko-KR" data-locale="ko-KR">/u);
   assert.match(html, /vscode-webview:\/\/test\/styles\.css/u);
@@ -52,11 +52,13 @@ test("renders independent toolbar preferences", () => {
     scriptUri: "vscode-webview://test/main.mjs",
     topToolbarLabels: "icons",
     leftToolbarLabels: "hover",
+    renderResolution: "performance",
+    interactionRendering: "maximumPerformance",
   });
 
   assert.match(
     html,
-    /<body data-host="vscode" data-top-toolbar-labels="icons" data-left-toolbar-labels="hover">/u,
+    /<body data-host="vscode" data-top-toolbar-labels="icons" data-left-toolbar-labels="hover" data-render-resolution="performance" data-interaction-rendering="maximumPerformance">/u,
   );
 });
 
@@ -264,7 +266,7 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   );
   assert.match(
     template,
-    /"@menaje\/dwg-scene-source":\s*"\.\.\/dwg-scene-source\/src\/index\.mjs"/u,
+    /"@menaje\/dwg-scene-source":\s*"\.\.\/dwg-scene-source\/src\/index\.mjs\?v=1\.21\.0"/u,
   );
   assert.match(
     template,
@@ -395,6 +397,24 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
       scope: "window",
       description:
         "Show an overview while full conversion continues. This improves first-frame latency but substantially increases concurrent memory.",
+    },
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.[
+      "dwgViewer.interactionRendering"
+    ],
+    {
+      type: "string",
+      enum: ["continuous", "hybrid", "maximumPerformance"],
+      enumDescriptions: [
+        "Redraw low-resolution geometry on every interaction frame so newly exposed areas remain visible. This uses the most GPU and CPU time.",
+        "Move the completed frame immediately and refresh low-resolution geometry periodically. This is the recommended balance of responsiveness and coverage.",
+        "Move only the completed frame until interaction stops. This minimizes rendering work, but newly exposed areas can remain blank temporarily.",
+      ],
+      default: "hybrid",
+      scope: "window",
+      description:
+        "Choose how the viewer redraws while panning or zooming. Conversion and export performance are unaffected.",
     },
   );
   assert.deepEqual(

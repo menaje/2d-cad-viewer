@@ -4,7 +4,13 @@ const PINCH_ZOOM_RATE = 0.008;
 const WHEEL_GESTURE_IDLE_MS = 180;
 const WHEEL_LINE_PIXELS = 32;
 const WHEEL_PAGE_PIXELS = 240;
-const TRACKPAD_PIXEL_DELTA_THRESHOLD = 80;
+/*
+ * Chromium's physical mouse-wheel step is 120 on Windows/Linux and 53 on
+ * macOS-family platforms.  Keep the boundary below the smaller step while
+ * the gesture latch below preserves an already-started trackpad pan through
+ * larger momentum deltas.
+ */
+const TRACKPAD_PIXEL_DELTA_THRESHOLD = 40;
 const MAXIMUM_TRACKPAD_PAN_PIXELS = 160;
 const MAXIMUM_WHEEL_ZOOM_PIXELS = 240;
 const MAXIMUM_PINCH_ZOOM_PIXELS = 60;

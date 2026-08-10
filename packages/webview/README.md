@@ -24,7 +24,7 @@ const runtime = await openViewerRuntime(source, {
 
 ## DWG Viewer product shell
 
-Scene Cache v1.20 range reader, WebGL2 line/fill/point renderer, bounded CAD
+Scene Cache v1.21 range reader, WebGL2 line/fill/point renderer, bounded CAD
 text overlay and lazy raster IMAGE overlay for the VS Code Webview.
 
 Standalone Browser의 `File`과 VS Code의 cache channel은 모두
@@ -114,13 +114,14 @@ canvas의 DOM/접근성 상태를 복원합니다. 호출자가 주입한 비교
 소유권은 호출자에게 남으므로 source switch나 host 종료 때는 comparison을
 먼저 닫은 뒤 adapter와 presentation을 각각 dispose해야 합니다.
 
-2026-08-09 qualification은 640×360 current/candidate RGBA surface 두 개에
+2026-08-10 qualification은 640×360 current/candidate RGBA surface 두 개에
 1,843,200 bytes를 유지했고, 독립 Browser의 actual WebGL2 첫 비교 frame은
-43 ms, 패키징된 VS Code 1.131.0 Webview는 74 ms였습니다. actual pixel,
+24 ms, 패키징된 VS Code 1.132.0 Webview는 40 ms였습니다. 패키징 검증은
+동반 엔진 확장 없이 main VSIX만 설치해 수행했습니다. actual pixel,
 camera rollback, stale selection, corresponding highlight, visibility와 8회
 반복 mount/close 후 Canvas/GPU delta 기준선 회귀를 모두 확인했습니다.
 경로 없는 결과는
-[`compatibility/evidence/viewer-webgl-comparison-2026-08-09.json`](../../compatibility/evidence/viewer-webgl-comparison-2026-08-09.json)에
+[`compatibility/evidence/viewer-webgl-comparison-2026-08-10.json`](../../compatibility/evidence/viewer-webgl-comparison-2026-08-10.json)에
 기록됩니다.
 
 The current decoded v6 packet is private to this package:
@@ -205,7 +206,7 @@ built-in languages, template keys, or runtime shell keys diverge.
   under its parent INSERT and preserves shared geometry across repeated inserts.
 - Reads current INSERT/XREF spatial clips, propagates nested clip chains through
   shared instances and applies one boundary to WebGL geometry and Canvas text.
-- Reads the v1.20 linetype, saved-view, layout, VIEWPORT and raster IMAGE
+- Reads the v1.21 linetype, saved-view, layout, VIEWPORT and raster IMAGE
   sections and
   allows every paper-space tab to be selected without duplicating model data.
 - Applies each viewport's layer color, transparency, linetype and lineweight
@@ -221,6 +222,10 @@ built-in languages, template keys, or runtime shell keys diverge.
   current on-screen size and upgrades only after a meaningful zoom. IMAGE clip
   pixels are converted from their saved top-origin Y convention before
   placement so cropped rasters stay aligned with CAD geometry.
+- Range-reads bounded embedded OLE BMP/EMF previews only when visible. Excel
+  EMF presentations are replayed in a 4,096-pixel, 200,000-record local Canvas
+  sandbox and enter the same deduplicated raster cache; unavailable previews
+  remain explicit crossed placeholders.
 - Remaps child layers and linetypes to root XREF-dependent definitions and
   renders external overview/detail lines, HATCH fills and patterns,
   POINT/SOLID/3DFACE primitives, stable-view curve refinement and source text
@@ -326,10 +331,10 @@ built-in languages, template keys, or runtime shell keys diverge.
 - Caps one pattern result at 250,000 segments (16 MiB of line vertices),
   65,536 segments per HATCH and eight million boundary intersection tests.
 - Terminates the previous HATCH worker when another cache is selected.
-- Range-reads the current v1.20 POINT/SOLID/3DFACE/WIPEOUT source sections only
+- Range-reads the current v1.21 POINT/SOLID/3DFACE/WIPEOUT source sections only
   after the first line frame, preserving shared block instances without
   expanding geometry per INSERT.
-- Range-reads the current v1.20 normalized `SORTENTSTABLE` tables and entries on
+- Range-reads the current v1.21 normalized `SORTENTSTABLE` tables and entries on
   demand. The first frame reads neither draw-order section.
 - Collapses the preserved sort keys to WIPEOUT-only order events, recursively
   includes nested/DIMENSION/MINSERT mask spans and attaches one compact order
@@ -412,8 +417,11 @@ that ship in the extension. The repository root remains the static root so a
 same-origin qualification cache can be served without uploading it. The file
 stays local to the browser.
 
-Automated local UI qualification can open a same-origin synthetic cache of at
-most 64 MiB without a native file picker:
+Automated local UI qualification can open a same-origin synthetic cache
+without a native file picker. A server that advertises `Accept-Ranges: bytes`
+is read through bounded HTTP ranges (up to the 8 GiB qualification ceiling)
+without downloading the complete cache; a server without byte ranges falls
+back to a complete `Blob` only for files of at most 64 MiB:
 
 ```text
 http://127.0.0.1:4173/apps/vscode-extension/media/webview/?qualification-cache=/tmp/fixture.cache
@@ -454,7 +462,7 @@ bounded root/XREF filled-object selection with layer and clip filtering, and
 LRU eviction/request coalescing.
 They also cover delayed Korean text reads, strict EUC-KR, CP949 and Johab
 mapping, per-BigFont overrides, SHX/BigFont cache limits and the
-current v1.20 HATCH range, triangulation, dashed-pattern, block-clipping,
+current v1.21 HATCH range, triangulation, dashed-pattern, block-clipping,
 large-coordinate and render-order contracts, plus POINT/SOLID/3DFACE/WIPEOUT
 range, WCS/OCS, clip-boundary, frame-setting, instance-sharing and GPU-budget
 behavior, plus draw-order normalization,

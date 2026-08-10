@@ -1,7 +1,7 @@
 {
   "schema": "dwg-native-document-adapter-compatibility/1",
   "status": "query-preview",
-  "asOf": "2026-08-04",
+  "asOf": "2026-08-10",
   "protocol": "dwg-native-document-adapter/0.1.0",
   "native": {
     "engine": "GNU LibreDWG",
@@ -10,7 +10,7 @@
     "backendKind": "native-process",
     "status": "query-preview",
     "index": {
-      "projection": "Scene Cache v1.20 source records",
+      "projection": "Scene Cache v1.21 source records",
       "storage": "packed typed arrays",
       "maximumEntries": 1000000,
       "maximumSourceBytes": 268435456,
@@ -95,6 +95,7 @@
     "qualifiedTargets": [
       "linux-x64",
       "darwin-arm64",
+      "darwin-x64",
       "win32-x64"
     ],
     "windows": "qualified",

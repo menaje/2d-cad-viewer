@@ -2,7 +2,7 @@ import {
   buildInstanceGraph,
   CoordinateSpaceKind,
 } from "./instance-graph.mjs";
-import { ViewportLayerOverrideFlags } from "./scene-cache.mjs?v=1.20.0";
+import { ViewportLayerOverrideFlags } from "./scene-cache.mjs?v=1.21.0";
 import {
   arbitraryAxisMat4,
   identityMat4,
@@ -73,12 +73,69 @@ export function viewportRectangle(viewport) {
   ]);
 }
 
+export function paperViewportIdentityError(viewport) {
+  if (
+    !viewport?.center?.slice(0, 2).every(Number.isFinite) ||
+    !viewport?.viewCenter?.every(Number.isFinite) ||
+    !viewport?.viewTarget?.every(Number.isFinite) ||
+    !viewport?.viewDirection?.every(Number.isFinite) ||
+    !Number.isFinite(viewport.width) ||
+    !Number.isFinite(viewport.height) ||
+    !Number.isFinite(viewport.viewHeight) ||
+    !Number.isFinite(viewport.viewTwist) ||
+    viewport.width <= 0 ||
+    viewport.height <= 0 ||
+    viewport.viewHeight <= 0
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const scale = Math.max(
+    Math.abs(viewport.width),
+    Math.abs(viewport.height),
+    Math.abs(viewport.viewHeight),
+    1,
+  );
+  const directionLength = Math.hypot(...viewport.viewDirection);
+  if (!Number.isFinite(directionLength) || directionLength <= 1e-12) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return (
+    Math.hypot(
+      viewport.viewCenter[0] - viewport.center[0],
+      viewport.viewCenter[1] - viewport.center[1],
+    ) /
+      scale +
+    Math.abs(viewport.viewHeight - viewport.height) /
+      Math.max(viewport.viewHeight, viewport.height, 1) +
+    Math.hypot(...viewport.viewTarget) / scale +
+    Math.hypot(
+      viewport.viewDirection[0] / directionLength,
+      viewport.viewDirection[1] / directionLength,
+      viewport.viewDirection[2] / directionLength - 1,
+    ) +
+    2 * Math.abs(Math.sin(viewport.viewTwist * 0.5))
+  );
+}
+
 export function paperViewportForLayout(layout) {
   if (!layout?.viewports?.length) {
     return null;
   }
+  const explicit = layout.viewports.find((viewport) => viewport.id === 1);
+  if (explicit) {
+    return explicit;
+  }
+  let inferred = null;
+  let inferredError = Number.POSITIVE_INFINITY;
+  for (const viewport of layout.viewports) {
+    const error = paperViewportIdentityError(viewport);
+    if (error < inferredError) {
+      inferred = viewport;
+      inferredError = error;
+    }
+  }
   return (
-    layout.viewports.find((viewport) => viewport.id === 1) ??
+    inferred ??
     layout.viewports.find(
       (viewport) => viewport.handle === layout.activeViewportHandle,
     ) ??

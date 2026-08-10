@@ -57,8 +57,7 @@ test("requires aligned repository and extension versions", () => {
   assert.throws(
     () =>
       validateAlignedVersions({
-        companion: "0.1.2",
-        repository: "0.1.3",
+        repository: "0.1.2",
         viewer: "0.1.3",
       }),
     /versions differ/u,

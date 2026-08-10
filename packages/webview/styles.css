@@ -211,6 +211,7 @@ canvas {
 #image-overlay,
 #drawing,
 #text-overlay,
+#interaction-frame,
 #review-overlay {
   position: absolute;
   inset: 0 0 auto;
@@ -232,8 +233,14 @@ canvas {
   pointer-events: none;
 }
 
-#review-overlay {
+#interaction-frame {
   z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+}
+
+#review-overlay {
+  z-index: 4;
   pointer-events: none;
 }
 
@@ -1580,6 +1587,7 @@ body[data-host="vscode"] canvas {
 body[data-host="vscode"] #image-overlay,
 body[data-host="vscode"] #drawing,
 body[data-host="vscode"] #text-overlay,
+body[data-host="vscode"] #interaction-frame,
 body[data-host="vscode"] #review-overlay {
   inset: 0;
   width: 100%;

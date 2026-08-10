@@ -331,14 +331,24 @@ test("compatibility manifest keeps product writers and WASM fail-closed", async 
   assert.throws(
     () =>
       validateNativeAdapterCompatibility(missingWindowsTarget),
-    /Windows distribution qualification/u,
+    /distribution qualification/u,
+  );
+
+  const missingIntelMacTarget = structuredClone(manifest);
+  missingIntelMacTarget.distributionBoundary.qualifiedTargets =
+    missingIntelMacTarget.distributionBoundary.qualifiedTargets.filter(
+      (target) => target !== "darwin-x64",
+    );
+  assert.throws(
+    () => validateNativeAdapterCompatibility(missingIntelMacTarget),
+    /distribution qualification/u,
   );
 
   const blockedWindows = structuredClone(manifest);
   blockedWindows.distributionBoundary.windows = "blocked";
   assert.throws(
     () => validateNativeAdapterCompatibility(blockedWindows),
-    /Windows distribution qualification/u,
+    /distribution qualification/u,
   );
 
   manifest.writerQualification.productAdmitted = true;

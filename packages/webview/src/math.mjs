@@ -8,7 +8,10 @@ export function identityMat4() {
 }
 
 export function multiplyMat4(left, right) {
-  const result = new Float64Array(16);
+  return multiplyMat4Into(left, right, new Float64Array(16));
+}
+
+export function multiplyMat4Into(left, right, result) {
   for (let column = 0; column < 4; column += 1) {
     for (let row = 0; row < 4; row += 1) {
       let value = 0;
@@ -170,25 +173,105 @@ export function arbitraryAxisMat4(sourceNormal) {
   ]);
 }
 
-export function insertCellMatrix(insert, blockBasePoint, column = 0, row = 0) {
-  const arrayOffset = translationMat4(
-    column * insert.columnSpacing,
-    row * insert.rowSpacing,
-    0,
-  );
-  const fromBasePoint = translationMat4(
-    -blockBasePoint[0],
-    -blockBasePoint[1],
-    -blockBasePoint[2],
-  );
-  return [
-    translationMat4(...insert.insertPoint),
-    arbitraryAxisMat4(insert.normal),
-    rotationZMat4(insert.rotation),
-    arrayOffset,
-    scalingMat4(...insert.scale),
-    fromBasePoint,
-  ].reduce(multiplyMat4);
+export function insertCellMatrix(
+  insert,
+  blockBasePoint,
+  column = 0,
+  row = 0,
+  matrix = new Float64Array(16),
+) {
+  let normalX = insert.normal[0];
+  let normalY = insert.normal[1];
+  let normalZ = insert.normal[2];
+  const normalLength = Math.hypot(normalX, normalY, normalZ);
+  if (!Number.isFinite(normalLength) || normalLength < 1e-12) {
+    normalX = 0;
+    normalY = 0;
+    normalZ = 1;
+  } else {
+    normalX /= normalLength;
+    normalY /= normalLength;
+    normalZ /= normalLength;
+  }
+
+  let xAxisX;
+  let xAxisY;
+  let xAxisZ;
+  if (Math.abs(normalX) < 1 / 64 && Math.abs(normalY) < 1 / 64) {
+    xAxisX = normalZ;
+    xAxisY = 0;
+    xAxisZ = -normalX;
+  } else {
+    xAxisX = -normalY;
+    xAxisY = normalX;
+    xAxisZ = 0;
+  }
+  const xAxisLength = Math.hypot(xAxisX, xAxisY, xAxisZ);
+  xAxisX /= xAxisLength;
+  xAxisY /= xAxisLength;
+  xAxisZ /= xAxisLength;
+  const yAxisX = normalY * xAxisZ - normalZ * xAxisY;
+  const yAxisY = normalZ * xAxisX - normalX * xAxisZ;
+  const yAxisZ = normalX * xAxisY - normalY * xAxisX;
+
+  const cosine = Math.cos(insert.rotation);
+  const sine = Math.sin(insert.rotation);
+  const rotatedX0 = xAxisX * cosine + yAxisX * sine;
+  const rotatedX1 = xAxisY * cosine + yAxisY * sine;
+  const rotatedX2 = xAxisZ * cosine + yAxisZ * sine;
+  const rotatedY0 = -xAxisX * sine + yAxisX * cosine;
+  const rotatedY1 = -xAxisY * sine + yAxisY * cosine;
+  const rotatedY2 = -xAxisZ * sine + yAxisZ * cosine;
+  const scaleX = insert.scale[0];
+  const scaleY = insert.scale[1];
+  const scaleZ = insert.scale[2];
+  const column0X = rotatedX0 * scaleX;
+  const column0Y = rotatedX1 * scaleX;
+  const column0Z = rotatedX2 * scaleX;
+  const column1X = rotatedY0 * scaleY;
+  const column1Y = rotatedY1 * scaleY;
+  const column1Z = rotatedY2 * scaleY;
+  const column2X = normalX * scaleZ;
+  const column2Y = normalY * scaleZ;
+  const column2Z = normalZ * scaleZ;
+  const arrayX = column * insert.columnSpacing;
+  const arrayY = row * insert.rowSpacing;
+  const baseX = blockBasePoint[0];
+  const baseY = blockBasePoint[1];
+  const baseZ = blockBasePoint[2];
+  matrix.fill(0);
+  matrix[0] = column0X;
+  matrix[1] = column0Y;
+  matrix[2] = column0Z;
+  matrix[4] = column1X;
+  matrix[5] = column1Y;
+  matrix[6] = column1Z;
+  matrix[8] = column2X;
+  matrix[9] = column2Y;
+  matrix[10] = column2Z;
+  matrix[12] =
+    insert.insertPoint[0] +
+    rotatedX0 * arrayX +
+    rotatedY0 * arrayY -
+    column0X * baseX -
+    column1X * baseY -
+    column2X * baseZ;
+  matrix[13] =
+    insert.insertPoint[1] +
+    rotatedX1 * arrayX +
+    rotatedY1 * arrayY -
+    column0Y * baseX -
+    column1Y * baseY -
+    column2Y * baseZ;
+  matrix[14] =
+    insert.insertPoint[2] +
+    rotatedX2 * arrayX +
+    rotatedY2 * arrayY -
+    column0Z * baseX -
+    column1Z * baseY -
+    column2Z * baseZ;
+  matrix[15] = 1;
+  return matrix;
 }
 
 export function transformPoint(

@@ -91,7 +91,7 @@ Windows 11 실행, 비공개 A2-013 또는 복합 XREF/XCLIP 도면 실기를
 Viewer WebGL full-scene comparison의 공개 Browser fixture, 패키징된 macOS
 VS Code actual-pixel 결과, 공공누리 DWG open과 경로 없는 private large-drawing
 Gate는
-[`evidence/viewer-webgl-comparison-2026-08-09.json`](evidence/viewer-webgl-comparison-2026-08-09.json)에
+[`evidence/viewer-webgl-comparison-2026-08-10.json`](evidence/viewer-webgl-comparison-2026-08-10.json)에
 있다. 선택된 물리 전략은 하나의 renderer와 두 bounded raster surface이며,
 두 번째 full WebGL context/cache 전략은 현재 600 MB target 여유가 부족하므로
 별도 Gate 전에는 지원으로 표시하지 않는다.

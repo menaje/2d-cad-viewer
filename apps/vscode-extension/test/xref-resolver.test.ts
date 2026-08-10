@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import {
   mkdir,
   mkdtemp,
+  realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -158,6 +160,44 @@ test("does not silently choose equally ranked files", async () => {
 
     assert.equal(result.status, "ambiguous");
     assert.equal(result.candidates.length, 2);
+  });
+});
+
+test("deduplicates aliases of the same physical search directory", async () => {
+  await withFixture(async (root) => {
+    const drawing = path.join(root, "drawings", "A-112.dwg");
+    const physicalRoot = path.join(root, "physical");
+    const aliasRoot = path.join(root, "alias");
+    const target = path.join(
+      physicalRoot,
+      "nested",
+      "HARDWARE",
+      "hinge.jpg",
+    );
+    await Promise.all([
+      mkdir(path.dirname(drawing), { recursive: true }),
+      mkdir(path.dirname(target), { recursive: true }),
+    ]);
+    await Promise.all([writeFile(drawing, ""), writeFile(target, "")]);
+    await symlink(
+      physicalRoot,
+      aliasRoot,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const result = await resolveXrefPath({
+      drawingPath: drawing,
+      storedPath: "hinge.jpg",
+      searchRoots: [aliasRoot, physicalRoot],
+    });
+
+    assert.equal(result.status, "resolved");
+    assert.equal(result.status === "resolved" && result.method, "search");
+    assert.equal(
+      result.status === "resolved" && (await realpath(result.path)),
+      await realpath(target),
+    );
+    assert.equal(result.candidates.length, 1);
   });
 });
 

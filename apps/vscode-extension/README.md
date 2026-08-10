@@ -8,7 +8,8 @@ drawings, Korean SHX/BigFont text, external references, and paper-space
 layouts. Your drawings and fonts stay on your computer.
 
 > This is an early public release. Editing and DWG saving are not available,
-> and the viewer currently supports Linux x64, macOS arm64, and Windows x64.
+> and the viewer currently supports Linux x64, macOS arm64, macOS Intel x64,
+> and Windows x64.
 
 ## Why we built DWG Viewer
 
@@ -53,6 +54,9 @@ of starting a separate task.
   next views, and save named view bookmarks.
 - The top-right and left tool shelves can independently remain icon-only or
   reveal every tool name together on hover or keyboard focus.
+- High-DPI interaction defaults to a hybrid strategy: it moves the completed
+  frame immediately, refreshes low-resolution geometry about every 80 ms to
+  cover newly exposed areas, and restores bounded detail after interaction.
 - In-viewer controls follow the VS Code environment language for English and
   Korean.
 
@@ -94,26 +98,26 @@ of starting a separate task.
 ### Requirements
 
 - VS Code 1.125 or newer
-- Linux x64, macOS arm64, or Windows x64
-- The GPL LibreDWG Engine companion, installed automatically with DWG Viewer
+- Linux x64, macOS arm64, macOS Intel x64, or Windows x64
 
 ### Installation
 
-Install **DWG Viewer** from the VS Code Marketplace. VS Code also installs the
-matching **DWG Viewer — LibreDWG Engine** companion for the current platform.
-Open a `.dwg` file from the Explorer; no converter path needs to be selected.
+Install **DWG Viewer for VS Code** from the VS Code Marketplace. The extension
+prepares the exact version-matched native converter for the current platform
+from the matching GitHub Release in the background. It verifies the declared
+size and SHA-256 digest and runs a bounded self-diagnosis before use. Open a
+`.dwg` file from the Explorer; no converter path needs to be selected.
 
 For a manual or offline installation, download
 `dwg-viewer-vscode-<version>.vsix` and the matching
-`dwg-viewer-libredwg-<version>-<platform>.vsix` from
-[GitHub Releases](https://github.com/menaje/dwg-viewer/releases), then install
-both with **Extensions: Install from VSIX...**. Install the GPL companion first
-when the Marketplace is unavailable.
+`dwg-viewer-native-converter-<version>-<platform>` from
+[GitHub Releases](https://github.com/menaje/dwg-viewer/releases). Install the
+VSIX with **Extensions: Install from VSIX...**, then select the downloaded
+converter only when the automatic release download is unavailable.
 
-The extension checks the companion executable before using it. You can repeat
-that check at any time with **DWG Viewer: LibreDWG 변환기 진단**. The manual
-converter-selection command remains available for controlled or offline
-deployments that maintain an external adapter path.
+You can repeat the installed converter check at any time with **DWG Viewer:
+LibreDWG 변환기 진단**. The manual converter-selection command remains an
+offline fallback and never overrides a healthy version-managed converter.
 
 For checksums, provenance verification, macOS security approval, and
 platform-specific commands, see the
@@ -126,6 +130,13 @@ platform-specific commands, see the
 - **Find a tool:** hover or focus a shelf to expand all of its tool names.
 - **Choose compact menus:** set **Top Toolbar Labels** and **Left Toolbar
   Labels** under the DWG Viewer settings to `icons` or `hover` independently.
+- **Tune high-DPI rendering:** keep **Render Resolution** on `auto` to reuse a
+  bounded pixel budget with MSAA disabled, choose `performance` for the lowest
+  pixel budget, or `quality` for full redraw quality and MSAA.
+- **Choose interaction behavior:** keep **Interaction Rendering** on `hybrid`
+  for an immediate retained-frame response plus periodic live refreshes, use
+  `continuous` to redraw newly exposed areas on every movement frame, or use
+  `maximumPerformance` to defer live redraws until interaction stops.
 - **Manage layers:** open the left layer panel and search or change visibility.
 - **Inspect or measure:** choose a tool, then select points or objects in the
   drawing.
@@ -173,8 +184,8 @@ equally ranked files.
 ## Current limitations
 
 - Viewing is read-only; editing, overwriting, and Save As are not available.
-- Native companions are currently published for Linux x64, macOS arm64, and
-  Windows x64.
+- Native converters are currently published for Linux x64, macOS arm64,
+  macOS Intel x64, and Windows x64.
 - Embedded OLE content such as an Excel sheet is not rendered; its placement
   frame may still be shown.
 - External raster images currently support JPG/JPEG and PNG.
@@ -189,12 +200,13 @@ along with build scripts and third-party notices. The packaged `LICENSE.txt`
 contains Mozilla's unmodified MPL 2.0 text, while `NOTICE` contains the project
 copyright notice.
 
-The GPL-3.0-or-later LibreDWG adapter is never included in the MPL VSIX. VS
-Code installs it as a separately published, platform-specific GPL companion
-extension. Every companion VSIX contains its executable's complete
-corresponding source, unmodified GPLv3 and MPL 2.0 texts, build scripts,
-manifest, and checksums. The main extension starts that executable as a
-separate process; it does not load LibreDWG into the extension host.
+The GPL-3.0-or-later LibreDWG adapter is never included in the MPL VSIX. The
+release pipeline publishes each platform converter separately, together with
+a source-complete archive containing the exact LibreDWG source, adapter source,
+build scripts, unmodified GPLv3 and MPL 2.0 texts, manifest, and checksums. The
+VSIX embeds the matching release filenames, sizes, and SHA-256 digests. The
+main extension starts the verified executable as a separate process; it does
+not load LibreDWG into the extension host.
 
 Release artifacts are reproducibly built and include SHA-256 checksums and
 GitHub build-provenance attestations. Details are in the
@@ -209,7 +221,7 @@ User documentation stays separate from implementation contracts:
 - [Architecture](https://github.com/menaje/dwg-viewer/blob/main/docs/architecture.md)
 - [Engine decision](https://github.com/menaje/dwg-viewer/blob/main/docs/engine-decision.md)
 - [Licensing policy](https://github.com/menaje/dwg-viewer/blob/main/docs/licensing.md)
-- [LibreDWG Engine companion](https://github.com/menaje/dwg-viewer/tree/main/apps/vscode-libredwg-adapter)
+- [LibreDWG native converter](https://github.com/menaje/dwg-viewer/tree/main/adapters/libredwg)
 - [Viewer Core](https://github.com/menaje/dwg-viewer/tree/main/packages/viewer-core)
 - [Render protocol](https://github.com/menaje/dwg-viewer/tree/main/packages/render-protocol)
 - [Viewer UI](https://github.com/menaje/dwg-viewer/tree/main/packages/viewer-ui)

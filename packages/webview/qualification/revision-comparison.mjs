@@ -15,6 +15,7 @@ const PREVIEW_ID = "preview:qualification";
 const HANDLE = 0x2a;
 const WIDTH = 640;
 const HEIGHT = 360;
+const QUALIFICATION_LAYER_COLOR = 0x8000_0003;
 
 function lineVertices(first, second) {
   const buffer = new ArrayBuffer(72);
@@ -25,7 +26,7 @@ function lineVertices(first, second) {
     view.setFloat32(offset + 4, point[1], true);
     view.setFloat32(offset + 8, 0, true);
     view.setUint32(offset + 12, 0, true);
-    view.setUint32(offset + 16, 7, true);
+    view.setUint32(offset + 16, 0, true);
     view.setUint32(offset + 20, HANDLE, true);
     view.setUint32(offset + 24, 0, true);
     view.setUint32(offset + 28, 0, true);
@@ -257,11 +258,99 @@ class QualificationDeltaAdapter {
   }
 }
 
-async function qualify() {
+class QualificationLifecycle {
+  renderer = null;
+  rendererRequiresDirectDispose = false;
+  presentation = null;
+  adapter = null;
+  comparison = null;
+  originalCapture = null;
+
+  ownRenderer(renderer) {
+    this.renderer = renderer;
+    this.rendererRequiresDirectDispose = true;
+  }
+
+  transferRendererToPresentation() {
+    this.rendererRequiresDirectDispose = false;
+  }
+
+  restoreCapture() {
+    if (this.originalCapture !== null && this.renderer !== null) {
+      this.renderer.captureRaster = this.originalCapture;
+      this.originalCapture = null;
+    }
+  }
+
+  disposeComparison() {
+    if (this.comparison === null) {
+      return;
+    }
+    this.comparison.dispose();
+    this.comparison = null;
+  }
+
+  disposeAdapter() {
+    if (this.adapter === null) {
+      return;
+    }
+    this.adapter.dispose();
+    this.adapter = null;
+  }
+
+  async disposePresentation() {
+    if (this.presentation === null) {
+      return;
+    }
+    await this.presentation.dispose();
+    this.presentation = null;
+    this.renderer = null;
+  }
+
+  async dispose() {
+    const errors = [];
+    this.restoreCapture();
+    for (const dispose of [
+      () => this.disposeComparison(),
+      () => this.disposeAdapter(),
+      () => this.disposePresentation(),
+    ]) {
+      try {
+        await dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (
+      this.presentation === null &&
+      this.renderer !== null &&
+      this.rendererRequiresDirectDispose
+    ) {
+      try {
+        this.renderer.dispose();
+        this.renderer = null;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(
+        errors,
+        "Viewer WebGL comparison qualification cleanup failed",
+      );
+    }
+  }
+}
+
+async function runQualification(lifecycle) {
   const comparisonStartedAt = performance.now();
   const renderCanvas = document.querySelector("#render-canvas");
   const container = document.querySelector("#comparison");
   const renderer = new WebGlLineRenderer(renderCanvas);
+  lifecycle.ownRenderer(renderer);
   const baseBatch = batch(
     1,
     Object.freeze({
@@ -275,7 +364,7 @@ async function qualify() {
     layers: Object.freeze([
       Object.freeze({
         name: "Qualification",
-        color: 7,
+        color: QUALIFICATION_LAYER_COLOR,
         flags: 0,
         lineWeight: -3,
       }),
@@ -289,6 +378,29 @@ async function qualify() {
       height: 100,
     }),
   });
+  const context = Object.freeze({
+    sourceSession: Object.freeze({}),
+    snapshot: Object.freeze({
+      sessionId: "session:qualification",
+      sourceId: "source:qualification",
+      snapshotId: "snapshot:qualification",
+      revisionId: BASE_REVISION,
+    }),
+    host: Object.freeze({}),
+  });
+  lifecycle.transferRendererToPresentation();
+  const presentation = await mountWebGlPresentation(context, {
+    canvas: renderCanvas,
+    renderer,
+    load() {
+      return Object.freeze({
+        renderer,
+        render: first,
+        dispose() {},
+      });
+    },
+  });
+  lifecycle.presentation = presentation;
   const candidateResource = renderer.stageRenderDeltaLine({
     key: "qualification:candidate",
     sceneId: "root",
@@ -305,28 +417,8 @@ async function qualify() {
     renderer,
     candidateResource,
   );
+  lifecycle.adapter = adapter;
   adapter.restoreActivePresentation();
-  const context = Object.freeze({
-    sourceSession: Object.freeze({}),
-    snapshot: Object.freeze({
-      sessionId: "session:qualification",
-      sourceId: "source:qualification",
-      snapshotId: "snapshot:qualification",
-      revisionId: BASE_REVISION,
-    }),
-    host: Object.freeze({}),
-  });
-  const presentation = await mountWebGlPresentation(context, {
-    canvas: renderCanvas,
-    renderer,
-    load() {
-      return Object.freeze({
-        renderer,
-        render: first,
-        dispose() {},
-      });
-    },
-  });
   const comparison = mountWebGlRevisionComparison({
     presentation,
     renderDeltaAdapter: adapter,
@@ -342,6 +434,7 @@ async function qualify() {
       return Object.freeze({ width: WIDTH, height: HEIGHT });
     },
   });
+  lifecycle.comparison = comparison;
   const comparisonFirstFrameMs = Math.max(
     0,
     Math.round(performance.now() - comparisonStartedAt),
@@ -395,7 +488,8 @@ async function qualify() {
     after: pixelEvidence(comparison.afterSurface),
     camera: comparison.snapshot().camera.camera,
   });
-  const originalCapture = renderer.captureRaster.bind(renderer);
+  lifecycle.originalCapture =
+    renderer.captureRaster.bind(renderer);
   let failCandidate = true;
   renderer.captureRaster = (camera, options) => {
     if (
@@ -405,7 +499,7 @@ async function qualify() {
       failCandidate = false;
       throw new Error("qualification candidate capture failure");
     }
-    return originalCapture(camera, options);
+    return lifecycle.originalCapture(camera, options);
   };
   let rollbackRejected = false;
   try {
@@ -433,7 +527,7 @@ async function qualify() {
   ) {
     throw new Error("failed candidate did not restore last-good pixels");
   }
-  renderer.captureRaster = originalCapture;
+  lifecycle.restoreCapture();
 
   comparison.setSideVisibility({ before: false, after: true });
   const visibility = comparison.snapshot().ui;
@@ -445,31 +539,37 @@ async function qualify() {
   const comparisonSnapshot = comparison.snapshot();
   const beforeSurface = comparison.beforeSurface;
   const afterSurface = comparison.afterSurface;
-  comparison.dispose();
+  lifecycle.disposeComparison();
   const comparisonDisposed = comparison.disposed;
   const surfacesReleased =
     beforeSurface.width === 1 && afterSurface.width === 1;
   const repeatLifecycleCount = 8;
   let repeatLifecycleReleased = true;
   for (let index = 0; index < repeatLifecycleCount; index += 1) {
-    const repeated = mountWebGlRevisionComparison({
-      presentation,
-      renderDeltaAdapter: adapter,
-      renderDiffController: Object.freeze({
-        snapshot: diffSnapshot,
-      }),
-      container,
-      camera: Object.freeze({
-        origin: Object.freeze([index, -index, 0]),
-        worldHeight: 100 - index,
-      }),
-      getSurfaceSize() {
-        return Object.freeze({ width: WIDTH, height: HEIGHT });
-      },
-    });
-    const repeatedBefore = repeated.beforeSurface;
-    const repeatedAfter = repeated.afterSurface;
-    repeated.dispose();
+    let repeated = null;
+    let repeatedBefore = null;
+    let repeatedAfter = null;
+    try {
+      repeated = mountWebGlRevisionComparison({
+        presentation,
+        renderDeltaAdapter: adapter,
+        renderDiffController: Object.freeze({
+          snapshot: diffSnapshot,
+        }),
+        container,
+        camera: Object.freeze({
+          origin: Object.freeze([index, -index, 0]),
+          worldHeight: 100 - index,
+        }),
+        getSurfaceSize() {
+          return Object.freeze({ width: WIDTH, height: HEIGHT });
+        },
+      });
+      repeatedBefore = repeated.beforeSurface;
+      repeatedAfter = repeated.afterSurface;
+    } finally {
+      repeated?.dispose();
+    }
     repeatLifecycleReleased &&=
       repeated.disposed &&
       repeatedBefore.width === 1 &&
@@ -480,9 +580,9 @@ async function qualify() {
       renderer.renderDeltaSnapshot().allocatedResourceBytes ===
         candidateResource.byteLength;
   }
-  adapter.dispose();
+  lifecycle.disposeAdapter();
   const deltaAfterDispose = renderer.renderDeltaSnapshot();
-  await presentation.dispose();
+  await lifecycle.disposePresentation();
 
   return Object.freeze({
     schema: "viewer-webgl-comparison-qualification/1",
@@ -513,6 +613,37 @@ async function qualify() {
       repeatLifecycleReleased &&
       deltaAfterDispose.allocatedResourceBytes === 0,
   });
+}
+
+async function qualify() {
+  const lifecycle = new QualificationLifecycle();
+  let result = null;
+  let qualificationError = null;
+  try {
+    result = await runQualification(lifecycle);
+  } catch (error) {
+    qualificationError = error;
+  }
+  let cleanupError = null;
+  try {
+    await lifecycle.dispose();
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (qualificationError !== null && cleanupError !== null) {
+    throw new AggregateError(
+      [qualificationError, cleanupError],
+      "Viewer WebGL comparison qualification and cleanup failed",
+      { cause: qualificationError },
+    );
+  }
+  if (qualificationError !== null) {
+    throw qualificationError;
+  }
+  if (cleanupError !== null) {
+    throw cleanupError;
+  }
+  return result;
 }
 
 function reportToHost(result) {

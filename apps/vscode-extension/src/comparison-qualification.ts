@@ -4,10 +4,10 @@ import {
   COMPARISON_QUALIFICATION_MESSAGE_TYPE,
   comparisonQualificationFields,
 } from "./comparison-qualification-result";
-import type { QualificationReporter } from "./qualification";
-
-export const QUALIFICATION_MODE_ENV =
-  "DWG_VIEWER_QUALIFICATION_MODE";
+import {
+  QUALIFICATION_MODE_ENV,
+  type QualificationReporter,
+} from "./qualification";
 
 function qualificationHtml(
   webview: vscode.Webview,

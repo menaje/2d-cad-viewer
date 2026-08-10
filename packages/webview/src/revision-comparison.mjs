@@ -10,6 +10,7 @@ import {
   ViewerSplitViewOrientation,
   ViewerSplitViewUiController,
 } from "@menaje/viewer-ui";
+import { resolveRenderSurfaceSize } from "./render-resolution.mjs";
 
 const MAXIMUM_SURFACE_PIXELS = 16_777_216;
 const SPLIT_VIEW_DIVIDER_SIZE_PX = 6;
@@ -224,19 +225,8 @@ function requireAdapter(value, renderer) {
 }
 
 function defaultSurfaceSize(surface) {
-  const ratio = Math.min(globalThis.devicePixelRatio ?? 1, 2);
-  const clientWidth = Number(surface.clientWidth);
-  const clientHeight = Number(surface.clientHeight);
-  return Object.freeze({
-    width:
-      Number.isFinite(clientWidth) && clientWidth > 0
-        ? Math.max(1, Math.round(clientWidth * ratio))
-        : Math.max(1, Math.round(Number(surface.width) || 300)),
-    height:
-      Number.isFinite(clientHeight) && clientHeight > 0
-        ? Math.max(1, Math.round(clientHeight * ratio))
-        : Math.max(1, Math.round(Number(surface.height) || 150)),
-  });
+  const { width, height } = resolveRenderSurfaceSize(surface);
+  return Object.freeze({ width, height });
 }
 
 function normalizeSurfaceSize(value) {

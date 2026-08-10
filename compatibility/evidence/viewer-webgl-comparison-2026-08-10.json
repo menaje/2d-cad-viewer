@@ -1,0 +1,176 @@
+{
+  "schema": "viewer-webgl-comparison-qualification-evidence/1",
+  "status": "pass",
+  "asOf": "2026-08-10",
+  "supersedes": "compatibility/evidence/viewer-webgl-comparison-2026-08-09.json",
+  "scope": {
+    "repository": "menaje/dwg-viewer",
+    "package": "@menaje/viewer-webgl",
+    "api": "mountWebGlRevisionComparison",
+    "publishedArtifactChanged": false
+  },
+  "strategyDecision": {
+    "selected": "single-renderer-serial-snapshot",
+    "physicalWebGlContexts": 1,
+    "visibleComparisonSurfaces": 2,
+    "duplicatesBaseSceneCache": false,
+    "duplicatesBaseGpuResources": false,
+    "maximumRetainedSurfacePixels": 16777216,
+    "qualificationRetainedPixelBytes": 1843200,
+    "dualFullWebGlContexts": "not-admitted-without-separate-hard-gate",
+    "overlayOnlyToggle": "not-selected-because-both-sides-must-remain-visible"
+  },
+  "actualWebGlFixture": {
+    "kind": "public-synthetic-source-fixture",
+    "license": "MPL-2.0",
+    "source": "packages/webview/qualification/revision-comparison.mjs",
+    "surface": {
+      "width": 640,
+      "height": 360
+    },
+    "browser": {
+      "schema": "viewer-webgl-comparison-qualification/1",
+      "webgl2": true,
+      "comparisonFirstFrameMs": 24,
+      "beforeChecksum": "bd23fe45",
+      "afterChecksum": "f0bbf685",
+      "beforeNonWhitePixels": 288,
+      "afterNonWhitePixels": 288,
+      "highlightedBeforeBluePixels": 1152,
+      "highlightedAfterBluePixels": 1152,
+      "stalePickRejected": true,
+      "rollbackPreservedPixels": true,
+      "rollbackPreservedPickRevision": true,
+      "visibilityToggle": true,
+      "repeatLifecycleCount": 8,
+      "repeatLifecycleReleased": true,
+      "comparisonDisposed": true,
+      "surfacesReleased": true,
+      "deltaAllocatedBytesAfterDispose": 0,
+      "status": "pass"
+    },
+    "forcedFailureCleanup": {
+      "failure": "indistinct-pixel-evidence",
+      "comparisonContainerChildrenAfterFailure": 0,
+      "canvasElementsAfterFailure": 1,
+      "renderCanvasHiddenAfterFailure": false,
+      "renderCanvasAriaHiddenAfterFailure": null,
+      "status": "pass"
+    },
+    "packagedVscode": {
+      "platform": "darwin",
+      "architecture": "arm64",
+      "vscodeVersion": "1.132.0",
+      "extensionVersion": "0.1.4",
+      "installation": "main-vsix-only",
+      "companionExtensionInstalled": false,
+      "comparisonFirstFrameMs": 40,
+      "hostQualificationElapsedMs": 275,
+      "beforeChecksum": "bd23fe45",
+      "afterChecksum": "f0bbf685",
+      "beforeNonWhitePixels": 288,
+      "afterNonWhitePixels": 288,
+      "highlightedBeforeBluePixels": 1152,
+      "highlightedAfterBluePixels": 1152,
+      "stalePickRejected": true,
+      "rollbackPreservedPixels": true,
+      "rollbackPreservedPickRevision": true,
+      "visibilityToggle": true,
+      "repeatLifecycleCount": 8,
+      "repeatLifecycleReleased": true,
+      "comparisonDisposed": true,
+      "surfacesReleased": true,
+      "deltaAllocatedBytesAfterDispose": 0,
+      "comparisonPanelDisposed": true,
+      "converterProcessesAfterDispose": 0,
+      "ownedProcessesAfterShutdown": 0,
+      "revisionComparisonGate": "pass",
+      "cleanupGate": "pass",
+      "status": "pass"
+    }
+  },
+  "publicDwgFixture": {
+    "qualificationAsOf": "2026-08-09",
+    "evidenceSource": "compatibility/evidence/viewer-webgl-comparison-2026-08-09.json",
+    "sourceId": "yongsan-railway-hospital-20220930",
+    "fixtureIndex": 10,
+    "publisher": "국가유산청",
+    "license": "KOGL-Type-1",
+    "catalogLicenseVerified": true,
+    "archiveSizeBytes": 20021644,
+    "archiveSha256": "db8202140ab032c2bcccfeec3dd6f1c5cbb0e598b34df2a1b3051b869a30fca7",
+    "dwgBytesModified": false,
+    "dwgVersion": "AC1021",
+    "sourceSizeBytes": 5325824,
+    "packagedVscode": {
+      "firstUsableFrameMs": 1103,
+      "fullWebviewFrameMs": 35,
+      "incrementalPhysicalBytes": 71945240,
+      "physicalMeasurement": "deduplicated-footprint",
+      "editorCleanupMs": 1,
+      "converterExitAfterDisposeMs": 252,
+      "converterProcessesAfterDispose": 0,
+      "ownedProcessesAfterShutdown": 0,
+      "firstFrameGate": "pass",
+      "memoryGate": "pass",
+      "cleanupGate": "pass"
+    }
+  },
+  "largeDrawingGate": {
+    "qualificationAsOf": "2026-08-09",
+    "evidenceSource": "compatibility/evidence/viewer-webgl-comparison-2026-08-09.json",
+    "source": "private-reference-path-free",
+    "sourceSizeBytes": 24680147,
+    "entityScale": 378400,
+    "platform": "darwin",
+    "architecture": "arm64",
+    "physicalMeasurement": "deduplicated-footprint",
+    "targets": {
+      "firstUsableFrameMs": 5000,
+      "incrementalPhysicalBytes": 600000000
+    },
+    "hardLimits": {
+      "firstUsableFrameMs": 8000,
+      "incrementalPhysicalBytes": 800000000
+    },
+    "runs": [
+      {
+        "firstUsableFrameMs": 4704,
+        "fullWebviewFrameMs": 567,
+        "incrementalPhysicalBytes": 582045296,
+        "editorCleanupMs": 0,
+        "converterExitAfterDisposeMs": 274,
+        "status": "pass"
+      },
+      {
+        "firstUsableFrameMs": 4613,
+        "fullWebviewFrameMs": 564,
+        "incrementalPhysicalBytes": 530058768,
+        "editorCleanupMs": 1,
+        "converterExitAfterDisposeMs": 263,
+        "status": "pass"
+      },
+      {
+        "firstUsableFrameMs": 4547,
+        "fullWebviewFrameMs": 551,
+        "incrementalPhysicalBytes": 594939480,
+        "editorCleanupMs": 2,
+        "converterExitAfterDisposeMs": 268,
+        "status": "pass"
+      }
+    ],
+    "converterProcessesAfterDispose": 0,
+    "ownedProcessesAfterShutdown": 0,
+    "firstFrameGate": "pass",
+    "memoryGate": "pass",
+    "cleanupGate": "pass"
+  },
+  "boundaries": {
+    "standaloneViewerRequiresConsumerInstallation": false,
+    "consumerRequiresViewerExtensionInstallation": false,
+    "consumerOwnsCandidateAndRevisionAuthority": true,
+    "viewerOwnsOnlyVisualLifecycle": true,
+    "absolutePathsIncluded": false,
+    "drawingTextIncluded": false
+  }
+}

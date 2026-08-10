@@ -1,13 +1,13 @@
-import { buildInstanceGraph } from "./instance-graph.mjs";
+import { buildInstanceGraph } from "./instance-graph.mjs?v=1.21.3";
 import { layerLinetypeCodes } from "./cad-linetype.mjs";
 import {
   buildLayoutInstanceGraph,
   paperViewportForLayout,
-} from "./layout-scene.mjs?v=1.20.0";
+} from "./layout-scene.mjs?v=1.21.0";
 import { readJsHeapSnapshot } from "./memory-telemetry.mjs";
 import { calculateRasterImageBounds } from "./raster-image-overlay.mjs";
-import { WebGlLineRenderer } from "./renderer.mjs?v=1.20.0";
-import { SceneCacheReader } from "./scene-cache.mjs?v=1.20.0";
+import { WebGlLineRenderer } from "./renderer.mjs?v=1.21.0";
+import { SceneCacheReader } from "./scene-cache.mjs?v=1.21.0";
 
 function now() {
   return globalThis.performance?.now?.() ?? Date.now();
@@ -164,6 +164,9 @@ export function createDisposableFirstFrameScene(input) {
     get imageEntities() {
       return value("imageEntities");
     },
+    get embeddedImages() {
+      return value("embeddedImages");
+    },
     get renderer() {
       return value("renderer");
     },
@@ -224,9 +227,10 @@ export async function loadFirstFrame(
   const instancesAt = now();
 
   onProgress("첫 화면 4MiB 이하 버퍼 읽는 중");
-  const [overview, imageEntities] = await Promise.all([
+  const [overview, imageEntities, embeddedImages] = await Promise.all([
     reader.readOverviewVertices(),
     reader.readImageEntities(),
+    reader.readEmbeddedImages(),
   ]);
   const overviewAt = now();
   const imageBounds = imageEntities
@@ -284,6 +288,7 @@ export async function loadFirstFrame(
     instanceGraph,
     overview,
     imageEntities,
+    embeddedImages,
     renderer,
     render,
     metrics,
@@ -316,9 +321,10 @@ export async function loadExternalFirstFrame(
     },
   );
   onProgress("참조도면 첫 화면 버퍼 읽는 중");
-  const [overview, imageEntities] = await Promise.all([
+  const [overview, imageEntities, embeddedImages] = await Promise.all([
     reader.readOverviewVertices(),
     reader.readImageEntities(),
+    reader.readEmbeddedImages(),
   ]);
   return Object.freeze({
     reader,
@@ -326,5 +332,6 @@ export async function loadExternalFirstFrame(
     instanceGraph,
     overview,
     imageEntities,
+    embeddedImages,
   });
 }

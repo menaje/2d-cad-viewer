@@ -11,6 +11,8 @@ export const QUALIFICATION_DRAWING_ENV =
   "DWG_VIEWER_QUALIFICATION_DRAWING";
 export const QUALIFICATION_CLOSE_AFTER_ENV =
   "DWG_VIEWER_QUALIFICATION_CLOSE_AFTER";
+export const QUALIFICATION_MODE_ENV =
+  "DWG_VIEWER_QUALIFICATION_MODE";
 
 export type QualificationCloseStage =
   | "conversion"
@@ -126,6 +128,7 @@ export function createQualificationReporter(
   const reportPath = environment[QUALIFICATION_REPORT_ENV]?.trim();
   const token = environment[QUALIFICATION_TOKEN_ENV]?.trim();
   const drawingPath = environment[QUALIFICATION_DRAWING_ENV]?.trim();
+  const mode = environment[QUALIFICATION_MODE_ENV]?.trim();
   const closeAfter =
     environment[QUALIFICATION_CLOSE_AFTER_ENV]?.trim();
   if (
@@ -133,8 +136,8 @@ export function createQualificationReporter(
     !path.isAbsolute(reportPath) ||
     !token ||
     !TOKEN_PATTERN.test(token) ||
-    !drawingPath ||
-    !path.isAbsolute(drawingPath) ||
+    (mode !== "comparison" &&
+      (!drawingPath || !path.isAbsolute(drawingPath))) ||
     (closeAfter !== "conversion" &&
       closeAfter !== "preview" &&
       closeAfter !== "full")

@@ -73,7 +73,7 @@ export async function resolveLibreDwgAdapter(
   } catch (error) {
     throw new SceneEngineError(
       "ADAPTER_NOT_FOUND",
-      "LibreDWG 변환기를 찾을 수 없습니다. 동반 확장을 설치하거나 DWG Viewer 설정에서 변환기 경로를 지정해 주세요.",
+      "LibreDWG 변환기를 찾을 수 없습니다. 자동 설치를 다시 시도하거나 DWG Viewer 설정에서 검증된 오프라인 변환기 경로를 지정해 주세요.",
       { cause: error },
     );
   }
@@ -92,19 +92,140 @@ function hashFields(fields: readonly string[]): string {
   return hash.digest("hex");
 }
 
+async function hashAdapterContents(adapterPath: string): Promise<string> {
+  const before = await stat(adapterPath, { bigint: true });
+  if (!before.isFile()) {
+    throw new SceneEngineError(
+      "ENGINE_NOT_FILE",
+      "LibreDWG Native 변환기 파일을 읽을 수 없습니다.",
+    );
+  }
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(adapterPath)) {
+    hash.update(chunk);
+  }
+  const after = await stat(adapterPath, { bigint: true });
+  if (
+    !after.isFile() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.size !== after.size ||
+    before.mtimeNs !== after.mtimeNs ||
+    before.ctimeNs !== after.ctimeNs
+  ) {
+    throw new SceneEngineError(
+      "ENGINE_CHANGED_DURING_SNAPSHOT",
+      "LibreDWG Native 변환기가 확인 중 변경되었습니다. 다시 시도해 주세요.",
+    );
+  }
+  return hash.digest("hex");
+}
+
 interface AdapterReport {
   schema?: unknown;
   status?: unknown;
   cache?: {
+    format_major?: unknown;
+    format_minor?: unknown;
     size_bytes?: unknown;
     validated?: unknown;
   };
+  performance?: unknown;
+}
+
+export interface LibreDwgAdapterPerformance {
+  readonly parseMs: number;
+  readonly writeMs: number;
+  readonly totalMs: number;
+  readonly workerCount: number;
+  readonly parallelSortWorkers: number;
+  readonly parallelSectionWorkers: number;
+  readonly stages: Readonly<Record<string, number>>;
+}
+
+function safeMetric(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+    ? value
+    : undefined;
+}
+
+function parsePerformance(
+  value: unknown,
+): LibreDwgAdapterPerformance | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const parseMs = safeMetric(raw.parse_ms);
+  const writeMs = safeMetric(raw.write_ms);
+  const totalMs = safeMetric(raw.total_ms);
+  const workerCount = safeMetric(raw.worker_count);
+  const parallelSortWorkers = safeMetric(raw.parallel_sort_workers);
+  const parallelSectionWorkers = safeMetric(
+    raw.parallel_section_workers,
+  );
+  if (
+    parseMs === undefined ||
+    writeMs === undefined ||
+    totalMs === undefined ||
+    workerCount === undefined ||
+    workerCount < 1 ||
+    parallelSortWorkers === undefined ||
+    parallelSortWorkers < 1 ||
+    parallelSectionWorkers === undefined ||
+    parallelSectionWorkers < 1
+  ) {
+    return undefined;
+  }
+  const stages: Record<string, number> = {};
+  if (
+    raw.stages &&
+    typeof raw.stages === "object" &&
+    !Array.isArray(raw.stages)
+  ) {
+    for (const [name, metric] of Object.entries(
+      raw.stages as Record<string, unknown>,
+    )) {
+      if (name === "section_groups") {
+        if (
+          metric &&
+          typeof metric === "object" &&
+          !Array.isArray(metric)
+        ) {
+          for (const [group, duration] of Object.entries(
+            metric as Record<string, unknown>,
+          )) {
+            const normalized = safeMetric(duration);
+            if (normalized !== undefined) {
+              stages[`section_groups.${group}`] = normalized;
+            }
+          }
+        }
+        continue;
+      }
+      const normalized = safeMetric(metric);
+      if (normalized !== undefined) {
+        stages[name] = normalized;
+      }
+    }
+  }
+  return Object.freeze({
+    parseMs,
+    writeMs,
+    totalMs,
+    workerCount,
+    parallelSortWorkers,
+    parallelSectionWorkers,
+    stages: Object.freeze(stages),
+  });
 }
 
 export function parseAdapterReport(
   output: string,
   actualCacheBytes: bigint,
-): void {
+): LibreDwgAdapterPerformance | undefined {
   let report: AdapterReport;
   try {
     report = JSON.parse(output.trim()) as AdapterReport;
@@ -116,6 +237,9 @@ export function parseAdapterReport(
     );
   }
   const reportSize = report.cache?.size_bytes;
+  const expectedVersion = /\/(\d+)\.(\d+)$/u.exec(
+    CACHE_SCHEMA_VERSION,
+  );
   const sizeMatches =
     (typeof reportSize === "number" &&
       Number.isSafeInteger(reportSize) &&
@@ -126,6 +250,8 @@ export function parseAdapterReport(
   if (
     report.schema !== "dwg-scene-cache/1" ||
     report.status !== "ok" ||
+    report.cache?.format_major !== Number(expectedVersion?.[1]) ||
+    report.cache?.format_minor !== Number(expectedVersion?.[2]) ||
     report.cache?.validated !== true ||
     !sizeMatches ||
     actualCacheBytes <= 0n
@@ -135,6 +261,7 @@ export function parseAdapterReport(
       "LibreDWG 변환 결과의 무결성 검사를 통과하지 못했습니다.",
     );
   }
+  return parsePerformance(report.performance);
 }
 
 interface RawDoctorReport {
@@ -382,6 +509,7 @@ interface RunAdapterOptions {
   platform?: NodeJS.Platform;
   signal: AbortSignal;
   onPhase?: (phase: "converting" | "validating") => void;
+  onPerformance?: (performance: LibreDwgAdapterPerformance) => void;
   onPreview?: (preview: {
     path: string;
     size: number;
@@ -464,6 +592,7 @@ export async function runLibreDwgAdapter({
   platform = process.platform,
   signal,
   onPhase,
+  onPerformance,
   onPreview,
 }: RunAdapterOptions): Promise<void> {
   if (signal.aborted) {
@@ -743,10 +872,17 @@ export async function runLibreDwgAdapter({
       { cause: error },
     );
   }
-  parseAdapterReport(
+  const performance = parseAdapterReport(
     Buffer.concat(stdout, stdoutBytes).toString("utf8"),
     outputMetadata.size,
   );
+  if (performance && onPerformance) {
+    try {
+      onPerformance(performance);
+    } catch {
+      // Telemetry observers must not invalidate a verified cache.
+    }
+  }
 }
 
 export const LIBREDWG_NATIVE_ENGINE_DESCRIPTOR = Object.freeze({
@@ -777,6 +913,7 @@ export const LIBREDWG_NATIVE_ENGINE_DESCRIPTOR = Object.freeze({
 interface NativeAdapterInvocation {
   argumentPrefix?: readonly string[];
   platform?: NodeJS.Platform;
+  onPerformance?: (performance: LibreDwgAdapterPerformance) => void;
 }
 
 export class LibreDwgNativeSceneEngine implements SceneEngine {
@@ -788,19 +925,8 @@ export class LibreDwgNativeSceneEngine implements SceneEngine {
   ) {}
 
   async snapshot(): Promise<SceneEngineSnapshot> {
-    const metadata = await stat(this.adapterPath, { bigint: true });
-    if (!metadata.isFile()) {
-      throw new SceneEngineError(
-        "ENGINE_NOT_FILE",
-        "LibreDWG Native 변환기 파일을 읽을 수 없습니다.",
-      );
-    }
     return Object.freeze({
-      revision: hashFields([
-        path.resolve(this.adapterPath),
-        metadata.size.toString(),
-        metadata.mtimeNs.toString(),
-      ]),
+      revision: await hashAdapterContents(this.adapterPath),
     });
   }
 
@@ -836,6 +962,7 @@ export class LibreDwgNativeSceneEngine implements SceneEngine {
       signal,
       onPhase: (phase) =>
         emit(phase === "converting" ? "parsing" : "validating"),
+      onPerformance: this.invocation.onPerformance,
       onPreview,
     });
   }

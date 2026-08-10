@@ -12,11 +12,10 @@ import {
 const extensionRoot = path.resolve(import.meta.dirname, "..");
 const repositoryRoot = path.resolve(extensionRoot, "..", "..");
 
-test("declares a separate GPL workspace companion required by the MPL viewer", async () => {
+test("keeps the historical GPL package only as a qualification fixture", async () => {
   const [
     manifestText,
     mainManifestText,
-    repositoryManifestText,
     license,
     readme,
     ignoreRules,
@@ -26,31 +25,28 @@ test("declares a separate GPL workspace companion required by the MPL viewer", a
       path.join(repositoryRoot, "apps", "vscode-extension", "package.json"),
       "utf8",
     ),
-    readFile(path.join(repositoryRoot, "package.json"), "utf8"),
     readFile(path.join(extensionRoot, "LICENSE.txt")),
     readFile(path.join(extensionRoot, "README.md"), "utf8"),
     readFile(path.join(extensionRoot, ".vscodeignore"), "utf8"),
   ]);
   const manifest = JSON.parse(manifestText);
   const mainManifest = JSON.parse(mainManifestText);
-  const repositoryManifest = JSON.parse(repositoryManifestText);
 
   assert.equal(manifest.name, "dwg-viewer-libredwg");
   assert.equal(manifest.publisher, mainManifest.publisher);
-  assert.equal(manifest.version, repositoryManifest.version);
   assert.equal(manifest.version, mainManifest.version);
   assert.equal(manifest.license, "GPL-3.0-or-later");
+  assert.equal(manifest.private, true);
   assert.deepEqual(manifest.extensionKind, ["workspace"]);
-  assert.deepEqual(mainManifest.extensionDependencies, [
-    `${manifest.publisher}.${manifest.name}`,
-  ]);
+  assert.equal(mainManifest.extensionDependencies, undefined);
   assert.equal(
     createHash("sha256").update(license).digest("hex"),
     GPL_3_0_SHA256,
   );
-  assert.match(readme, /installs the matching engine automatically/iu);
-  assert.match(readme, /complete corresponding source is under `source\/`/u);
-  assert.match(readme, /separately from the MPL-2\.0 DWG Viewer VSIX/u);
+  assert.match(readme, /retained for offline and extension-host qualification/iu);
+  assert.match(readme, /not a current Marketplace\s+product/iu);
+  assert.match(readme, /complete corresponding source is under `source\/`/iu);
+  assert.match(readme, /separate from the MPL-2\.0 DWG Viewer VSIX/u);
   assert.doesNotMatch(readme, /무료/u);
   assert.doesNotMatch(readme, /(?:^|[^A-Za-z])free(?:[^A-Za-z]|$)/iu);
   assert.match(ignoreRules, /(?:^|\n)scripts\/\*\*(?:\n|$)/u);
@@ -69,7 +65,7 @@ test("staging pins source and both unmodified license texts", async () => {
   assert.match(source, /native\/\$\{target\}/u);
 });
 
-test("release automation publishes every GPL target before the MPL viewer", async () => {
+test("release automation publishes raw GPL targets before the single Marketplace viewer", async () => {
   const [releaseWorkflow, qualificationWorkflow] = await Promise.all([
     readFile(
       path.join(repositoryRoot, ".github", "workflows", "release.yml"),
@@ -85,30 +81,51 @@ test("release automation publishes every GPL target before the MPL viewer", asyn
       "utf8",
     ),
   ]);
-  for (const target of ["linux-x64", "darwin-arm64", "win32-x64"]) {
+  for (const target of [
+    "linux-x64",
+    "darwin-arm64",
+    "darwin-x64",
+    "win32-x64",
+  ]) {
     assert.match(releaseWorkflow, new RegExp(`target: ${target}`, "u"));
     assert.match(
       releaseWorkflow,
-      new RegExp(`dwg-viewer-libredwg-\\$release_version-${target}\\.vsix`, "u"),
+      new RegExp(
+        `dwg-viewer-native-converter-\\$release_version-${target}${
+          target === "win32-x64" ? "\\.exe" : ""
+        }`,
+        "u",
+      ),
+    );
+    assert.match(
+      releaseWorkflow,
+      new RegExp(`dwg-viewer-libredwg-0\\.14-${target}\\.tar\\.gz`, "u"),
     );
   }
   assert.match(releaseWorkflow, /^  marketplace:/mu);
+  assert.match(releaseWorkflow, /needs\.context\.outputs\.publish == 'true'/u);
+  assert.match(releaseWorkflow, /node scripts\/create-engine-catalog\.mjs/u);
+  assert.match(releaseWorkflow, /DWG_VIEWER_ENGINE_CATALOG="\$catalog_path"/u);
   assert.match(
     releaseWorkflow,
-    /if: needs\.context\.outputs\.publish == 'true'/u,
+    /marketplace:[\s\S]*needs:[\s\S]*- github-release[\s\S]*Publish the MPL viewer/u,
+  );
+  assert.match(
+    releaseWorkflow,
+    /github-release:[\s\S]*"dist\/SHA256SUMS"/u,
+  );
+  assert.doesNotMatch(
+    releaseWorkflow,
+    /apps\/vscode-libredwg-adapter exec vsce publish/u,
+  );
+  assert.doesNotMatch(releaseWorkflow, /--clobber/u);
+  assert.match(
+    releaseWorkflow,
+    /asset \$name is immutable and has different bytes/u,
   );
   assert.equal(
-    (releaseWorkflow.match(/package_flags\+=\(--pre-release\)/gu) ?? [])
-      .length,
-    2,
-  );
-  assert.match(releaseWorkflow, /\$packageFlags \+= "--pre-release"/u);
-  assert.match(releaseWorkflow, /--pre-release/u);
-  assert.ok(
-    releaseWorkflow.indexOf("for target in linux-x64 darwin-arm64 win32-x64") <
-      releaseWorkflow.indexOf(
-        "pnpm --dir apps/vscode-extension exec vsce publish",
-      ),
+    (releaseWorkflow.match(/exec vsce publish/gu) ?? []).length,
+    1,
   );
   assert.match(
     qualificationWorkflow,

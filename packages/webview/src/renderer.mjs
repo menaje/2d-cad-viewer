@@ -55,6 +55,16 @@ import {
   isDwgRenderDeltaOwnerInvalidated,
   isDwgRenderDeltaSceneInvalidated,
 } from "./render-delta-dependency.mjs";
+import {
+  normalizeRenderResolutionMode,
+  renderAntialiasingForMode,
+  resolveRenderSurfaceSize,
+} from "./render-resolution.mjs";
+import {
+  HYBRID_INTERACTION_REFRESH_MS,
+  InteractionRenderingMode,
+  normalizeInteractionRenderingMode,
+} from "./interaction-rendering.mjs";
 
 const VERTEX_STRIDE = 36;
 const FILL_VERTEX_STRIDE = 32;
@@ -99,6 +109,11 @@ const RENDER_DELTA_PICK_STATUSES = new Set([
   "upsert",
   "tombstone",
 ]);
+
+function currentMilliseconds() {
+  const value = globalThis.performance?.now?.();
+  return Number.isFinite(value) ? value : Date.now();
+}
 const RENDER_DELTA_PICK_ASPECTS = new Set([
   "entity",
   "geometry",
@@ -1156,7 +1171,7 @@ function makeCamera(bounds, width, height, padding = 1.08) {
   return makeCameraFromView(origin, worldHeight, width, height);
 }
 
-function normalizePreferredView(view) {
+function normalizePreferredView(view, width, height) {
   if (!view) {
     return null;
   }
@@ -1169,10 +1184,84 @@ function normalizePreferredView(view) {
   ) {
     throw new TypeError("preferred drawing view is invalid");
   }
+  const aspect = width / height;
+  const worldHeight =
+    Number.isFinite(view.width) && view.width > 0 && aspect > 0
+      ? Math.max(view.height, view.width / aspect)
+      : view.height;
   return Object.freeze({
     origin: Object.freeze([...view.center]),
-    worldHeight: view.height,
+    worldHeight,
   });
+}
+
+export function validatedPreferredView(view, bounds, width, height) {
+  const normalized = normalizePreferredView(view, width, height);
+  if (!normalized) {
+    return null;
+  }
+  /*
+   * The 2D renderer does not rotate its camera.  Applying the center and
+   * height from a twisted DWG view without its rotation can put the complete
+   * drawing outside the viewport, so fit the drawable bounds instead.
+   */
+  if (Number.isFinite(view.twist) && Math.abs(view.twist) > 1e-7) {
+    return null;
+  }
+  if (!boundsAreFinite(bounds)) {
+    return normalized;
+  }
+  const camera = makeCameraFromView(
+    normalized.origin,
+    normalized.worldHeight,
+    width,
+    height,
+  );
+  const drawableWidth = Math.max(bounds.max[0] - bounds.min[0], 0);
+  const drawableHeight = Math.max(bounds.max[1] - bounds.min[1], 0);
+  const drawableScale = Math.max(drawableWidth, drawableHeight, 1e-6);
+  const drawableArea = Math.max(
+    drawableWidth * drawableHeight,
+    drawableScale * drawableScale * 1e-6,
+  );
+  const viewArea = camera.worldWidth * camera.worldHeight;
+  /*
+   * Some producers store paper-space viewport width in paper units while
+   * leaving its height and center in hundredths of those units.  Such a view
+   * can still graze the drawable bounds, but opens the sheet as a nearly
+   * invisible dot.  A 256x area allowance preserves ordinary saved zooms in
+   * the qualification corpus while rejecting those unit-mismatched views.
+   */
+  if (!Number.isFinite(viewArea) || viewArea > drawableArea * 256) {
+    return null;
+  }
+  const halfWidth = camera.worldWidth * 0.5;
+  const halfHeight = camera.worldHeight * 0.5;
+  const overlapWidth = Math.max(
+    0,
+    Math.min(camera.origin[0] + halfWidth, bounds.max[0]) -
+      Math.max(camera.origin[0] - halfWidth, bounds.min[0]),
+  );
+  const overlapHeight = Math.max(
+    0,
+    Math.min(camera.origin[1] + halfHeight, bounds.max[1]) -
+      Math.max(camera.origin[1] - halfHeight, bounds.min[1]),
+  );
+  if (overlapWidth === 0 || overlapHeight === 0) {
+    return null;
+  }
+  /*
+   * A saved view that is larger than the drawable bounds but still clips a
+   * substantial part of them is stale or unnecessarily panned.  Fitting is
+   * strictly more useful at that scale.  Keep true zoomed-in saved views and
+   * tolerate small outlying geometry by requiring only 90% bounds coverage.
+   */
+  const drawableCoverage =
+    (overlapWidth * overlapHeight) / drawableArea;
+  if (viewArea > drawableArea && drawableCoverage < 0.9) {
+    return null;
+  }
+  return normalized;
 }
 
 function instancesForBatch(batch, instanceGraph) {
@@ -1677,6 +1766,60 @@ function retainOverlayForCamera(
   return true;
 }
 
+function setCanvasHidden(canvas, hidden) {
+  const style = canvas?.style;
+  if (!style) {
+    return false;
+  }
+  style.opacity = hidden ? "0" : "";
+  return true;
+}
+
+function setInteractionCanvasActive(canvas, active) {
+  const style = canvas?.style;
+  if (!style) {
+    return false;
+  }
+  style.opacity = active ? "1" : "0";
+  return true;
+}
+
+function resetCanvasTransform(canvas) {
+  const style = canvas?.style;
+  if (!style) {
+    return false;
+  }
+  style.transform = "";
+  style.transformOrigin = "";
+  style.willChange = "";
+  return true;
+}
+
+function transformCanvasForCamera(canvas, anchor, camera) {
+  const style = canvas?.style;
+  if (
+    !style ||
+    !anchor ||
+    !camera ||
+    canvas.clientWidth <= 0 ||
+    canvas.clientHeight <= 0
+  ) {
+    return false;
+  }
+  const transform = overlayCameraTransform(
+    anchor,
+    camera,
+    canvas.clientWidth,
+    canvas.clientHeight,
+  );
+  style.transformOrigin = "0 0";
+  style.willChange = "transform";
+  style.transform =
+    `matrix(${transform.scaleX},0,0,${transform.scaleY},` +
+    `${transform.translateX},${transform.translateY})`;
+  return true;
+}
+
 function modelOwnerHandle(blocks) {
   const modelBlocks = blocks.filter(
     (block) => block.name.toUpperCase() === "*MODEL_SPACE",
@@ -1940,24 +2083,42 @@ function calculateOverviewBounds(batches, instanceGraph) {
   const rootClips = (instanceGraph.clipNodes ?? []).filter(
     (node) => node.parentId === 0 && !node.inverted,
   );
-  const focusBounds = rootClips.length > 0 ? emptyBounds3() : null;
+  const rootClipBounds =
+    rootClips.length > 0 ? emptyBounds3() : null;
   for (const node of rootClips) {
-    focusBounds.min[0] = Math.min(focusBounds.min[0], node.bounds.min[0]);
-    focusBounds.min[1] = Math.min(focusBounds.min[1], node.bounds.min[1]);
-    focusBounds.min[2] = Math.min(focusBounds.min[2], 0);
-    focusBounds.max[0] = Math.max(focusBounds.max[0], node.bounds.max[0]);
-    focusBounds.max[1] = Math.max(focusBounds.max[1], node.bounds.max[1]);
-    focusBounds.max[2] = Math.max(focusBounds.max[2], 0);
+    rootClipBounds.min[0] = Math.min(
+      rootClipBounds.min[0],
+      node.bounds.min[0],
+    );
+    rootClipBounds.min[1] = Math.min(
+      rootClipBounds.min[1],
+      node.bounds.min[1],
+    );
+    rootClipBounds.min[2] = Math.min(rootClipBounds.min[2], 0);
+    rootClipBounds.max[0] = Math.max(
+      rootClipBounds.max[0],
+      node.bounds.max[0],
+    );
+    rootClipBounds.max[1] = Math.max(
+      rootClipBounds.max[1],
+      node.bounds.max[1],
+    );
+    rootClipBounds.max[2] = Math.max(rootClipBounds.max[2], 0);
   }
-  const focusSearchBounds = focusBounds
+  const focusBounds = rootClipBounds ? emptyBounds3() : null;
+  const focusSearchBounds = rootClipBounds
     ? {
         min: [
-          focusBounds.min[0] - (focusBounds.max[0] - focusBounds.min[0]),
-          focusBounds.min[1] - (focusBounds.max[1] - focusBounds.min[1]),
+          rootClipBounds.min[0] -
+            (rootClipBounds.max[0] - rootClipBounds.min[0]),
+          rootClipBounds.min[1] -
+            (rootClipBounds.max[1] - rootClipBounds.min[1]),
         ],
         max: [
-          focusBounds.max[0] + (focusBounds.max[0] - focusBounds.min[0]),
-          focusBounds.max[1] + (focusBounds.max[1] - focusBounds.min[1]),
+          rootClipBounds.max[0] +
+            (rootClipBounds.max[0] - rootClipBounds.min[0]),
+          rootClipBounds.max[1] +
+            (rootClipBounds.max[1] - rootClipBounds.min[1]),
         ],
       }
     : null;
@@ -2651,6 +2812,9 @@ export class WebGlLineRenderer {
         MAX_RENDER_DELTA_TRANSFORM_BYTES,
       maximumRenderDeltaStyleBytes =
         MAX_RENDER_DELTA_STYLE_BYTES,
+      renderResolutionMode = "auto",
+      interactionRenderingMode = "hybrid",
+      interactionCanvas = null,
     } = {},
   ) {
     if (
@@ -2671,9 +2835,16 @@ export class WebGlLineRenderer {
     ) {
       throw new RangeError("renderer byte budgets must be positive");
     }
+    const normalizedRenderResolutionMode =
+      normalizeRenderResolutionMode(renderResolutionMode);
+    const normalizedInteractionRenderingMode =
+      normalizeInteractionRenderingMode(interactionRenderingMode);
+    const renderAntialiasing = renderAntialiasingForMode(
+      normalizedRenderResolutionMode,
+    );
     const gl = canvas.getContext("webgl2", {
       alpha: true,
-      antialias: true,
+      antialias: renderAntialiasing,
       depth: true,
       preserveDrawingBuffer: false,
       powerPreference: "high-performance",
@@ -2683,6 +2854,19 @@ export class WebGlLineRenderer {
     }
     this.canvas = canvas;
     this.gl = gl;
+    this.renderResolutionMode = normalizedRenderResolutionMode;
+    this.renderAntialiasing = renderAntialiasing;
+    this.lastRenderSurface = null;
+    this.interactionRenderingMode =
+      normalizedInteractionRenderingMode;
+    this.interactionCanvas = interactionCanvas;
+    this.interactionFrameCamera = null;
+    this.interactionFrameAvailable = false;
+    this.interactionFrameMetrics = null;
+    this.interactionSequenceActive = false;
+    this.lastHybridRefreshAt = 0;
+    setInteractionCanvasActive(this.interactionCanvas, false);
+    resetCanvasTransform(this.interactionCanvas);
     this.program = createProgram(gl);
     this.fillProgram = createProgram(
       gl,
@@ -5692,35 +5876,206 @@ export class WebGlLineRenderer {
     return ranges;
   }
 
-  resize(targetSize = null) {
-    const ratio = Math.min(globalThis.devicePixelRatio ?? 1, 2);
-    const width = targetSize
-      ? targetSize.width
-      : Math.max(1, Math.round(this.canvas.clientWidth * ratio));
-    const height = targetSize
-      ? targetSize.height
-      : Math.max(1, Math.round(this.canvas.clientHeight * ratio));
-    if (
-      !Number.isSafeInteger(width) ||
-      width <= 0 ||
-      !Number.isSafeInteger(height) ||
-      height <= 0
-    ) {
-      throw new RangeError("render target size must use positive integers");
+  setRenderResolutionMode(mode) {
+    this.renderResolutionMode = normalizeRenderResolutionMode(mode);
+    return this.renderResolutionMode;
+  }
+
+  setInteractionRenderingMode(mode) {
+    const normalized = normalizeInteractionRenderingMode(mode);
+    if (normalized !== this.interactionRenderingMode) {
+      this.interactionRenderingMode = normalized;
+      this.interactionSequenceActive = false;
+      this.lastHybridRefreshAt = 0;
+      this.deactivateInteractionFrame();
     }
+    return this.interactionRenderingMode;
+  }
+
+  deactivateInteractionFrame() {
+    setInteractionCanvasActive(this.interactionCanvas, false);
+    resetCanvasTransform(this.interactionCanvas);
+    setCanvasHidden(this.canvas, false);
+    setCanvasHidden(this.imageOverlay?.canvas, false);
+    setCanvasHidden(this.textOverlay?.canvas, false);
+  }
+
+  captureInteractionFrame(camera, metrics) {
+    const target = this.interactionCanvas;
+    if (
+      !target ||
+      !target.style ||
+      target.clientWidth <= 0 ||
+      target.clientHeight <= 0
+    ) {
+      this.interactionFrameAvailable = false;
+      this.interactionFrameCamera = null;
+      return false;
+    }
+    const width = Math.max(1, Math.round(target.clientWidth));
+    const height = Math.max(1, Math.round(target.clientHeight));
+    try {
+      if (target.width !== width || target.height !== height) {
+        target.width = width;
+        target.height = height;
+      }
+      const context = target.getContext?.("2d", { alpha: true });
+      if (!context) {
+        this.interactionFrameAvailable = false;
+        this.interactionFrameCamera = null;
+        return false;
+      }
+      resetCanvasTransform(target);
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, width, height);
+      context.globalAlpha = 1;
+      context.globalCompositeOperation = "source-over";
+      context.filter = "none";
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      const draw = (source) => {
+        if (!source || source.width <= 0 || source.height <= 0) {
+          return;
+        }
+        context.drawImage(
+          source,
+          0,
+          0,
+          source.width,
+          source.height,
+          0,
+          0,
+          width,
+          height,
+        );
+      };
+      if (!metrics.orderedImageOverlayComposited) {
+        draw(this.imageOverlay?.canvas);
+      }
+      draw(this.canvas);
+      if (!metrics.orderedTextOverlayComposited) {
+        draw(this.textOverlay?.canvas);
+      }
+      this.interactionFrameCamera = camera;
+      this.interactionFrameAvailable = true;
+      setInteractionCanvasActive(target, false);
+      return true;
+    } catch {
+      this.interactionFrameAvailable = false;
+      this.interactionFrameCamera = null;
+      setInteractionCanvasActive(target, false);
+      resetCanvasTransform(target);
+      return false;
+    }
+  }
+
+  reuseInteractionFrame(view, targetSize) {
+    if (
+      targetSize !== null ||
+      !this.interactionFrameAvailable ||
+      !this.interactionFrameCamera ||
+      !this.interactionFrameMetrics
+    ) {
+      return null;
+    }
+    if (!view || !Array.isArray(view.origin)) {
+      throw new TypeError("cannot resolve an invalid camera view");
+    }
+    const renderSurface = resolveRenderSurfaceSize(this.canvas, {
+      mode: this.renderResolutionMode,
+      interactive: true,
+    });
+    const camera = makeCameraFromView(
+      view.origin,
+      view.worldHeight,
+      renderSurface.width,
+      renderSurface.height,
+    );
+    if (
+      !transformCanvasForCamera(
+        this.interactionCanvas,
+        this.interactionFrameCamera,
+        camera,
+      )
+    ) {
+      return null;
+    }
+    if (!setInteractionCanvasActive(this.interactionCanvas, true)) {
+      return null;
+    }
+    setCanvasHidden(this.canvas, true);
+    setCanvasHidden(this.imageOverlay?.canvas, true);
+    setCanvasHidden(this.textOverlay?.canvas, true);
+    this.lastRenderSurface = renderSurface;
+    return Object.freeze({
+      ...this.interactionFrameMetrics,
+      drawCalls: 0,
+      detailDrawCalls: 0,
+      renderDeltaDrawCalls: 0,
+      renderDeltaSubmittedVertices: 0,
+      renderDeltaFillDrawCalls: 0,
+      renderDeltaFillSubmittedVertices: 0,
+      renderDeltaPointDrawCalls: 0,
+      renderDeltaPointSubmittedVertices: 0,
+      hatchFillDrawCalls: 0,
+      hatchFillSubmittedVertices: 0,
+      hatchPatternDrawCalls: 0,
+      hatchPatternSubmittedVertices: 0,
+      pointDrawCalls: 0,
+      pointSubmittedVertices: 0,
+      solidFillDrawCalls: 0,
+      solidFillSubmittedVertices: 0,
+      solidOutlineDrawCalls: 0,
+      solidOutlineSubmittedVertices: 0,
+      wipeoutMaskDrawCalls: 0,
+      wipeoutMaskSubmittedVertices: 0,
+      curveRefinementDrawCalls: 0,
+      curveRefinementSubmittedVertices: 0,
+      submittedInstances: 0,
+      submittedVertices: 0,
+      detailSubmittedVertices: 0,
+      orderedOverlayDrawCalls: 0,
+      instanceUploadBytes: 0,
+      interactive: true,
+      interactionFrameCaptured: false,
+      interactionFrameReused: true,
+      interactionRenderingMode: this.interactionRenderingMode,
+      retainedImageOverlay: false,
+      retainedTextOverlay: false,
+      renderResolutionMode: renderSurface.mode,
+      renderPixelRatio: renderSurface.pixelRatio,
+      renderPixelCount: renderSurface.pixelCount,
+      renderWidth: camera.width,
+      renderHeight: camera.height,
+      camera,
+    });
+  }
+
+  resize(targetSize = null, { interactive = false } = {}) {
+    const surface = resolveRenderSurfaceSize(this.canvas, {
+      mode: this.renderResolutionMode,
+      interactive,
+      targetSize,
+    });
+    const { width, height } = surface;
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
       this.canvas.height = height;
     }
     this.gl.viewport(0, 0, width, height);
-    return { width, height };
+    this.lastRenderSurface = surface;
+    return surface;
   }
 
-  cameraForView(view = this.overviewScene?.camera, targetSize = null) {
+  cameraForView(
+    view = this.overviewScene?.camera,
+    targetSize = null,
+    { interactive = false } = {},
+  ) {
     if (!view || !Array.isArray(view.origin)) {
       throw new TypeError("cannot resolve an invalid camera view");
     }
-    const size = this.resize(targetSize);
+    const size = this.resize(targetSize, { interactive });
     return makeCameraFromView(
       view.origin,
       view.worldHeight,
@@ -5753,8 +6108,9 @@ export class WebGlLineRenderer {
     );
     this.setLineWeightsVisible(lineWeightDisplay);
     this.blocks = blocks;
-    let bounds = calculateOverviewBounds(batches, instanceGraph);
-    includeFiniteBounds(bounds, supplementalBounds);
+    const drawableBounds = calculateOverviewBounds(batches, instanceGraph);
+    includeFiniteBounds(drawableBounds, supplementalBounds);
+    let bounds = drawableBounds;
     if (preferredBounds && boundsAreFinite(preferredBounds)) {
       if (!boundsAreFinite(bounds)) {
         bounds = {
@@ -5785,7 +6141,12 @@ export class WebGlLineRenderer {
             min: [...bounds.min],
             max: [...bounds.max],
           };
-    const fittedView = normalizePreferredView(preferredView);
+    const fittedView = validatedPreferredView(
+      preferredView,
+      drawableBounds,
+      size.width,
+      size.height,
+    );
     const camera = fittedView
       ? makeCameraFromView(
           fittedView.origin,
@@ -5793,12 +6154,14 @@ export class WebGlLineRenderer {
           size.width,
           size.height,
         )
-      : makeCamera(bounds, size.width, size.height);
+      : makeCamera(fitBounds, size.width, size.height);
     const resource = this.uploadVertices(vertices.buffer);
     this.overviewScene = Object.freeze({
       batches,
       bounds,
       fitBounds,
+      preferredBounds:
+        preferredBounds && boundsAreFinite(preferredBounds),
       camera,
       preferredView: fittedView,
       instanceGraph,
@@ -5829,11 +6192,12 @@ export class WebGlLineRenderer {
       throw new Error("cannot switch a view before rendering an overview");
     }
     this.clearCurveRefinement();
-    let bounds = calculateOverviewBounds(
+    const drawableBounds = calculateOverviewBounds(
       this.overviewScene.batches,
       instanceGraph,
     );
-    includeFiniteBounds(bounds, supplementalBounds);
+    includeFiniteBounds(drawableBounds, supplementalBounds);
+    let bounds = drawableBounds;
     if (preferredBounds && boundsAreFinite(preferredBounds)) {
       if (!boundsAreFinite(bounds)) {
         bounds = {
@@ -5864,6 +6228,13 @@ export class WebGlLineRenderer {
             min: [...bounds.min],
             max: [...bounds.max],
           };
+    const size = this.resize();
+    const fittedView = validatedPreferredView(
+      preferredView,
+      drawableBounds,
+      size.width,
+      size.height,
+    );
     this.setViewportLayerVisibility(instanceGraph);
     this.detailSelections.clear();
     this.clearHatchPatterns();
@@ -5871,7 +6242,9 @@ export class WebGlLineRenderer {
       ...this.overviewScene,
       bounds,
       fitBounds,
-      preferredView: normalizePreferredView(preferredView),
+      preferredBounds:
+        preferredBounds && boundsAreFinite(preferredBounds),
+      preferredView: fittedView,
       instanceGraph,
     });
     if (clearExternal) {
@@ -6117,6 +6490,17 @@ export class WebGlLineRenderer {
       return makeCameraFromView(
         this.overviewScene.preferredView.origin,
         this.overviewScene.preferredView.worldHeight,
+        size.width,
+        size.height,
+      );
+    }
+    if (
+      this.overviewScene?.preferredBounds &&
+      boundsAreFinite(this.overviewScene.fitBounds)
+    ) {
+      const size = this.resize(targetSize);
+      return makeCamera(
+        this.overviewScene.fitBounds,
         size.width,
         size.height,
       );
@@ -7374,8 +7758,46 @@ export class WebGlLineRenderer {
     if (!this.overviewScene || !view) {
       throw new Error("cannot redraw before the overview is initialized");
     }
+    if (!interactive) {
+      this.interactionSequenceActive = false;
+      this.lastHybridRefreshAt = 0;
+    } else if (
+      this.interactionRenderingMode !==
+      InteractionRenderingMode.CONTINUOUS
+    ) {
+      const now = currentMilliseconds();
+      let reuseFrame =
+        this.interactionRenderingMode ===
+        InteractionRenderingMode.MAXIMUM_PERFORMANCE;
+      if (
+        this.interactionRenderingMode ===
+        InteractionRenderingMode.HYBRID
+      ) {
+        if (!this.interactionSequenceActive) {
+          this.interactionSequenceActive = true;
+          this.lastHybridRefreshAt = now;
+          reuseFrame = true;
+        } else {
+          reuseFrame =
+            now - this.lastHybridRefreshAt <
+            HYBRID_INTERACTION_REFRESH_MS;
+        }
+      } else {
+        this.interactionSequenceActive = true;
+      }
+      if (reuseFrame) {
+        const reused = this.reuseInteractionFrame(view, targetSize);
+        if (reused) {
+          return reused;
+        }
+      }
+    }
+    this.deactivateInteractionFrame();
     const gl = this.gl;
-    const camera = this.cameraForView(view, targetSize);
+    const camera = this.cameraForView(view, targetSize, {
+      interactive,
+    });
+    const renderSurface = this.lastRenderSurface;
     let cachedDetailGpuBytes = 0;
     for (const entry of this.detailResources.values()) {
       cachedDetailGpuBytes += entry.byteLength;
@@ -7516,6 +7938,16 @@ export class WebGlLineRenderer {
       submittedVertices: 0,
       detailSubmittedVertices: 0,
       interactive,
+      interactionFrameCaptured: false,
+      interactionFrameReused: false,
+      interactionRenderingMode: this.interactionRenderingMode,
+      renderAntialiasing: this.renderAntialiasing,
+      renderResolutionMode:
+        renderSurface?.mode ?? this.renderResolutionMode,
+      renderPixelRatio: renderSurface?.pixelRatio ?? null,
+      renderPixelCount: renderSurface?.pixelCount ?? 0,
+      renderWidth: camera.width,
+      renderHeight: camera.height,
       orderedOverlayDrawCalls: 0,
       orderedOverlayGpuBytes: 0,
       orderedOverlayCompositionEnabled: false,
@@ -8598,11 +9030,12 @@ export class WebGlLineRenderer {
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       }
       const overlayOptions = (fallbackDepth) => {
+        const size = { width: camera.width, height: camera.height };
         if (!this.maskOrder?.generalOrderEnabled) {
-          return targetSize ? { size: targetSize } : undefined;
+          return { size };
         }
         return {
-          ...(targetSize ? { size: targetSize } : {}),
+          size,
           canDrawOrderedLayer: (overlay) =>
             Boolean(this.orderedOverlayDimensions(overlay)),
           drawOrderedLayer: (overlay) =>
@@ -8702,7 +9135,30 @@ export class WebGlLineRenderer {
       metrics.gpuTrackedBytes,
     );
     metrics.peakGpuTrackedBytes = this.peakGpuTrackedBytes;
-    return Object.freeze(metrics);
+    const captureReusableFrame =
+      updateOverlaySnapshots &&
+      targetSize === null &&
+      (!interactive ||
+        this.interactionRenderingMode !==
+          InteractionRenderingMode.CONTINUOUS);
+    if (captureReusableFrame) {
+      metrics.interactionFrameCaptured = this.captureInteractionFrame(
+        camera,
+        metrics,
+      );
+    }
+    const frame = Object.freeze(metrics);
+    if (captureReusableFrame && metrics.interactionFrameCaptured) {
+      this.interactionFrameMetrics = frame;
+      if (
+        interactive &&
+        this.interactionRenderingMode ===
+          InteractionRenderingMode.HYBRID
+      ) {
+        this.lastHybridRefreshAt = currentMilliseconds();
+      }
+    }
+    return frame;
   }
 
   maximumRasterSize() {
@@ -8849,6 +9305,16 @@ export class WebGlLineRenderer {
     this.rootLineSuppressionKeys.clear();
     this.externalScenes.clear();
     this.supplementalBounds.clear();
+    this.deactivateInteractionFrame();
+    this.interactionFrameAvailable = false;
+    this.interactionFrameCamera = null;
+    this.interactionFrameMetrics = null;
+    this.interactionSequenceActive = false;
+    this.lastHybridRefreshAt = 0;
+    if (this.interactionCanvas) {
+      this.interactionCanvas.width = 1;
+      this.interactionCanvas.height = 1;
+    }
     setOverlayComposited(this.imageOverlay, false);
     resetOverlayTransform(this.imageOverlay);
     this.imageOverlay?.dispose();

@@ -127,6 +127,20 @@ test("injects DWG detail streaming and intercepts platform wheel gestures", () =
       stopImmediatePropagation() {},
     });
     assert.ok(interaction.snapshot().zoom > 1.08);
+
+    const pinchZoom = interaction.snapshot().zoom;
+    listeners.get("wheel")[0]({
+      ctrlKey: false,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: -53,
+      offsetX: 400,
+      offsetY: 300,
+      timeStamp: 600,
+      preventDefault() {},
+      stopImmediatePropagation() {},
+    });
+    assert.ok(interaction.snapshot().zoom > pinchZoom);
     interaction.dispose();
     assert.equal(disconnected, true);
   } finally {

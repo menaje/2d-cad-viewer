@@ -34,6 +34,13 @@ await Promise.all([
   build({
     ...shared,
     entryPoints: [
+      path.join(webviewRoot, "src", "emf-converter-runtime.mjs"),
+    ],
+    outfile: path.join(sourceOutput, "emf-converter-runtime.mjs"),
+  }),
+  build({
+    ...shared,
+    entryPoints: [
       path.join(
         webviewRoot,
         "qualification",

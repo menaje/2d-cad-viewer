@@ -7,6 +7,8 @@ import {
   DRAW_ORDER_ENTRY_RECORD_SIZE,
   DRAW_ORDER_TABLE_RECORD_SIZE,
   ELLIPSE_RECORD_SIZE,
+  EMBEDDED_IMAGE_BYTE_RECORD_SIZE,
+  EMBEDDED_IMAGE_RECORD_SIZE,
   FACE_ENTITY_RECORD_SIZE,
   GPU_LINE_BATCH_RECORD_SIZE,
   GPU_LINE_VERTEX_RECORD_SIZE,
@@ -1120,6 +1122,48 @@ function makeImageClipVertexSection() {
   };
 }
 
+function makeEmbeddedImageRecordSection(
+  bytes,
+  { mime = 1, width = 2, height = 2, flags = mime === 2 ? 2 : 1 } = {},
+) {
+  if (!bytes) {
+    return makeEmptySection(
+      SectionKind.EmbeddedImageRecords,
+      EMBEDDED_IMAGE_RECORD_SIZE,
+    );
+  }
+  const buffer = new ArrayBuffer(EMBEDDED_IMAGE_RECORD_SIZE);
+  const view = new DataView(buffer);
+  view.setUint32(0, 0, true);
+  view.setUint32(4, mime, true);
+  writeU64(view, 8, 0);
+  writeU64(view, 16, bytes.byteLength);
+  view.setUint32(24, width, true);
+  view.setUint32(28, height, true);
+  view.setUint32(32, flags, true);
+  return {
+    kind: SectionKind.EmbeddedImageRecords,
+    recordSize: EMBEDDED_IMAGE_RECORD_SIZE,
+    recordCount: 1,
+    flags: 0,
+    buffer,
+  };
+}
+
+function makeEmbeddedImageByteSection(bytes) {
+  const normalized = bytes ?? new Uint8Array(0);
+  return {
+    kind: SectionKind.EmbeddedImageBytes,
+    recordSize: EMBEDDED_IMAGE_BYTE_RECORD_SIZE,
+    recordCount: normalized.byteLength,
+    flags: 0,
+    buffer: normalized.buffer.slice(
+      normalized.byteOffset,
+      normalized.byteOffset + normalized.byteLength,
+    ),
+  };
+}
+
 function writeInsert(view, offset, values) {
   writeU64(view, offset, values.handle);
   writeU64(view, offset + 8, values.ownerHandle);
@@ -1586,6 +1630,10 @@ export function makeFixtureCache({
   wipeoutRecordCount = WIPEOUT_ROWS.length,
   includeReviewCurves = false,
   viewportLayerOverrides = [],
+  embeddedImageBytes = null,
+  embeddedImageMime = 1,
+  embeddedImageWidth = 2,
+  embeddedImageHeight = 2,
 } = {}) {
   const sections = [
     makeDrawingSection(
@@ -1657,6 +1705,12 @@ export function makeFixtureCache({
     makeTextAnnotationContextSection(),
     makeTextAnnotationColumnHeightSection(),
     makeViewportLayerOverrideSection(viewportLayerOverrides),
+    makeEmbeddedImageRecordSection(embeddedImageBytes, {
+      mime: embeddedImageMime,
+      width: embeddedImageWidth,
+      height: embeddedImageHeight,
+    }),
+    makeEmbeddedImageByteSection(embeddedImageBytes),
   ];
   const directoryOffset = HEADER_SIZE;
   const directoryLength = sections.length * DIRECTORY_ENTRY_SIZE;

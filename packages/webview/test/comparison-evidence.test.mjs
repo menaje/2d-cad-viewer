@@ -39,9 +39,29 @@ test("binds path-free Browser and packaged comparison evidence to the public API
     ViewerWebGlComparisonStrategy.SINGLE_RENDERER_SERIAL_SNAPSHOT,
   );
   assert.equal(evidence.actualWebGlFixture.browser.status, "pass");
+  assert.ok(
+    evidence.actualWebGlFixture.browser.beforeNonWhitePixels > 0,
+  );
+  assert.notEqual(
+    evidence.actualWebGlFixture.browser.beforeChecksum,
+    evidence.actualWebGlFixture.browser.afterChecksum,
+  );
+  assert.equal(
+    evidence.actualWebGlFixture.forcedFailureCleanup.status,
+    "pass",
+  );
   assert.equal(
     evidence.actualWebGlFixture.packagedVscode.status,
     "pass",
+  );
+  assert.equal(
+    evidence.actualWebGlFixture.packagedVscode.installation,
+    "main-vsix-only",
+  );
+  assert.equal(
+    evidence.actualWebGlFixture.packagedVscode
+      .companionExtensionInstalled,
+    false,
   );
   assert.equal(
     evidence.actualWebGlFixture.packagedVscode

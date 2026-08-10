@@ -1,5 +1,5 @@
 import { transformedBounds2D, transformPoint } from "./math.mjs";
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.20.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.21.0";
 import { CAD_LINE_WEIGHTS } from "./cad-line-style.mjs";
 
 const MATRIX_VALUES = 16;
@@ -49,6 +49,8 @@ const SOURCE_KIND_NAMES = Object.freeze([
   "뷰포트 경계",
   "지시선",
   "OLE 경계",
+  "폴리곤 메시",
+  "다중선",
 ]);
 
 function finiteBounds(bounds) {

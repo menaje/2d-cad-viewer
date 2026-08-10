@@ -40,6 +40,11 @@ const TARGETS = Object.freeze({
     architecture: "arm64",
     executable: "libredwg-adapter",
   },
+  "darwin-x64": {
+    platform: "darwin",
+    architecture: "x64",
+    executable: "libredwg-adapter",
+  },
   "win32-x64": {
     platform: "win32",
     architecture: "x64",
