@@ -78,6 +78,26 @@ test("normalizes Windows precision touchpad and mouse-wheel deltas", () => {
   );
 });
 
+test("zooms an unmodified physical mouse wheel on macOS and Windows", () => {
+  for (const deltaY of [-120, -53, 53, 120]) {
+    const wheel = normalizeWheelGesture({
+      ctrlKey: false,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY,
+      timeStamp: 20,
+    });
+    assert.equal(wheel.kind, "wheel-zoom");
+    assert.equal(wheel.panX, 0);
+    assert.equal(wheel.panY, 0);
+    assert.ok(
+      Math.abs(
+        wheel.zoomFactor - Math.exp(deltaY * WHEEL_ZOOM_RATE),
+      ) < 1e-12,
+    );
+  }
+});
+
 test("uses a stronger bounded zoom curve for trackpad pinch", () => {
   const pinch = normalizeWheelGesture({
     ctrlKey: true,
