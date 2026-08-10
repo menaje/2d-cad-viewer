@@ -25,6 +25,7 @@ import vscodeTestElectron from "@vscode/test-electron";
 import { chromium } from "playwright-core";
 
 import { writeQualificationDriver } from "../apps/vscode-extension/scripts/qualify-extension-host.mjs";
+import { EN_MESSAGES } from "../packages/webview/src/locales/en.mjs";
 
 const execFile = promisify(execFileCallback);
 const {
@@ -36,6 +37,18 @@ export const WINDOWS_UI_EXTENSION_ID = "menaje.dwg-viewer-vscode";
 export const WINDOWS_UI_COMPANION_EXTENSION_ID =
   "menaje.dwg-viewer-libredwg";
 export const WINDOWS_UI_LOCALE = "en";
+const QUALIFICATION_MESSAGES = Object.freeze({
+  angle: EN_MESSAGES["review.runtime.field.angle"],
+  coordinateTitle: EN_MESSAGES["review.runtime.result.coordinate"],
+  distance: EN_MESSAGES["review.runtime.field.distance"],
+  distanceTitle: EN_MESSAGES["review.runtime.result.distance"],
+  drawingUnits: EN_MESSAGES["review.runtime.value.drawingUnits"],
+  firstPointPrefix: EN_MESSAGES["review.runtime.status.firstPoint"]
+    .split("{snap}", 1)[0]
+    .trim(),
+  snap: EN_MESSAGES["review.runtime.field.snap"],
+  type: EN_MESSAGES["review.runtime.field.type"],
+});
 export const WINDOWS_UI_CLEANUP_OPTIONS = Object.freeze({
   recursive: true,
   force: true,
@@ -50,7 +63,7 @@ const WIDTHS = Object.freeze([
 const FRAME_TIMEOUT_MS = 120_000;
 const MEASUREMENT_UNITS = new Set([
   "도면 단위",
-  "drawing units",
+  QUALIFICATION_MESSAGES.drawingUnits,
   "in",
   "ft",
   "mi",
@@ -334,7 +347,11 @@ function measurementLength(value, label) {
 }
 
 export function parseCoordinateMeasurementRows(rows) {
-  const values = exactRows(rows, ["X", "Y", "Z", "Snap"], "coordinate");
+  const values = exactRows(
+    rows,
+    ["X", "Y", "Z", QUALIFICATION_MESSAGES.snap],
+    "coordinate",
+  );
   const coordinates = ["X", "Y", "Z"].map((axis) =>
     measurementLength(values.get(axis), axis),
   );
@@ -345,7 +362,7 @@ export function parseCoordinateMeasurementRows(rows) {
   ) {
     throw new Error("coordinate measurement units are inconsistent");
   }
-  const snap = values.get("Snap").trim();
+  const snap = values.get(QUALIFICATION_MESSAGES.snap).trim();
   if (!snap) {
     throw new Error("coordinate snap label is empty");
   }
@@ -363,26 +380,39 @@ export function parseCoordinateMeasurementRows(rows) {
 export function parseDistanceMeasurementRows(rows) {
   const values = exactRows(
     rows,
-    ["Distance", "ΔX", "ΔY", "ΔZ", "Angle"],
+    [
+      QUALIFICATION_MESSAGES.distance,
+      "ΔX",
+      "ΔY",
+      "ΔZ",
+      QUALIFICATION_MESSAGES.angle,
+    ],
     "distance",
   );
-  const lengths = ["Distance", "ΔX", "ΔY", "ΔZ"].map((field) =>
-    measurementLength(values.get(field), field),
-  );
+  const lengths = [
+    QUALIFICATION_MESSAGES.distance,
+    "ΔX",
+    "ΔY",
+    "ΔZ",
+  ].map((field) => measurementLength(values.get(field), field));
   if (lengths.some((length) => length.unit !== lengths[0].unit)) {
     throw new Error("distance measurement units are inconsistent");
   }
-  if (!MEASUREMENT_ANGLE_PATTERN.test(values.get("Angle"))) {
+  if (
+    !MEASUREMENT_ANGLE_PATTERN.test(
+      values.get(QUALIFICATION_MESSAGES.angle),
+    )
+  ) {
     throw new Error("distance angle is not numeric");
   }
   return Object.freeze({
     unit: lengths[0].unit,
     values: Object.freeze({
-      distance: values.get("Distance"),
+      distance: values.get(QUALIFICATION_MESSAGES.distance),
       deltaX: values.get("ΔX"),
       deltaY: values.get("ΔY"),
       deltaZ: values.get("ΔZ"),
-      angle: values.get("Angle"),
+      angle: values.get(QUALIFICATION_MESSAGES.angle),
     }),
   });
 }
@@ -597,7 +627,7 @@ async function findTwoMeasurementPoints(frame) {
     }
     await canvas.click({ position });
     const result = await resultSnapshot(frame);
-    if (result?.title === "Point coordinates") {
+    if (result?.title === QUALIFICATION_MESSAGES.coordinateTitle) {
       const measurement = parseCoordinateMeasurementRows(result.rows);
       if (
         !points.some(
@@ -627,18 +657,21 @@ async function qualifyReviewInteractions(frame) {
   await activateTool(frame, "select");
   await frame.locator("#drawing").click({ position: points[0].position });
   const selection = await resultSnapshot(frame);
-  assert.ok(selection && selection.content.includes("Kind"));
+  assert.ok(
+    selection && selection.content.includes(QUALIFICATION_MESSAGES.type),
+  );
   await clearReview(frame);
 
   await activateTool(frame, "distance");
   await frame.locator("#drawing").click({ position: points[0].position });
-  assert.match(
-    (await frame.locator("#status").textContent()) ?? "",
-    /First point/u,
+  assert.ok(
+    ((await frame.locator("#status").textContent()) ?? "").includes(
+      QUALIFICATION_MESSAGES.firstPointPrefix,
+    ),
   );
   await frame.locator("#drawing").click({ position: points[1].position });
   const distance = await resultSnapshot(frame);
-  assert.equal(distance?.title, "Two-point distance");
+  assert.equal(distance?.title, QUALIFICATION_MESSAGES.distanceTitle);
   const distanceMeasurement = parseDistanceMeasurementRows(
     distance.rows,
   );
