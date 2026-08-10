@@ -35,6 +35,7 @@ const REPORT_SCHEMA = "dwg-windows-vscode-ui-qualification/1";
 export const WINDOWS_UI_EXTENSION_ID = "menaje.dwg-viewer-vscode";
 export const WINDOWS_UI_COMPANION_EXTENSION_ID =
   "menaje.dwg-viewer-libredwg";
+export const WINDOWS_UI_LOCALE = "en";
 export const WINDOWS_UI_CLEANUP_OPTIONS = Object.freeze({
   recursive: true,
   force: true,
@@ -49,6 +50,7 @@ const WIDTHS = Object.freeze([
 const FRAME_TIMEOUT_MS = 120_000;
 const MEASUREMENT_UNITS = new Set([
   "도면 단위",
+  "drawing units",
   "in",
   "ft",
   "mi",
@@ -332,7 +334,7 @@ function measurementLength(value, label) {
 }
 
 export function parseCoordinateMeasurementRows(rows) {
-  const values = exactRows(rows, ["X", "Y", "Z", "스냅"], "coordinate");
+  const values = exactRows(rows, ["X", "Y", "Z", "Snap"], "coordinate");
   const coordinates = ["X", "Y", "Z"].map((axis) =>
     measurementLength(values.get(axis), axis),
   );
@@ -343,7 +345,7 @@ export function parseCoordinateMeasurementRows(rows) {
   ) {
     throw new Error("coordinate measurement units are inconsistent");
   }
-  const snap = values.get("스냅").trim();
+  const snap = values.get("Snap").trim();
   if (!snap) {
     throw new Error("coordinate snap label is empty");
   }
@@ -361,26 +363,26 @@ export function parseCoordinateMeasurementRows(rows) {
 export function parseDistanceMeasurementRows(rows) {
   const values = exactRows(
     rows,
-    ["거리", "ΔX", "ΔY", "ΔZ", "각도"],
+    ["Distance", "ΔX", "ΔY", "ΔZ", "Angle"],
     "distance",
   );
-  const lengths = ["거리", "ΔX", "ΔY", "ΔZ"].map((field) =>
+  const lengths = ["Distance", "ΔX", "ΔY", "ΔZ"].map((field) =>
     measurementLength(values.get(field), field),
   );
   if (lengths.some((length) => length.unit !== lengths[0].unit)) {
     throw new Error("distance measurement units are inconsistent");
   }
-  if (!MEASUREMENT_ANGLE_PATTERN.test(values.get("각도"))) {
+  if (!MEASUREMENT_ANGLE_PATTERN.test(values.get("Angle"))) {
     throw new Error("distance angle is not numeric");
   }
   return Object.freeze({
     unit: lengths[0].unit,
     values: Object.freeze({
-      distance: values.get("거리"),
+      distance: values.get("Distance"),
       deltaX: values.get("ΔX"),
       deltaY: values.get("ΔY"),
       deltaZ: values.get("ΔZ"),
-      angle: values.get("각도"),
+      angle: values.get("Angle"),
     }),
   });
 }
@@ -595,7 +597,7 @@ async function findTwoMeasurementPoints(frame) {
     }
     await canvas.click({ position });
     const result = await resultSnapshot(frame);
-    if (result?.title === "점 좌표") {
+    if (result?.title === "Point coordinates") {
       const measurement = parseCoordinateMeasurementRows(result.rows);
       if (
         !points.some(
@@ -625,18 +627,18 @@ async function qualifyReviewInteractions(frame) {
   await activateTool(frame, "select");
   await frame.locator("#drawing").click({ position: points[0].position });
   const selection = await resultSnapshot(frame);
-  assert.ok(selection && selection.content.includes("종류"));
+  assert.ok(selection && selection.content.includes("Kind"));
   await clearReview(frame);
 
   await activateTool(frame, "distance");
   await frame.locator("#drawing").click({ position: points[0].position });
   assert.match(
     (await frame.locator("#status").textContent()) ?? "",
-    /첫 점/u,
+    /First point/u,
   );
   await frame.locator("#drawing").click({ position: points[1].position });
   const distance = await resultSnapshot(frame);
-  assert.equal(distance?.title, "두 점 거리");
+  assert.equal(distance?.title, "Two-point distance");
   const distanceMeasurement = parseDistanceMeasurementRows(
     distance.rows,
   );
@@ -702,10 +704,9 @@ async function qualifyReviewInteractions(frame) {
       after: viewportZoomFromStatus(fittedStatus),
     },
     clear: true,
-    observedSnapLabels: points.map((point) => {
-      const match = /스냅\s*\n?([^\n]+)/u.exec(point.content);
-      return match?.[1]?.trim().slice(0, 40) ?? "present";
-    }),
+    observedSnapLabels: points.map((point) =>
+      point.measurement.values.snap.slice(0, 40),
+    ),
   };
 }
 
@@ -871,7 +872,7 @@ async function runScale({
     [
       "--new-window",
       "--locale",
-      "en",
+      WINDOWS_UI_LOCALE,
       `--user-data-dir=${userData}`,
       `--extensions-dir=${extensionsDirectory}`,
       `--extensionDevelopmentPath=${driverDirectory}`,
