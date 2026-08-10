@@ -231,6 +231,13 @@ async function waitForDevtools(port, child, output) {
   throw new Error("VS Code DevTools endpoint did not become ready");
 }
 
+export function isDetachedFrameError(error) {
+  return (
+    error instanceof Error &&
+    /(?:Frame was detached|Execution context was destroyed)/u.test(error.message)
+  );
+}
+
 async function findViewerFrame(browser, child) {
   const deadline = Date.now() + FRAME_TIMEOUT_MS;
   let lastStatus = "";
@@ -241,17 +248,24 @@ async function findViewerFrame(browser, child) {
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
         for (const frame of page.frames()) {
-          const dropZone = frame.locator("#drop-zone");
-          if ((await dropZone.count()) === 0) {
-            continue;
-          }
-          lastStatus =
-            (await frame.locator("#status").textContent().catch(() => "")) ??
-            "";
-          if (await dropZone.evaluate((element) =>
-            element.classList.contains("loaded"),
-          )) {
-            return { frame, page };
+          try {
+            const dropZone = frame.locator("#drop-zone");
+            if ((await dropZone.count()) === 0) {
+              continue;
+            }
+            lastStatus =
+              (await frame.locator("#status").textContent().catch(() => "")) ??
+              "";
+            if (await dropZone.evaluate((element) =>
+              element.classList.contains("loaded"),
+            )) {
+              return { frame, page };
+            }
+          } catch (error) {
+            if (frame.isDetached() || isDetachedFrameError(error)) {
+              continue;
+            }
+            throw error;
           }
         }
       }
