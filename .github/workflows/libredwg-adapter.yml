@@ -40,6 +40,10 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
 
+concurrency:
+  group: dwg-viewer-libredwg-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -291,6 +295,7 @@ jobs:
         if: always() && runner.os == 'Windows'
         with:
           name: dwg-viewer-windows-native-qualification
+          retention-days: 7
           path: ${{ runner.temp }}/windows-native-qualification.json
           archive: false
           if-no-files-found: warn
@@ -299,6 +304,7 @@ jobs:
         if: always() && runner.os == 'Windows'
         with:
           name: dwg-viewer-windows-vscode-ui-qualification
+          retention-days: 7
           path: ${{ runner.temp }}/windows-vscode-ui-qualification
           if-no-files-found: warn
 
@@ -316,6 +322,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: dwg-viewer-libredwg-${{ matrix.target }}
+          retention-days: 7
           path: |
             ${{ runner.temp }}/dwg-viewer-libredwg-${{ matrix.target }}.tar.gz
             ${{ runner.temp }}/dwg-viewer-libredwg-*-${{ matrix.target }}.vsix

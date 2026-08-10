@@ -497,102 +497,133 @@ export function buildMaskOrderPlan(
   }
 
   for (const owner of ownerBuilders.values()) {
+    const seenKeys = owner.overrides.size > 0 ? new Set() : null;
     for (const event of owner.events) {
       event.key = owner.overrides.get(event.handle) ?? event.handle;
-    }
-    owner.events.sort((left, right) =>
-      compareOrder(left.key, left.handle, right.key, right.handle),
-    );
-    for (let index = 1; index < owner.events.length; index += 1) {
-      if (owner.events[index - 1].key === owner.events[index].key) {
+      if (seenKeys?.has(event.key)) {
         diagnostics.duplicateEventKeys += 1;
       }
+      seenKeys?.add(event.key);
     }
   }
   if (diagnostics.duplicateEventKeys > 0) {
     return disabledPlan(diagnostics, "duplicate-event-order", masks);
   }
 
-  const blockSpans = new Uint32Array(blocks.length);
-  const states = new Uint8Array(blocks.length);
-  const computeBlockSpan = (blockIndex, depth) => {
-    if (
-      !Number.isInteger(blockIndex) ||
-      blockIndex < 0 ||
-      blockIndex >= blocks.length
-    ) {
-      diagnostics.invalidTargets += 1;
-      throw new RangeError("INSERT references an invalid block");
-    }
-    if (depth > maximumDepth) {
-      diagnostics.depthLimit += 1;
-      throw new RangeError("mask-order block nesting exceeds its depth limit");
-    }
-    if (states[blockIndex] === 2) {
-      return blockSpans[blockIndex];
-    }
-    if (states[blockIndex] === 1) {
-      diagnostics.cycles += 1;
-      throw new RangeError("mask-order block graph contains a cycle");
-    }
-    states[blockIndex] = 1;
-    const owner = ownerBuilders.get(blocks[blockIndex].handle);
-    let span = 0;
-    for (const event of owner?.events ?? []) {
-      event.prefix = span;
-      if (event.kind === "mask" || event.kind === "entity") {
-        event.contribution = 1;
-        if (event.mask) {
-          event.mask.localBucket = span + 1;
+  const modelIndices = modelBlocks.map((block) => block.index);
+  const failureReason = () =>
+    diagnostics.cycles > 0
+      ? "block-cycle"
+      : diagnostics.depthLimit > 0
+        ? "block-depth-limit"
+        : diagnostics.invalidTargets > 0
+          ? "invalid-insert-target"
+          : diagnostics.localBucketLimit > 0
+            ? "local-bucket-limit"
+            : "global-bucket-limit";
+  const computeBlockSpans = ({ assignOrder = false, roots } = {}) => {
+    const blockSpans = new Uint32Array(blocks.length);
+    const states = new Uint8Array(blocks.length);
+    const computeBlockSpan = (blockIndex, depth) => {
+      if (
+        !Number.isInteger(blockIndex) ||
+        blockIndex < 0 ||
+        blockIndex >= blocks.length
+      ) {
+        diagnostics.invalidTargets += 1;
+        throw new RangeError("INSERT references an invalid block");
+      }
+      if (depth > maximumDepth) {
+        diagnostics.depthLimit += 1;
+        throw new RangeError(
+          "mask-order block nesting exceeds its depth limit",
+        );
+      }
+      if (states[blockIndex] === 2) {
+        return blockSpans[blockIndex];
+      }
+      if (states[blockIndex] === 1) {
+        diagnostics.cycles += 1;
+        throw new RangeError("mask-order block graph contains a cycle");
+      }
+      states[blockIndex] = 1;
+      const owner = ownerBuilders.get(blocks[blockIndex].handle);
+      let span = 0;
+      for (const event of owner?.events ?? []) {
+        if (assignOrder) {
+          event.prefix = span;
         }
-      } else {
-        const childSpan = computeBlockSpan(
-          event.targetBlockIndex,
-          depth + 1,
-        );
-        event.contribution = checkedContribution(
-          childSpan * event.cellCount,
-          diagnostics,
-        );
+        let contribution;
+        if (event.kind === "mask" || event.kind === "entity") {
+          contribution = 1;
+          if (assignOrder && event.mask) {
+            event.mask.localBucket = span + 1;
+          }
+        } else {
+          contribution = checkedContribution(
+            computeBlockSpan(event.targetBlockIndex, depth + 1) *
+              event.cellCount,
+            diagnostics,
+          );
+        }
+        if (assignOrder) {
+          event.contribution = contribution;
+        }
+        span = checkedContribution(span + contribution, diagnostics);
+        if (span > MAX_LOCAL_MASK_BUCKET) {
+          diagnostics.localBucketLimit += 1;
+          throw new RangeError(
+            "block WIPEOUT order exceeds style-bit capacity",
+          );
+        }
       }
-      span = checkedContribution(span + event.contribution, diagnostics);
-      if (span > MAX_LOCAL_MASK_BUCKET) {
-        diagnostics.localBucketLimit += 1;
-        throw new RangeError("block WIPEOUT order exceeds style-bit capacity");
+      const reserved = reservedBlockSpan(blockIndex);
+      if (reserved > 0) {
+        span = checkedContribution(Math.max(span, reserved), diagnostics);
+        if (span > MAX_LOCAL_MASK_BUCKET) {
+          diagnostics.localBucketLimit += 1;
+          throw new RangeError(
+            "reserved block order exceeds style-bit capacity",
+          );
+        }
+      }
+      blockSpans[blockIndex] = span;
+      states[blockIndex] = 2;
+      return span;
+    };
+    if (roots) {
+      for (const blockIndex of roots) {
+        computeBlockSpan(blockIndex, 1);
+      }
+    } else {
+      for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+        computeBlockSpan(blockIndex, 1);
       }
     }
-    const reserved = reservedBlockSpan(blockIndex);
-    if (reserved > 0) {
-      span = checkedContribution(Math.max(span, reserved), diagnostics);
-      if (span > MAX_LOCAL_MASK_BUCKET) {
-        diagnostics.localBucketLimit += 1;
-        throw new RangeError("reserved block order exceeds style-bit capacity");
-      }
-    }
-    blockSpans[blockIndex] = span;
-    states[blockIndex] = 2;
-    return span;
+    return blockSpans;
   };
 
+  // Expanded order size does not depend on event order. Reject an oversized
+  // model graph before sorting every critical entity in a large drawing.
   try {
-    for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
-      computeBlockSpan(blockIndex, 1);
-    }
+    computeBlockSpans({ roots: modelIndices });
   } catch {
-    const reason =
-      diagnostics.cycles > 0
-        ? "block-cycle"
-        : diagnostics.depthLimit > 0
-          ? "block-depth-limit"
-          : diagnostics.invalidTargets > 0
-            ? "invalid-insert-target"
-            : diagnostics.localBucketLimit > 0
-              ? "local-bucket-limit"
-              : "global-bucket-limit";
-    return disabledPlan(diagnostics, reason, masks);
+    return disabledPlan(diagnostics, failureReason(), masks);
   }
 
-  const modelIndices = modelBlocks.map((block) => block.index);
+  for (const owner of ownerBuilders.values()) {
+    owner.events.sort((left, right) =>
+      compareOrder(left.key, left.handle, right.key, right.handle),
+    );
+  }
+
+  let blockSpans;
+  try {
+    blockSpans = computeBlockSpans({ assignOrder: true });
+  } catch {
+    return disabledPlan(diagnostics, failureReason(), masks);
+  }
+
   const activeModelRoots = modelIndices.filter(
     (blockIndex) => blockSpans[blockIndex] > 0,
   );

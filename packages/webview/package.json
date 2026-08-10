@@ -7,6 +7,7 @@
   "type": "module",
   "exports": {
     ".": "./src/public-api.mjs",
+    "./comparison": "./src/revision-comparison.mjs",
     "./dwg": "./src/dwg-presentation.mjs",
     "./renderer": "./src/renderer.mjs",
     "./render-delta": "./src/render-delta-adapter.mjs"

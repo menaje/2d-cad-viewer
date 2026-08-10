@@ -13,6 +13,19 @@ const ATTRIBUTE_BINDINGS = Object.freeze([
   Object.freeze(["data-i18n-aria-label", "aria-label"]),
   Object.freeze(["data-i18n-placeholder", "placeholder"]),
 ]);
+const HTML_TEXT_ENTITIES = Object.freeze({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+});
+
+export function escapeHtmlText(value) {
+  return String(value).replace(/[&<>"']/gu, (character) =>
+    HTML_TEXT_ENTITIES[character],
+  );
+}
 
 function canonicalLocale(value) {
   if (

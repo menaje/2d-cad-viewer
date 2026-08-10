@@ -30,6 +30,7 @@ import {
   type QualificationFields,
   type QualificationReporter,
 } from "./qualification";
+import { activateRevisionComparisonQualification } from "./comparison-qualification";
 import {
   renderWebviewHtml,
   type MenuLabelMode,
@@ -1317,12 +1318,22 @@ class DwgEditorProvider
               }).finally(() => closeAfterQualification("preview"));
             }
             break;
-          case "dwg-viewer-error/1":
+          case "dwg-viewer-error/1": {
+            const code =
+              typeof raw.code === "string"
+                ? raw.code.slice(0, 80)
+                : "unknown";
             this.output.appendLine(
-              `[WEBVIEW_ERROR] ${
-                typeof raw.code === "string" ? raw.code.slice(0, 80) : "unknown"
-              }`,
+              `[WEBVIEW_ERROR] ${code}`,
             );
+            if (raw.cacheId === activeCacheId) {
+              const qualificationCode = /^[^/\\\r\n]{1,80}$/u.test(code)
+                ? code
+                : "unknown";
+              void emitQualification("render-failed", {
+                code: qualificationCode,
+              });
+            }
             if (
               typeof raw.cacheId === "string" &&
               previewReleases.has(raw.cacheId)
@@ -1330,6 +1341,7 @@ class DwgEditorProvider
               void disposePreview(raw.cacheId);
             }
             break;
+          }
         }
       });
 
@@ -1411,6 +1423,12 @@ let qualificationReporter: QualificationReporter | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   qualificationReporter = createQualificationReporter();
+  if (qualificationReporter) {
+    activateRevisionComparisonQualification(
+      context,
+      qualificationReporter,
+    );
+  }
   const output = vscode.window.createOutputChannel("DWG Viewer");
   const provider = new DwgEditorProvider(
     context,

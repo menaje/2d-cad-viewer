@@ -92,7 +92,11 @@ test("release automation publishes every GPL target before the MPL viewer", asyn
       new RegExp(`dwg-viewer-libredwg-\\$release_version-${target}\\.vsix`, "u"),
     );
   }
-  assert.match(releaseWorkflow, /publish_marketplace:/u);
+  assert.match(releaseWorkflow, /^  marketplace:/mu);
+  assert.match(
+    releaseWorkflow,
+    /if: needs\.context\.outputs\.publish == 'true'/u,
+  );
   assert.match(releaseWorkflow, /--pre-release/u);
   assert.ok(
     releaseWorkflow.indexOf("for target in linux-x64 darwin-arm64 win32-x64") <

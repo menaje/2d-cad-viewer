@@ -95,6 +95,7 @@ import {
 import {
   createI18n,
   environmentLocales,
+  escapeHtmlText,
 } from "./i18n.mjs?v=1.0.0";
 
 const standaloneQualificationParameters =
@@ -2459,7 +2460,7 @@ function renderMetrics(scene, rangeSource, viewport = null) {
       <div><dt>정렬표 읽기</dt><dd>${activeMaskStatus.tables.toLocaleString()} / ${activeMaskStatus.entries.toLocaleString()}개</dd></div>
       <div><dt>확장 순서 단계</dt><dd>${activeMaskStatus.maximumExpandedMasks.toLocaleString()}개</dd></div>
       ${activeMaskStatus.generalOrderEnabled ? `<div><dt>Canvas 순서 합성</dt><dd>${render?.orderedOverlayCompositionEnabled ? `${render.orderedOverlayDrawCalls.toLocaleString()}회 · ${formatBytes(render.orderedOverlayGpuBytes)}` : "DOM 대체"}</dd></div>` : ""}
-      ${activeMaskStatus.generalOrderReason ? `<div><dt>전체 순서 제한</dt><dd>${escapeHtml(activeMaskStatus.generalOrderReason)}</dd></div>` : ""}
+      ${activeMaskStatus.generalOrderReason ? `<div><dt>전체 순서 제한</dt><dd>${escapeHtmlText(activeMaskStatus.generalOrderReason)}</dd></div>` : ""}
       <div><dt>순서 계산</dt><dd>${activeMaskStatus.buildMs.toFixed(1)} ms</dd></div>
     `
     : "";
@@ -3460,15 +3461,18 @@ async function initializeMaskComposition(scene, revision) {
   if (revision !== openRevision || activeScene !== scene) {
     return fallback;
   }
-  const instanceGraph = maskOrder.enabled
-    ? typeof scene.buildViewInstanceGraph === "function"
-      ? scene.buildViewInstanceGraph(scene.activeView, { maskOrder })
-      : applyMaskOrderToInstanceGraph(
-          scene.instanceGraph,
-          scene.metadata.blocks,
-          maskOrder,
-        )
-    : scene.instanceGraph;
+  let instanceGraph = scene.instanceGraph;
+  if (maskOrder.enabled) {
+    instanceGraph =
+      scene.activeView?.kind !== "model" &&
+      typeof scene.buildViewInstanceGraph === "function"
+        ? scene.buildViewInstanceGraph(scene.activeView, { maskOrder })
+        : applyMaskOrderToInstanceGraph(
+            scene.instanceGraph,
+            scene.metadata.blocks,
+            maskOrder,
+          );
+  }
   const enabled =
     maskOrder.enabled && instanceGraph.maskOrderEnabled;
   const buildMs = performance.now() - started;

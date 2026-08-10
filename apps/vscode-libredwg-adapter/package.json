@@ -2,7 +2,7 @@
   "name": "dwg-viewer-libredwg",
   "displayName": "DWG Viewer — LibreDWG Engine",
   "description": "Local GPL LibreDWG conversion engine installed as a companion to DWG Viewer",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "menaje",
   "license": "GPL-3.0-or-later",
   "private": true,

@@ -88,6 +88,10 @@ export function parseQualificationArgs(arguments_) {
         options.vsixPath = requireValue(arguments_, index, option);
         index += 1;
         break;
+      case "--companion-vsix":
+        options.companionVsixPath = requireValue(arguments_, index, option);
+        index += 1;
+        break;
       case "--output":
         options.outputPath = requireValue(arguments_, index, option);
         index += 1;
@@ -127,14 +131,21 @@ export function parseQualificationArgs(arguments_) {
     !options.adapterPath ||
     !options.drawingPath ||
     !options.vsixPath ||
+    !options.companionVsixPath ||
     !options.outputPath
   ) {
     throw new Error(
-      "--code, --runtime, --adapter, --drawing, --vsix and --output are required",
+      "--code, --runtime, --adapter, --drawing, --vsix, --companion-vsix and --output are required",
     );
   }
-  if (!["all", "full", "cancel"].includes(options.scenario)) {
-    throw new Error("--scenario must be all, full or cancel");
+  if (
+    !["all", "full", "cancel", "comparison"].includes(
+      options.scenario,
+    )
+  ) {
+    throw new Error(
+      "--scenario must be all, full, cancel or comparison",
+    );
   }
   for (const key of [
     "codePath",
@@ -142,6 +153,7 @@ export function parseQualificationArgs(arguments_) {
     "adapterPath",
     "drawingPath",
     "vsixPath",
+    "companionVsixPath",
     "outputPath",
   ]) {
     options[key] = path.resolve(options[key]);
@@ -501,6 +513,7 @@ const vscode = require("vscode");
 exports.activate = async function activate() {
   const drawing = process.env.DWG_VIEWER_QUALIFICATION_DRAWING;
   const token = process.env.DWG_VIEWER_QUALIFICATION_TOKEN;
+  const mode = process.env.DWG_VIEWER_QUALIFICATION_MODE;
   if (
     !drawing ||
     !path.isAbsolute(drawing) ||
@@ -509,7 +522,19 @@ exports.activate = async function activate() {
   ) {
     return;
   }
-  await new Promise((resolve) => setTimeout(resolve, 4000));
+  await new Promise((resolve) =>
+    setTimeout(resolve, mode === "comparison" ? 1000 : 4000),
+  );
+  if (mode === "comparison") {
+    const extension = vscode.extensions.getExtension(
+      "menaje.dwg-viewer-vscode",
+    );
+    if (!extension) {
+      throw new Error("packaged DWG Viewer extension is unavailable");
+    }
+    await extension.activate();
+    return;
+  }
   await vscode.commands.executeCommand(
     "vscode.openWith",
     vscode.Uri.file(drawing),
@@ -633,7 +658,9 @@ async function runScenario(options, scenario) {
   );
   await writeQualificationDriver(driverDirectory);
   const closeAfter =
-    scenario === "cold-full" ? "full" : "conversion";
+    scenario === "cancel-during-conversion"
+      ? "conversion"
+      : "full";
   const environment = { ...process.env };
   delete environment.ELECTRON_RUN_AS_NODE;
   environment.DWG_VIEWER_LIBREDWG_ADAPTER = options.adapterPath;
@@ -643,7 +670,25 @@ async function runScenario(options, scenario) {
   environment.DWG_VIEWER_QUALIFICATION_DRAWING =
     options.drawingPath;
   environment.DWG_VIEWER_QUALIFICATION_CLOSE_AFTER = closeAfter;
+  environment.DWG_VIEWER_QUALIFICATION_MODE =
+    scenario === "webgl-comparison" ? "comparison" : "drawing";
   try {
+    await execFile(
+      options.codePath,
+      [
+        "--user-data-dir",
+        userData,
+        "--extensions-dir",
+        extensions,
+        "--install-extension",
+        options.companionVsixPath,
+        "--force",
+      ],
+      {
+        env: environment,
+        maxBuffer: MAX_CAPTURE_BYTES,
+      },
+    );
     await execFile(
       options.codePath,
       [
@@ -817,6 +862,27 @@ async function runScenario(options, scenario) {
           `extension qualification failed: ${conversionFailure.code ?? "unknown"}`,
         );
       }
+      const renderFailure = eventByName(events, "render-failed");
+      if (renderFailure) {
+        throw new Error(
+          `extension render qualification failed: ${renderFailure.code ?? "unknown"}`,
+        );
+      }
+      const comparisonFailure = eventByName(
+        events,
+        "comparison-failed",
+      );
+      if (comparisonFailure) {
+        throw new Error(
+          `extension comparison qualification failed: ${comparisonFailure.code ?? "unknown"}`,
+        );
+      }
+      if (
+        scenario === "webgl-comparison" &&
+        eventByName(events, "comparison-panel-disposed")
+      ) {
+        break;
+      }
       const disposed = eventByName(events, "editor-disposed");
       if (disposed) {
         disposedAt ??= Date.now();
@@ -838,33 +904,55 @@ async function runScenario(options, scenario) {
       }
       if (
         child.exitCode !== null &&
-        !eventByName(events, "editor-disposed")
+        !eventByName(
+          events,
+          scenario === "webgl-comparison"
+            ? "comparison-panel-disposed"
+            : "editor-disposed",
+        )
       ) {
         throw new Error(
-          `VS Code exited before editor cleanup completed (code=${child.exitCode}, signal=${child.signalCode ?? "none"})`,
+          `VS Code exited before qualification cleanup completed (code=${child.exitCode}, signal=${child.signalCode ?? "none"})`,
         );
       }
       await delay(options.sampleMs);
     }
-    if (!eventByName(events, "editor-disposed")) {
-      throw new Error("qualification timed out before editor cleanup");
-    }
-    if (!memory.converterObserved) {
-      throw new Error("LibreDWG converter process was not observed");
-    }
-    if (
-      scenario === "cold-full" &&
-      !eventByName(events, "full-first-frame")
-    ) {
-      throw new Error("full first frame was not observed");
-    }
-    if (
-      scenario === "cancel-during-conversion" &&
-      eventByName(events, "full-first-frame")
-    ) {
-      throw new Error(
-        "cancel scenario reached the full frame before cleanup",
+    if (scenario === "webgl-comparison") {
+      const comparison = eventByName(events, "comparison-qualified");
+      const panelDisposed = eventByName(
+        events,
+        "comparison-panel-disposed",
       );
+      if (!comparison || panelDisposed?.qualified !== true) {
+        throw new Error(
+          "qualification timed out before comparison cleanup",
+        );
+      }
+    } else {
+      if (!eventByName(events, "editor-disposed")) {
+        throw new Error(
+          "qualification timed out before editor cleanup",
+        );
+      }
+      if (!memory.converterObserved) {
+        throw new Error(
+          "LibreDWG converter process was not observed",
+        );
+      }
+      if (
+        scenario === "cold-full" &&
+        !eventByName(events, "full-first-frame")
+      ) {
+        throw new Error("full first frame was not observed");
+      }
+      if (
+        scenario === "cancel-during-conversion" &&
+        eventByName(events, "full-first-frame")
+      ) {
+        throw new Error(
+          "cancel scenario reached the full frame before cleanup",
+        );
+      }
     }
   } catch (error) {
     failure = error;
@@ -887,6 +975,11 @@ async function runScenario(options, scenario) {
   const full = eventByName(events, "full-first-frame");
   const disposeStart = eventByName(events, "editor-dispose-start");
   const disposed = eventByName(events, "editor-disposed");
+  const comparison = eventByName(events, "comparison-qualified");
+  const comparisonPanelDisposed = eventByName(
+    events,
+    "comparison-panel-disposed",
+  );
   const processPeaks = [...memory.processes.values()]
     .sort((left, right) =>
       left.role === right.role
@@ -954,8 +1047,50 @@ async function runScenario(options, scenario) {
         memory.rolePeaks.get("converter") ?? 0,
       processes: processPeaks,
     }),
+    comparison:
+      comparison === undefined
+        ? null
+        : Object.freeze({
+            elapsed_ms: comparison.elapsed_ms,
+            strategy: comparison.strategy,
+            webgl2: comparison.webgl2,
+            before_checksum: comparison.before_checksum,
+            after_checksum: comparison.after_checksum,
+            before_nonwhite_pixels:
+              comparison.before_nonwhite_pixels,
+            after_nonwhite_pixels:
+              comparison.after_nonwhite_pixels,
+            highlighted_before_blue_pixels:
+              comparison.highlighted_before_blue_pixels,
+            highlighted_after_blue_pixels:
+              comparison.highlighted_after_blue_pixels,
+            stale_pick_rejected:
+              comparison.stale_pick_rejected,
+            rollback_preserved_pixels:
+              comparison.rollback_preserved_pixels,
+            rollback_preserved_pick_revision:
+              comparison.rollback_preserved_pick_revision,
+            visibility_toggle: comparison.visibility_toggle,
+            comparison_first_frame_ms:
+              comparison.comparison_first_frame_ms,
+            retained_pixel_bytes:
+              comparison.retained_pixel_bytes,
+            surface_pixel_budget:
+              comparison.surface_pixel_budget,
+            comparison_disposed:
+              comparison.comparison_disposed,
+            surfaces_released: comparison.surfaces_released,
+            repeat_lifecycle_count:
+              comparison.repeat_lifecycle_count,
+            repeat_lifecycle_released:
+              comparison.repeat_lifecycle_released,
+            delta_allocated_bytes_after_dispose:
+              comparison.delta_allocated_bytes_after_dispose,
+          }),
     cleanup: Object.freeze({
-      editor_disposed: true,
+      editor_disposed: disposed !== undefined,
+      comparison_panel_disposed:
+        comparisonPanelDisposed !== undefined,
       converter_processes_after_dispose:
         cleanupConverterProcesses ?? 0,
       owned_processes_after_shutdown: processesAfterShutdown,
@@ -975,19 +1110,28 @@ export async function qualifyExtensionHost(options) {
     adapterMetadata,
     drawingMetadata,
     vsixMetadata,
+    companionVsixMetadata,
   ] = await Promise.all([
     ensureInputFile(options.codePath, true),
     ensureInputFile(options.runtimePath, true),
     ensureInputFile(options.adapterPath, true),
     ensureInputFile(options.drawingPath),
     ensureInputFile(options.vsixPath),
+    ensureInputFile(options.companionVsixPath),
   ]);
   void codeMetadata;
   void runtimeMetadata;
   void adapterMetadata;
   void vsixMetadata;
-  if (path.extname(options.vsixPath).toLocaleLowerCase("en-US") !== ".vsix") {
-    throw new Error("qualification requires a packaged VSIX");
+  void companionVsixMetadata;
+  if (
+    [options.vsixPath, options.companionVsixPath].some(
+      (item) => path.extname(item).toLocaleLowerCase("en-US") !== ".vsix",
+    )
+  ) {
+    throw new Error(
+      "qualification requires packaged main and companion VSIX files",
+    );
   }
   try {
     await access(options.outputPath);
@@ -1010,17 +1154,26 @@ export async function qualifyExtensionHost(options) {
   });
   const scenarios =
     options.scenario === "all"
-      ? ["cold-full", "cancel-during-conversion"]
+      ? [
+          "cold-full",
+          "cancel-during-conversion",
+          "webgl-comparison",
+        ]
       : [
           options.scenario === "full"
             ? "cold-full"
-            : "cancel-during-conversion",
+            : options.scenario === "cancel"
+              ? "cancel-during-conversion"
+              : "webgl-comparison",
         ];
   const runs = [];
   for (const scenario of scenarios) {
     runs.push(await runScenario(options, scenario));
   }
   const fullRun = runs.find((run) => run.scenario === "cold-full");
+  const comparisonRun = runs.find(
+    (run) => run.scenario === "webgl-comparison",
+  );
   const report = Object.freeze({
     schema: REPORT_SCHEMA,
     status: "ok",
@@ -1040,10 +1193,29 @@ export async function qualifyExtensionHost(options) {
         TARGET_CONCURRENT_RSS_BYTES,
         HARD_CONCURRENT_RSS_BYTES,
       ),
+      revision_comparison:
+        comparisonRun === undefined
+          ? Object.freeze({ status: "unavailable" })
+          : comparisonRun.comparison?.webgl2 === true &&
+              comparisonRun.comparison?.stale_pick_rejected === true &&
+              comparisonRun.comparison?.rollback_preserved_pixels ===
+                true &&
+              comparisonRun.comparison
+                ?.rollback_preserved_pick_revision === true &&
+              comparisonRun.comparison?.comparison_disposed === true &&
+              comparisonRun.comparison?.surfaces_released === true &&
+              comparisonRun.comparison?.repeat_lifecycle_released ===
+                true &&
+              comparisonRun.comparison
+                ?.delta_allocated_bytes_after_dispose === 0
+            ? Object.freeze({ status: "pass" })
+            : Object.freeze({ status: "hard_fail" }),
       cleanup:
         runs.every(
           (run) =>
-            run.cleanup.editor_disposed &&
+            (run.scenario === "webgl-comparison"
+              ? run.cleanup.comparison_panel_disposed
+              : run.cleanup.editor_disposed) &&
             run.cleanup.converter_processes_after_dispose === 0 &&
             run.cleanup.owned_processes_after_shutdown === 0,
         )

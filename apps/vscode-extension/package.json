@@ -2,7 +2,7 @@
   "name": "dwg-viewer-vscode",
   "displayName": "DWG Viewer",
   "description": "Open-source, local-first DWG viewing with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "menaje",
   "license": "MPL-2.0",
   "private": true,

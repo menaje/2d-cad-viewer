@@ -1,7 +1,7 @@
 {
   "schema": "menaje-viewer-webgl-compatibility/1",
   "status": "public-preview",
-  "asOf": "2026-08-04",
+  "asOf": "2026-08-09",
   "viewerWebGl": {
     "package": "@menaje/viewer-webgl",
     "version": "0.1.1",
@@ -43,6 +43,9 @@
   "embedding": {
     "genericPresentationMount": true,
     "dwgPresentationMount": true,
+    "revisionComparisonMount": true,
+    "revisionComparisonStrategy": "single-renderer-serial-snapshot",
+    "dualFullWebGlContextsAdmitted": false,
     "productBootstrapExported": false,
     "vscodeApiRequired": false,
     "privateHostMessagesRequired": false
@@ -56,9 +59,18 @@
   },
   "conformance": {
     "publicPresentation": "packages/webview/test/presentation.test.mjs",
+    "revisionComparison": "packages/webview/test/revision-comparison.test.mjs",
+    "revisionComparisonBrowser": "packages/webview/qualification/revision-comparison.html",
+    "revisionComparisonPackagedVscode": "apps/vscode-extension/scripts/qualify-extension-host.mjs --scenario comparison",
     "dwgSceneSource": "packages/dwg-scene-source/test/dwg-scene-cache-source.test.mjs",
     "productEntrypoint": "packages/webview/src/main.mjs",
     "artifactWorkflow": ".github/workflows/viewer-webgl.yml"
+  },
+  "developmentQualification": {
+    "status": "passed",
+    "publishedInDistribution": false,
+    "publicApi": "mountWebGlRevisionComparison",
+    "evidence": "compatibility/evidence/viewer-webgl-comparison-2026-08-09.json"
   },
   "consumers": {
     "coniSpatial": {

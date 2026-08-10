@@ -33,6 +33,20 @@ await Promise.all([
   }),
   build({
     ...shared,
+    entryPoints: [
+      path.join(
+        webviewRoot,
+        "qualification",
+        "revision-comparison.mjs",
+      ),
+    ],
+    outfile: path.join(
+      sourceOutput,
+      "revision-comparison-qualification.mjs",
+    ),
+  }),
+  build({
+    ...shared,
     entryPoints: [path.join(webviewRoot, "src", "hatch-worker.mjs")],
     outfile: path.join(sourceOutput, "hatch-worker.mjs"),
   }),

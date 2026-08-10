@@ -706,7 +706,10 @@ test("stages a DWG line overlay and restores it on preview rollback", () => {
   );
   assert.equal(renderer.resources.size, 1);
   assert.deepEqual(adapter.snapshot(), {
+    baseRevisionId: REVISION_ONE,
+    committedRevisionId: REVISION_ONE,
     revisionId: REVISION_TWO,
+    presentedRevisionId: REVISION_TWO,
     sequence: 1,
     previewId: delta.deltaId,
     overlayEntities: 1,
@@ -772,6 +775,40 @@ test("stages a DWG line overlay and restores it on preview rollback", () => {
 
   assert.equal(controller.dispose(), true);
   assert.equal(renderer.active.baseSuppressions.length, 0);
+});
+
+test("presents an exact retained base revision without releasing preview resources", () => {
+  const renderer = new FakeDeltaRenderer();
+  const { delta, packet } = upsertDelta();
+  const { adapter, controller } = makeController(renderer, packet);
+
+  controller.applyPreview(delta);
+  const resource = renderer.active.lines[0];
+  const base = adapter.presentRevision(REVISION_ONE);
+
+  assert.equal(base.revisionId, REVISION_TWO);
+  assert.equal(base.presentedRevisionId, REVISION_ONE);
+  assert.equal(renderer.active.revisionId, REVISION_ONE);
+  assert.deepEqual(renderer.active.lines, []);
+  assert.equal(renderer.resources.has(resource), true);
+  assert.throws(
+    () => adapter.presentRevision("revision:not-retained"),
+    /not retained/u,
+  );
+  assert.throws(
+    () => adapter.applyDiffOverlay(diffPresentation()),
+    /active presentation revision/u,
+  );
+
+  const restored = adapter.restoreActivePresentation();
+  assert.equal(restored.presentedRevisionId, REVISION_TWO);
+  assert.equal(renderer.active.revisionId, REVISION_TWO);
+  assert.equal(renderer.active.lines[0], resource);
+  assert.equal(renderer.resources.has(resource), true);
+
+  controller.rollbackPreview(delta.deltaId);
+  assert.equal(renderer.resources.size, 0);
+  controller.dispose();
 });
 
 test("binds revision diff styles to active DWG resources and identity", () => {
@@ -1180,9 +1217,22 @@ test("keeps a committed transform while previewing and promoting style", () => {
 
   controller.applyCommitted(first.delta);
   controller.applyPreview(second.delta);
+  assert.equal(adapter.snapshot().baseRevisionId, REVISION_ONE);
+  assert.equal(adapter.snapshot().committedRevisionId, REVISION_TWO);
+  assert.equal(adapter.snapshot().revisionId, REVISION_THREE);
   assert.equal(renderer.active.transforms.length, 1);
   assert.equal(renderer.active.styles.length, 1);
   assert.equal(renderer.resources.size, 2);
+
+  adapter.presentRevision(REVISION_ONE);
+  assert.equal(renderer.active.revisionId, REVISION_ONE);
+  assert.equal(renderer.active.transforms.length, 0);
+  assert.equal(renderer.active.styles.length, 0);
+  assert.equal(renderer.resources.size, 2);
+  adapter.restoreActivePresentation();
+  assert.equal(renderer.active.revisionId, REVISION_THREE);
+  assert.equal(renderer.active.transforms.length, 1);
+  assert.equal(renderer.active.styles.length, 1);
 
   controller.rollbackPreview(second.delta.deltaId);
   assert.equal(renderer.active.transforms.length, 1);

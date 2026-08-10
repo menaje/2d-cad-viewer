@@ -127,7 +127,7 @@ pnpm install --frozen-lockfile
 pnpm --dir apps/vscode-extension run build
 pnpm --dir apps/vscode-extension exec vsce package \
   --no-dependencies \
-  --out /absolute/new/path/dwg-viewer-vscode-0.1.2.vsix
+  --out /absolute/new/path/dwg-viewer-vscode-0.1.3.vsix
 ```
 
 To reproduce an adapter package, use the checksum-pinned preparation and
@@ -143,7 +143,7 @@ pnpm --dir apps/vscode-libredwg-adapter run prepare:package -- \
 pnpm --dir apps/vscode-libredwg-adapter exec vsce package \
   --target darwin-arm64 \
   --no-dependencies \
-  --out /absolute/new/path/dwg-viewer-libredwg-0.1.2-darwin-arm64.vsix
+  --out /absolute/new/path/dwg-viewer-libredwg-0.1.3-darwin-arm64.vsix
 ```
 
 ## Verify a downloaded release
@@ -165,9 +165,9 @@ shasum -a 256 -c SHA256SUMS
 With GitHub CLI, verify provenance for the artifact you intend to install:
 
 ```bash
-gh attestation verify dwg-viewer-vscode-0.1.2.vsix \
+gh attestation verify dwg-viewer-vscode-0.1.3.vsix \
   --repo menaje/dwg-viewer
-gh attestation verify dwg-viewer-libredwg-0.1.2-darwin-arm64.vsix \
+gh attestation verify dwg-viewer-libredwg-0.1.3-darwin-arm64.vsix \
   --repo menaje/dwg-viewer
 gh attestation verify dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz \
   --repo menaje/dwg-viewer
@@ -186,8 +186,8 @@ For a manual or offline installation, install the matching GPL companion first
 and then the MPL viewer:
 
 ```bash
-code --install-extension dwg-viewer-libredwg-0.1.2-darwin-arm64.vsix
-code --install-extension dwg-viewer-vscode-0.1.2.vsix
+code --install-extension dwg-viewer-libredwg-0.1.3-darwin-arm64.vsix
+code --install-extension dwg-viewer-vscode-0.1.3.vsix
 ```
 
 The viewer finds the companion executable automatically and runs its bounded

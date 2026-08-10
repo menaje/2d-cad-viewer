@@ -62,6 +62,67 @@ committed/preview renderer state를 다시 활성화하므로 같은 전이를 �
 재시도할 수 있습니다. source switch와 idempotent disposal은 active 여부와
 무관하게 소유한 GPU/Canvas/instance resource를 정확히 한 번 회수합니다.
 
+## Full-scene revision comparison
+
+`mountWebGlRevisionComparison()`은 이미 mount된 public presentation,
+`DwgRenderDeltaAdapter`, Core의 revision-bound diff controller와 제품이
+제공한 container를 결합합니다. base와 candidate에 별도 WebGL context와
+전체 Scene Cache를 복제하지 않습니다. 하나의 `WebGlLineRenderer`가 exact
+base/target revision을 직렬로 활성화해 같은 logical camera로 그린 뒤,
+current/candidate 결과를 두 개의 bounded 2D surface에 보존합니다. 따라서
+두 화면을 동시에 비교하면서도 기존 단일 surface 제품 경로는 이 API를
+호출하지 않는 한 바뀌지 않습니다.
+
+```js
+import {
+  mountWebGlRevisionComparison,
+} from "@menaje/viewer-webgl/comparison";
+
+const comparison = mountWebGlRevisionComparison({
+  presentation,
+  renderDeltaAdapter,
+  renderDiffController,
+  container: comparisonElement,
+  camera: { origin: [0, 0, 0], worldHeight: 100 },
+});
+
+comparison.setCamera({ origin: [20, 10, 0], worldHeight: 50 });
+comparison.select("before", {
+  revisionId: baseRevisionId,
+  layerId,
+  renderId,
+});
+comparison.setSideVisibility({ before: true, after: false });
+comparison.dispose();
+```
+
+Mount 전에 presentation snapshot, diff의 session/source/base snapshot,
+base/committed/target revision과 preview ID가 모두 일치해야 합니다. 하나라도
+다르면 첫 surface를 그리기 전에 fail-closed합니다. `setCamera()`,
+`setCameraFrom()`, selection/highlight, diff policy와 resize는 원자적
+transition이며 candidate capture가 실패하면 last-good current/candidate
+pixel과 logical camera를 복원합니다. added와 removed는 실제 존재하는 쪽에만,
+modified는 exact layer/Render ID가 일치하는 양쪽에만 강조됩니다. pick의
+revision이 해당 surface와 다르면 stale pick으로 거부합니다.
+
+두 최종 RGBA surface의 기본 합계 한도는 16,777,216 pixels(64 MiB)이며,
+transition rollback용 임시 surface는 각 transition 뒤 즉시 해제됩니다.
+`dispose()`는 생성한 Canvas와 listener를 한 번만 회수하고 원래 render
+canvas의 DOM/접근성 상태를 복원합니다. 호출자가 주입한 비교 Canvas는
+제거하지 않고 원래 DOM 위치·크기와 이 컨트롤러가 바꾼 inline style/속성을
+복원합니다. presentation과 delta adapter의
+소유권은 호출자에게 남으므로 source switch나 host 종료 때는 comparison을
+먼저 닫은 뒤 adapter와 presentation을 각각 dispose해야 합니다.
+
+2026-08-09 qualification은 640×360 current/candidate RGBA surface 두 개에
+1,843,200 bytes를 유지했고, 독립 Browser의 actual WebGL2 첫 비교 frame은
+43 ms, 패키징된 VS Code 1.131.0 Webview는 74 ms였습니다. actual pixel,
+camera rollback, stale selection, corresponding highlight, visibility와 8회
+반복 mount/close 후 Canvas/GPU delta 기준선 회귀를 모두 확인했습니다.
+경로 없는 결과는
+[`compatibility/evidence/viewer-webgl-comparison-2026-08-09.json`](../../compatibility/evidence/viewer-webgl-comparison-2026-08-09.json)에
+기록됩니다.
+
 The current decoded v6 packet is private to this package:
 
 ```text
@@ -361,6 +422,15 @@ http://127.0.0.1:4173/apps/vscode-extension/media/webview/?qualification-cache=/
 This query is ignored by the VS Code host and rejects cross-origin or non-cache
 paths. It is a development-shell input, not a product DWG loading path.
 
+The public actual-WebGL comparison fixture is available at:
+
+```text
+http://127.0.0.1:4173/packages/webview/qualification/revision-comparison.html
+```
+
+It uses the same public comparison mount as the packaged VS Code qualification;
+the fixture does not call VS Code APIs when opened in a standalone browser.
+
 Append `qualification-shell=vscode` to exercise the immersive extension shell.
 The optional `qualification-top-toolbar-labels` and
 `qualification-left-toolbar-labels` parameters accept `hover` or `icons`, and
@@ -394,3 +464,9 @@ Render Delta coverage additionally includes bounded nested root/XREF transform
 and inherited-style propagation, direct-child precedence, repeated occurrence
 isolation, XCLIP fail-closed behavior and shared WebGL/Canvas text/raster IMAGE
 results.
+Revision-comparison coverage additionally checks exact source/snapshot/revision
+binding, one-renderer current/candidate pixels, synchronized camera rollback,
+revision-exact selection, corresponding highlights, side/status visibility,
+surface pixel budgets and idempotent repeated cleanup. The packaged VS Code
+scenario runs the same actual WebGL fixture from the built VSIX without mixing
+its memory with the drawing first-frame measurement.

@@ -84,6 +84,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: dwg-viewer-public-korean-corpus-evidence
+          retention-days: 14
           path: |
             ${{ runner.temp }}/public-korean-corpus/PUBLIC-CORPUS-PROVENANCE.json
             ${{ runner.temp }}/public-korean-corpus/manifest.json

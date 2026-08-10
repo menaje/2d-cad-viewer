@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   createI18n,
   environmentLocales,
+  escapeHtmlText,
   resolveSupportedLocale,
 } from "../src/i18n.mjs";
 import {
@@ -33,6 +34,13 @@ test("formats catalog messages without interpreting injected values", () => {
     "Future 2",
   );
   assert.throws(() => english.t("../toolbar.fit"), /key is invalid/u);
+});
+
+test("escapes diagnostic text before inserting it into metric markup", () => {
+  assert.equal(
+    escapeHtmlText(`<limit reason="A&B">'unsafe'</limit>`),
+    "&lt;limit reason=&quot;A&amp;B&quot;&gt;&#39;unsafe&#39;&lt;/limit&gt;",
+  );
 });
 
 test("prefers the host locale before browser languages", () => {

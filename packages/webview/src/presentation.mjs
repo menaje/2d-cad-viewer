@@ -95,6 +95,7 @@ export async function mountWebGlPresentation(
 
   let disposed = false;
   return Object.freeze({
+    context,
     scene,
     renderer,
     selectionController,

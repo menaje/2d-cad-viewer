@@ -7,6 +7,9 @@ protocol의 호환 기준을 기록한다.
 Host–Webview message 없이 사용할 수 있는 WebGL presentation과 DWG Scene
 Cache source package의 버전, 공개 mount, exact artifact digest와 publication
 승인을 별도로 기록한다. 제품 bootstrap은 이 공개 계약에 포함되지 않는다.
+`developmentQualification`은 아직 새 package tag로 배포하지 않은 소스의
+추가 public API와 검증을 기록한다. 이 항목은 기존 `distribution`의 immutable
+0.1.1 artifact digest를 바꾸거나 새 버전이 배포됐다는 뜻이 아니다.
 
 - `public-preview`는 package/API가 공개 배포됐지만 아직 `0.x` compatibility
   window에 있다는 뜻이다.
@@ -84,3 +87,11 @@ Windows 11 실행, 비공개 A2-013 또는 복합 XREF/XCLIP 도면 실기를
 검증은 구분한다. 경로 없는 고정 결과는
 [`evidence/windows-qualification-2026-08-04.json`](evidence/windows-qualification-2026-08-04.json)에
 있으며, 이 자격검사에서는 배포하지 않았다.
+
+Viewer WebGL full-scene comparison의 공개 Browser fixture, 패키징된 macOS
+VS Code actual-pixel 결과, 공공누리 DWG open과 경로 없는 private large-drawing
+Gate는
+[`evidence/viewer-webgl-comparison-2026-08-09.json`](evidence/viewer-webgl-comparison-2026-08-09.json)에
+있다. 선택된 물리 전략은 하나의 renderer와 두 bounded raster surface이며,
+두 번째 full WebGL context/cache 전략은 현재 600 MB target 여유가 부족하므로
+별도 Gate 전에는 지원으로 표시하지 않는다.
