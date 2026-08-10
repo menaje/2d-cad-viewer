@@ -508,7 +508,11 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
   );
   assert.match(
     prepareScript,
-    /patch --batch --forward -d "\$libredwg_source" -p1/u,
+    /patch_tool=\$\{DWG_VIEWER_PATCH:-patch\}/u,
+  );
+  assert.match(
+    prepareScript,
+    /"\$patch_tool" --batch --forward -d "\$libredwg_source" -p1/u,
   );
   assert.match(
     wasmBuildScript,

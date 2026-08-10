@@ -34,6 +34,7 @@ test("keeps the historical GPL package only as a qualification fixture", async (
 
   assert.equal(manifest.name, "dwg-viewer-libredwg");
   assert.equal(manifest.publisher, mainManifest.publisher);
+  assert.equal(manifest.version, mainManifest.version);
   assert.equal(manifest.license, "GPL-3.0-or-later");
   assert.equal(manifest.private, true);
   assert.deepEqual(manifest.extensionKind, ["workspace"]);

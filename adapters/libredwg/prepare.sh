@@ -44,12 +44,13 @@ build_root=$1
 adapter_output=$2
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 adapter_parent=$(dirname -- "$adapter_output")
+patch_tool=${DWG_VIEWER_PATCH:-patch}
 
 [ ! -e "$build_root" ] || fail "build directory already exists"
 [ ! -e "$adapter_output" ] || fail "adapter output already exists"
 [ -d "$adapter_parent" ] || fail "adapter output parent does not exist"
 
-for required_tool in tar make awk patch "${STRIP:-strip}"; do
+for required_tool in tar make awk "$patch_tool" "${STRIP:-strip}"; do
   command -v "$required_tool" >/dev/null 2>&1 \
     || fail "required build tool is missing: $required_tool"
 done
@@ -108,9 +109,9 @@ fi
 tar -xf "$libredwg_archive" -C "$build_root"
 
 libredwg_source="$build_root/libredwg-$LIBREDWG_VERSION"
-patch --batch --forward -d "$libredwg_source" -p1 \
+"$patch_tool" --batch --forward -d "$libredwg_source" -p1 \
   < "$script_dir/libredwg-acds-sab.patch"
-patch --batch --forward -d "$libredwg_source" -p1 \
+"$patch_tool" --batch --forward -d "$libredwg_source" -p1 \
   < "$script_dir/libredwg-r2007-high-compression.patch"
 (
   cd "$libredwg_source"

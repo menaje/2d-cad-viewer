@@ -1,9 +1,6 @@
 --- a/src/acds.spec
 +++ b/src/acds.spec
-@@ -26,6 +26,88 @@
-                0, 0, 0, dat->size);
-     LOG_TRACE_TF (dat->chain, (int)dat->size);
-     LOG_TRACE ("\n");
+@@ -28,0 +29,82 @@
 +
 +#ifdef IS_DECODER
 +    /* Extract SAB streams before decoding the optional AcDs schema.  Some
@@ -86,22 +83,8 @@
 +          }
 +      }
 +#endif
-   }
-   // header
-   FIELD_RLx (file_signature, 0);
-@@ -330,6 +412,8 @@
-
- #ifdef IS_DECODER
-   DECODER {
+@@ -332,0 +415,2 @@
 +    if (dwg->num_acis_sab_hdl)
 +      {
-     char *s, *e;
-     unsigned int i = 0;
-     char *acis_sab_data;
-@@ -413,5 +497,6 @@
-         while (dwg->num_acis_sab_hdl > 0)
-           free (SHIFT_HV (dwg, num_acis_sab_hdl, acis_sab_hdl));
-       }
+@@ -415,0 +500 @@
 +      }
-   }
- #endif
