@@ -326,5 +326,4 @@ jobs:
           path: |
             ${{ runner.temp }}/dwg-viewer-libredwg-${{ matrix.target }}.tar.gz
             ${{ runner.temp }}/dwg-viewer-libredwg-*-${{ matrix.target }}.vsix
-          archive: false
           if-no-files-found: error
