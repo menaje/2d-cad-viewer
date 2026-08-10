@@ -2,8 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, prerelease]
   pull_request:
+
+concurrency:
+  group: dwg-viewer-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -36,6 +40,8 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Check release channel contracts
+        run: pnpm run check:release-channel
       - name: Check adapter packaging
         run: pnpm run check:adapter-package
       - name: Check render protocol

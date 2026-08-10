@@ -37,10 +37,35 @@ the [GNU GPL distribution guidance](https://www.gnu.org/licenses/gpl-faq.html),
 and GitHub's
 [artifact attestation procedure](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations).
 
-## Reproducible build gates
+## Release branches and reproducible build gates
 
-The `Release packages` workflow is available as a manual dry run and runs
-automatically for a `v<version>` tag. It:
+The product release path is `dev` → `prerelease` → `main`. Direct pushes to
+`prerelease` and `main` are blocked; the required `release-route` check accepts
+only a same-repository `dev` → `prerelease` pull request or a
+`prerelease` → `main` pull request. Closing a pull request without merging it,
+creating a branch, pushing a tag, and manually running a dry run cannot publish
+a release.
+
+VS Code Marketplace versions use `major.minor.patch` without a SemVer suffix.
+This repository follows the Marketplace channel convention:
+
+- odd minor versions, such as `0.1.3` or `0.3.0`, are prereleases;
+- even minor versions, such as `0.2.0` or `0.4.0`, are stable releases;
+- repository, main extension, and companion extension versions must match; and
+- every release version must be greater than the existing `v<version>` product
+  tags.
+
+Merging `dev` into `prerelease` with a new odd-minor version publishes a
+prerelease. Merging a new even-minor version into `prerelease` is the explicit
+stable-preparation step: it runs the complete qualification and artifact build
+without publishing. After that succeeds, merging `prerelease` into `main`
+publishes the stable version. Development then advances `dev` to the next odd
+minor series.
+
+The `Release packages` workflow is also available in two non-publishing manual
+modes: `dry-run` builds and verifies every artifact, while `verify-auth` only
+checks that the configured `VSCE_PAT` can publish as `menaje`. For a release
+merge, the workflow:
 
 1. checks that the repository, main extension, and companion extension
    versions match the tag;
@@ -58,13 +83,19 @@ automatically for a `v<version>` tag. It:
    byte-identical GPL text;
 8. generates GitHub build-provenance attestations and a combined
    `SHA256SUMS`;
-9. publishes a GitHub release only for a matching version tag.
+9. checks that an existing Marketplace copy of the same version, if any from a
+   retry, belongs to the same release channel;
+10. publishes all three GPL platform companions before the dependent MPL
+    viewer, adding `--pre-release` only for the prerelease channel; and
+11. creates the immutable `v<version>` tag and matching GitHub prerelease or
+    stable release only after Marketplace publication succeeds.
 
-Marketplace publication is a separate opt-in switch on a manual workflow run.
-It requires dispatching the matching `v<version>` tag and a `VSCE_PAT` secret.
-The workflow publishes all three GPL platform companions first and the MPL
-viewer last, as prereleases. A normal tag push or manual dry run does not
-publish to the Marketplace.
+Marketplace publishing requires the repository Actions secret `VSCE_PAT` with
+permission to manage the `menaje` publisher. The token is never stored in a
+manifest, artifact, command-line argument, or release. The publishing commands
+are retry-safe for packages that were already uploaded in the same channel,
+but reject reuse of a prerelease version as stable or a stable version as a
+prerelease.
 
 GitHub artifact attestations provide keyless build provenance for this public
 repository. They are not Apple Developer ID signatures or notarization. The
@@ -185,17 +216,21 @@ Gatekeeper globally.
 
 ## Publication checklist
 
-- All CI and adapter qualification jobs pass on the intended commit.
+- The pull request follows `dev` → `prerelease` or `prerelease` → `main` and
+  the required route and CI checks pass.
 - Repository and extension versions are identical.
 - Main and companion extension versions are identical.
-- The release tag is exactly `v<version>`.
-- Manual `Release packages` dry run succeeds before creating the tag.
+- Prereleases use an odd minor version and stable releases use an even minor
+  version that has not been used in the other Marketplace channel.
+- A manual `Release packages` dry run succeeds before the release merge.
+- The workflow-created release tag is exactly `v<version>` and points to the
+  merged commit.
 - Main VSIX, all three companion VSIX files, and all three adapter archives
   have valid GitHub attestations.
 - `SHA256SUMS` verifies all release files.
 - Release notes identify the MPL VSIX and GPL adapters as separate artifacts.
-- Marketplace publication, when explicitly requested, publishes every GPL
-  platform companion before the dependent MPL viewer.
+- Marketplace publication publishes every GPL platform companion before the
+  dependent MPL viewer.
 - The packaged MPL text matches the official canonical text and project
   copyright remains in `NOTICE`.
 - The Webview production dependency audit matches the copyright and permission
