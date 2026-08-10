@@ -202,6 +202,8 @@ jobs:
             target: linux-x64
           - runner: macos-14
             target: darwin-arm64
+          - runner: macos-15-intel
+            target: darwin-x64
           - runner: windows-2025
             target: win32-x64
 
@@ -521,7 +523,7 @@ jobs:
             publish_flags+=(--pre-release)
           fi
           version="${{ needs.context.outputs.version }}"
-          for target in linux-x64 darwin-arm64 win32-x64; do
+          for target in linux-x64 darwin-arm64 darwin-x64 win32-x64; do
             pnpm --dir apps/vscode-libredwg-adapter exec vsce publish \
               --packagePath "$GITHUB_WORKSPACE/dist/dwg-viewer-libredwg-$version-$target.vsix" \
               "${publish_flags[@]}"
@@ -566,18 +568,22 @@ jobs:
           test -f "dist/dwg-viewer-vscode-$release_version.vsix"
           test -f "dist/dwg-viewer-libredwg-$release_version-linux-x64.vsix"
           test -f "dist/dwg-viewer-libredwg-$release_version-darwin-arm64.vsix"
+          test -f "dist/dwg-viewer-libredwg-$release_version-darwin-x64.vsix"
           test -f "dist/dwg-viewer-libredwg-$release_version-win32-x64.vsix"
           test -f "dist/dwg-viewer-libredwg-0.14-linux-x64.tar.gz"
           test -f "dist/dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz"
+          test -f "dist/dwg-viewer-libredwg-0.14-darwin-x64.tar.gz"
           test -f "dist/dwg-viewer-libredwg-0.14-win32-x64.tar.gz"
           cd dist
           sha256sum \
             "dwg-viewer-vscode-$release_version.vsix" \
             "dwg-viewer-libredwg-$release_version-linux-x64.vsix" \
             "dwg-viewer-libredwg-$release_version-darwin-arm64.vsix" \
+            "dwg-viewer-libredwg-$release_version-darwin-x64.vsix" \
             "dwg-viewer-libredwg-$release_version-win32-x64.vsix" \
             "dwg-viewer-libredwg-0.14-linux-x64.tar.gz" \
             "dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz" \
+            "dwg-viewer-libredwg-0.14-darwin-x64.tar.gz" \
             "dwg-viewer-libredwg-0.14-win32-x64.tar.gz" \
             > SHA256SUMS
           printf 'version=%s\n' "$release_version" >> "$GITHUB_OUTPUT"
@@ -660,7 +666,7 @@ jobs:
           printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
             "$release_label: open, inspect, search, measure, and export DWG drawings directly in VS Code." \
             "Navigation supports click-drag, two-finger trackpad panning, stronger pinch zoom, compact icon tools with hover labels, and English or Korean controls selected from the VS Code environment." \
-            "Marketplace installation adds the matching LibreDWG Engine companion automatically. For manual installation, install the main VSIX and the companion VSIX for Linux x64, macOS arm64, or Windows x64." \
+            "Marketplace installation adds the matching LibreDWG Engine companion automatically. For manual installation, install the main VSIX and the companion VSIX for Linux x64, macOS arm64, macOS Intel x64, or Windows x64." \
             "The main VSIX is MPL-2.0. Each separate GPL-3.0-or-later companion VSIX includes its executable's complete corresponding source and unmodified license texts." \
             "Verify SHA256SUMS and the GitHub artifact attestations before installation." \
             > "$release_notes"
@@ -669,9 +675,11 @@ jobs:
             "dist/dwg-viewer-vscode-$version.vsix"
             "dist/dwg-viewer-libredwg-$version-linux-x64.vsix"
             "dist/dwg-viewer-libredwg-$version-darwin-arm64.vsix"
+            "dist/dwg-viewer-libredwg-$version-darwin-x64.vsix"
             "dist/dwg-viewer-libredwg-$version-win32-x64.vsix"
             "dist/dwg-viewer-libredwg-0.14-linux-x64.tar.gz"
             "dist/dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz"
+            "dist/dwg-viewer-libredwg-0.14-darwin-x64.tar.gz"
             "dist/dwg-viewer-libredwg-0.14-win32-x64.tar.gz"
             "dist/SHA256SUMS"
           )

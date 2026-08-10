@@ -110,6 +110,7 @@ export function validateNativeAdapterCompatibility(value) {
   const qualifiedTargets = [
     "linux-x64",
     "darwin-arm64",
+    "darwin-x64",
     "win32-x64",
   ];
   if (
@@ -118,7 +119,7 @@ export function validateNativeAdapterCompatibility(value) {
     boundaries.windows !== "qualified"
   ) {
     throw new Error(
-      "Windows distribution qualification is invalid",
+      "native distribution qualification is invalid",
     );
   }
   const windowsQualification = record(

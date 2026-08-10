@@ -1356,6 +1356,49 @@ convert_dwg (const char *path, const char *output_path)
   printf (",\"performance\":{\"parse_ms\":%" PRIu64
           ",\"write_ms\":%" PRIu64 ",\"total_ms\":%" PRIu64,
           parse_ms, write_ms, total_ms);
+  printf (",\"worker_count\":%u,\"parallel_sort_workers\":%u"
+          ",\"parallel_section_workers\":%u",
+          report.performance.worker_count,
+          report.performance.parallel_sort_workers,
+          report.performance.parallel_section_workers);
+  printf (",\"stages\":{\"reference_resolution_ms\":%" PRIu64
+          ",\"table_ms\":%" PRIu64
+          ",\"primitive_count_ms\":%" PRIu64
+          ",\"gpu_count_ms\":%" PRIu64
+          ",\"preview_ms\":%" PRIu64
+          ",\"spatial_index_ms\":%" PRIu64
+          ",\"spatial_collect_ms\":%" PRIu64
+          ",\"spatial_sort_ms\":%" PRIu64
+          ",\"spatial_run_write_ms\":%" PRIu64
+          ",\"spatial_merge_ms\":%" PRIu64
+          ",\"section_write_ms\":%" PRIu64
+          ",\"finalize_ms\":%" PRIu64
+          ",\"section_groups\":{\"metadata_ms\":%" PRIu64
+          ",\"entity_geometry_ms\":%" PRIu64
+          ",\"curve_text_ms\":%" PRIu64
+          ",\"gpu_cache_ms\":%" PRIu64
+          ",\"hatch_ms\":%" PRIu64
+          ",\"auxiliary_entity_ms\":%" PRIu64
+          ",\"document_context_ms\":%" PRIu64 "}}",
+          report.performance.reference_resolution_ms,
+          report.performance.table_ms,
+          report.performance.primitive_count_ms,
+          report.performance.gpu_count_ms,
+          report.performance.preview_ms,
+          report.performance.spatial_index_ms,
+          report.performance.spatial_collect_ms,
+          report.performance.spatial_sort_ms,
+          report.performance.spatial_run_write_ms,
+          report.performance.spatial_merge_ms,
+          report.performance.section_write_ms,
+          report.performance.finalize_ms,
+          report.performance.section_group_ms[0],
+          report.performance.section_group_ms[1],
+          report.performance.section_group_ms[2],
+          report.performance.section_group_ms[3],
+          report.performance.section_group_ms[4],
+          report.performance.section_group_ms[5],
+          report.performance.section_group_ms[6]);
   if (peak_rss)
     printf (",\"peak_rss_bytes\":%" PRIu64, peak_rss);
   printf ("},\"diagnostics\":%" PRIu64 "}\n",

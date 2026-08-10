@@ -324,6 +324,53 @@ test("keeps Windows in the reproducible attested release set", async () => {
   );
 });
 
+test("builds Intel macOS companions on the standard x64 runner", async () => {
+  const [releaseWorkflow, qualificationWorkflow, distributionGuide] =
+    await Promise.all([
+      readFile(
+        path.join(
+          import.meta.dirname,
+          "..",
+          "..",
+          ".github",
+          "workflows",
+          "release.yml",
+        ),
+        "utf8",
+      ),
+      readFile(
+        path.join(
+          import.meta.dirname,
+          "..",
+          "..",
+          ".github",
+          "workflows",
+          "libredwg-adapter.yml",
+        ),
+        "utf8",
+      ),
+      readFile(
+        path.join(
+          import.meta.dirname,
+          "..",
+          "..",
+          "docs",
+          "distribution.md",
+        ),
+        "utf8",
+      ),
+    ]);
+  for (const workflow of [releaseWorkflow, qualificationWorkflow]) {
+    assert.match(workflow, /runner: macos-15-intel/u);
+    assert.match(workflow, /target: darwin-x64/u);
+  }
+  assert.match(
+    releaseWorkflow,
+    /dwg-viewer-libredwg-0\.14-darwin-x64\.tar\.gz/u,
+  );
+  assert.match(distributionGuide, /macOS Intel\s+x64/u);
+});
+
 test("normalizes legacy inspection text before corpus metrics", async () => {
   const adapterSource = await readFile(
     path.join(import.meta.dirname, "libredwg_adapter.c"),

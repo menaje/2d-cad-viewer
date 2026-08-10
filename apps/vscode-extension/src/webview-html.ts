@@ -6,9 +6,19 @@ export interface WebviewHtmlOptions {
   locale?: string;
   topToolbarLabels?: MenuLabelMode;
   leftToolbarLabels?: MenuLabelMode;
+  renderResolution?: RenderResolutionMode;
+  interactionRendering?: InteractionRenderingMode;
 }
 
 export type MenuLabelMode = "hover" | "icons";
+export type RenderResolutionMode =
+  | "auto"
+  | "quality"
+  | "performance";
+export type InteractionRenderingMode =
+  | "continuous"
+  | "hybrid"
+  | "maximumPerformance";
 
 function normalizeWebviewLocale(value: string | undefined): string {
   if (
@@ -32,6 +42,22 @@ function normalizeMenuLabelMode(
   return value === "icons" ? "icons" : "hover";
 }
 
+function normalizeRenderResolutionMode(
+  value: RenderResolutionMode | undefined,
+): RenderResolutionMode {
+  return value === "quality" || value === "performance"
+    ? value
+    : "auto";
+}
+
+function normalizeInteractionRenderingMode(
+  value: InteractionRenderingMode | undefined,
+): InteractionRenderingMode {
+  return value === "continuous" || value === "maximumPerformance"
+    ? value
+    : "hybrid";
+}
+
 export function renderWebviewHtml(
   template: string,
   {
@@ -42,6 +68,8 @@ export function renderWebviewHtml(
     locale,
     topToolbarLabels,
     leftToolbarLabels,
+    renderResolution,
+    interactionRendering,
   }: WebviewHtmlOptions,
 ): string {
   if (!/^[A-Za-z0-9_-]{16,}$/.test(nonce)) {
@@ -75,9 +103,14 @@ export function renderWebviewHtml(
   const resolvedLeftToolbarLabels = normalizeMenuLabelMode(
     leftToolbarLabels,
   );
+  const resolvedRenderResolution = normalizeRenderResolutionMode(
+    renderResolution,
+  );
+  const resolvedInteractionRendering =
+    normalizeInteractionRenderingMode(interactionRendering);
   const withHost = withLocale.replace(
     "<body>",
-    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}">`,
+    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}" data-render-resolution="${resolvedRenderResolution}" data-interaction-rendering="${resolvedInteractionRendering}">`,
   );
   const withStyles = withHost.replace(
     /<link\s+rel=["']stylesheet["']\s+href=["'][^"']+["']\s*\/?>/iu,

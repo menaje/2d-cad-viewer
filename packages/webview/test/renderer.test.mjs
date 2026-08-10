@@ -474,6 +474,170 @@ test("maps a retained Canvas overlay from its stable camera to the interaction c
   });
 });
 
+test("switches between hybrid, continuous, and maximum-performance interaction rendering", () => {
+  const { gl, calls } = makeFakeGl();
+  let contextOptions;
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    style: {},
+    getContext(name, options) {
+      contextOptions = options;
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const snapshotContext = {
+    drawImages: [],
+    setTransform() {},
+    clearRect() {},
+    drawImage(...values) {
+      this.drawImages.push(values);
+    },
+  };
+  const interactionCanvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    style: {},
+    getContext(name) {
+      return name === "2d" ? snapshotContext : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas, {
+    interactionCanvas,
+  });
+  const stable = renderer.renderOverview({
+    batches: [
+      batch({
+        id: 0,
+        kind: GpuLineBatchKind.ModelOverview,
+        lodLevel: 0,
+        firstVertex: 0,
+      }),
+    ],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: {
+      buffer: new ArrayBuffer(72),
+      byteLength: 72,
+      vertexCount: 2,
+    },
+  });
+  const stableDraws = calls.drawArraysInstanced.length;
+  const movedView = {
+    ...stable.camera,
+    origin: [stable.camera.origin[0] + 1, stable.camera.origin[1], 0],
+    worldHeight: stable.camera.worldHeight * 0.5,
+  };
+
+  const interactive = renderer.redraw(movedView, { interactive: true });
+
+  assert.equal(contextOptions.antialias, false);
+  assert.equal(stable.interactionFrameCaptured, true);
+  assert.equal(stable.interactionRenderingMode, "hybrid");
+  assert.equal(interactive.interactionFrameReused, true);
+  assert.equal(interactive.drawCalls, 0);
+  assert.equal(calls.drawArraysInstanced.length, stableDraws);
+  assert.equal(canvas.style.opacity, "0");
+  assert.equal(interactionCanvas.style.opacity, "1");
+  assert.match(interactionCanvas.style.transform, /^matrix\(/u);
+
+  renderer.lastHybridRefreshAt = Number.NEGATIVE_INFINITY;
+  const hybridRefresh = renderer.redraw(movedView, {
+    interactive: true,
+  });
+  assert.equal(hybridRefresh.interactionFrameReused, false);
+  assert.equal(hybridRefresh.interactionFrameCaptured, true);
+  assert.ok(calls.drawArraysInstanced.length > stableDraws);
+  assert.equal(canvas.style.opacity, "");
+  assert.equal(interactionCanvas.style.opacity, "0");
+
+  const refreshedDraws = calls.drawArraysInstanced.length;
+  renderer.lastHybridRefreshAt = Number.POSITIVE_INFINITY;
+  const hybridReuse = renderer.redraw(
+    {
+      ...movedView,
+      origin: [movedView.origin[0] + 1, movedView.origin[1], 0],
+    },
+    { interactive: true },
+  );
+  assert.equal(hybridReuse.interactionFrameReused, true);
+  assert.equal(calls.drawArraysInstanced.length, refreshedDraws);
+
+  const settled = renderer.redraw(movedView);
+  assert.equal(settled.interactionFrameCaptured, true);
+  assert.ok(calls.drawArraysInstanced.length > refreshedDraws);
+  assert.equal(canvas.style.opacity, "");
+  assert.equal(interactionCanvas.style.opacity, "0");
+  assert.equal(snapshotContext.drawImages.length, 3);
+
+  assert.equal(
+    renderer.setInteractionRenderingMode("continuous"),
+    "continuous",
+  );
+  const continuousDraws = calls.drawArraysInstanced.length;
+  const continuous = renderer.redraw(movedView, { interactive: true });
+  assert.equal(continuous.interactionFrameReused, false);
+  assert.equal(continuous.interactionFrameCaptured, false);
+  assert.equal(continuous.interactionRenderingMode, "continuous");
+  assert.ok(calls.drawArraysInstanced.length > continuousDraws);
+  assert.equal(canvas.style.opacity, "");
+  assert.equal(interactionCanvas.style.opacity, "0");
+
+  renderer.redraw(movedView);
+  assert.equal(
+    renderer.setInteractionRenderingMode("maximumPerformance"),
+    "maximumPerformance",
+  );
+  const maximumPerformanceDraws = calls.drawArraysInstanced.length;
+  const maximumPerformance = renderer.redraw(
+    {
+      ...movedView,
+      origin: [movedView.origin[0] + 2, movedView.origin[1], 0],
+    },
+    { interactive: true },
+  );
+  assert.equal(maximumPerformance.interactionFrameReused, true);
+  assert.equal(
+    maximumPerformance.interactionRenderingMode,
+    "maximumPerformance",
+  );
+  assert.equal(
+    calls.drawArraysInstanced.length,
+    maximumPerformanceDraws,
+  );
+  renderer.dispose();
+});
+
+test("requests WebGL MSAA only for quality mode", () => {
+  for (const [mode, expected] of [
+    ["auto", false],
+    ["performance", false],
+    ["quality", true],
+  ]) {
+    const { gl } = makeFakeGl();
+    let contextOptions;
+    const canvas = {
+      clientWidth: 200,
+      clientHeight: 100,
+      width: 0,
+      height: 0,
+      getContext(name, options) {
+        contextOptions = options;
+        return name === "webgl2" ? gl : null;
+      },
+    };
+    const renderer = new WebGlLineRenderer(canvas, {
+      renderResolutionMode: mode,
+    });
+    assert.equal(contextOptions.antialias, expected);
+    renderer.dispose();
+  }
+});
+
 test("uploads Canvas color and order maps for depth-tested overlay composition", () => {
   const { gl, calls } = makeFakeGl();
   const canvas = {

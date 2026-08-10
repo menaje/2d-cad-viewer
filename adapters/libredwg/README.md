@@ -9,8 +9,13 @@ model. It repeatedly traverses LibreDWG objects and streams sections and
 bounded GPU batches directly to a new cache file. For large drawings, it
 spills fixed-size detail records into private unnamed temporary files, sorts
 8,192-record runs, and performs one buffered merge into group-local XY Morton
-order. The in-memory sort working set stays bounded below 0.8 MB; the
-temporary files are mode `0600`, close-on-exec, and removed automatically.
+order. The in-memory sort working set stays bounded to one fixed run buffer per
+selected worker; the temporary files are mode `0600`, close-on-exec, and
+removed automatically.
+GPU batch metadata and its packed 36-byte vertices are generated together in
+one geometry pass, with each bounded batch written as one vertex buffer rather
+than one field at a time. The final batch and vertex sections retain their
+existing deterministic byte layout.
 HATCH sections use repeated bounded passes and retain at most one 65,536-point
 ring (about 1.5 MiB) while streaming. Pattern-definition lines and dash values
 are streamed in separate bounded passes, and no whole-drawing fill or pattern
@@ -235,12 +240,14 @@ binary byte-identical. The included repository license, notice and package
 metadata also let the packaged `package.mjs` run from the extracted source tree
 instead of depending on files outside the archive.
 
-GitHub's release workflow qualifies Linux x64, macOS arm64, and Windows x64
-packages, reproduces the archives, verifies their extracted contents, and
-creates keyless GitHub build-provenance attestations. The Windows writer uses
-private delete-on-close native temporary files and non-inheritable handles.
-Its qualification also exercises cancellation plus drive, UNC, relative,
-Unicode, normalization, and case-insensitive paths on the Windows runner.
+GitHub's release workflow qualifies Linux x64, macOS arm64, macOS Intel x64,
+and Windows x64 packages, reproduces the archives, verifies their extracted
+contents, and creates keyless GitHub build-provenance attestations. Intel
+macOS builds run on GitHub's `macos-15-intel` standard runner. The Windows
+writer uses private delete-on-close native temporary files and non-inheritable
+handles. Its qualification also exercises cancellation plus drive, UNC,
+relative, Unicode, normalization, and case-insensitive paths on the Windows
+runner.
 
 The MPL-only VSIX never bundles this executable. A separate, platform-specific
 GPL companion VSIX is staged only from this verified source-complete package;
@@ -277,6 +284,16 @@ Reports never include the input name, drawing text samples, diagnostic
 messages, or a block name. LibreDWG parsing, analysis and cache writing stay in
 the adapter process so all transient memory is reclaimed when the process
 exits.
+
+The native writer resolves LibreDWG object references before parallel work,
+sorts copied spatial records across available cores, and writes seven
+independent contiguous section groups concurrently before deterministic
+concatenation. The GPU section group fuses batch-directory and packed-vertex
+generation into one traversal and buffers each batch before writing.
+`DWG_VIEWER_CONVERSION_WORKERS=1..8` can override the automatic
+online-CPU count for qualification. The conversion report records the selected
+worker count, actual sort and section concurrency, coarse stages, spatial-sort
+sub-stages, and each section-group duration under `performance`.
 
 LibreDWG exposes block markers, polyline vertices and attached attributes as
 separate raw entities. The adapter keeps raw counts under `drawing.raw_*` and

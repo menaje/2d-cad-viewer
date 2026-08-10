@@ -33,7 +33,9 @@ import {
 import { activateRevisionComparisonQualification } from "./comparison-qualification";
 import {
   renderWebviewHtml,
+  type InteractionRenderingMode,
   type MenuLabelMode,
+  type RenderResolutionMode,
 } from "./webview-html";
 import { XrefController } from "./xref-controller";
 import { ImageReferenceChannel } from "./image-reference-channel";
@@ -62,6 +64,27 @@ function configuredMenuLabelMode(
   return configuration.get<string>(key, "hover") === "icons"
     ? "icons"
     : "hover";
+}
+
+function configuredRenderResolution(
+  configuration: vscode.WorkspaceConfiguration,
+): RenderResolutionMode {
+  const value = configuration.get<string>("renderResolution", "auto");
+  return value === "quality" || value === "performance"
+    ? value
+    : "auto";
+}
+
+function configuredInteractionRendering(
+  configuration: vscode.WorkspaceConfiguration,
+): InteractionRenderingMode {
+  const value = configuration.get<string>(
+    "interactionRendering",
+    "hybrid",
+  );
+  return value === "continuous" || value === "maximumPerformance"
+    ? value
+    : "hybrid";
 }
 
 function adapterErrorDetails(error: unknown): {
@@ -421,6 +444,20 @@ class DwgEditorProvider
       } as const;
     };
 
+    const renderResolutionSettings = () => ({
+      type: "dwg-render-resolution/1",
+      mode: configuredRenderResolution(
+        vscode.workspace.getConfiguration("dwgViewer", document.uri),
+      ),
+    } as const);
+
+    const interactionRenderingSettings = () => ({
+      type: "dwg-interaction-rendering/1",
+      mode: configuredInteractionRendering(
+        vscode.workspace.getConfiguration("dwgViewer", document.uri),
+      ),
+    } as const);
+
     let disposed = false;
     let webviewInitialized = false;
     let webviewReady = false;
@@ -462,6 +499,8 @@ class DwgEditorProvider
       };
       const nonce = randomBytes(24).toString("base64url");
       const menuSettings = menuDisplaySettings();
+      const renderSettings = renderResolutionSettings();
+      const interactionSettings = interactionRenderingSettings();
       webviewPanel.webview.html = renderWebviewHtml(template, {
         cspSource: webviewPanel.webview.cspSource,
         nonce,
@@ -476,6 +515,8 @@ class DwgEditorProvider
         locale: vscode.env.language,
         topToolbarLabels: menuSettings.topToolbarLabels,
         leftToolbarLabels: menuSettings.leftToolbarLabels,
+        renderResolution: renderSettings.mode,
+        interactionRendering: interactionSettings.mode,
       });
     };
 
@@ -484,6 +525,22 @@ class DwgEditorProvider
         return;
       }
       void webviewPanel.webview.postMessage(menuDisplaySettings());
+    };
+
+    const postRenderResolutionSettings = (): void => {
+      if (!webviewReady) {
+        return;
+      }
+      void webviewPanel.webview.postMessage(renderResolutionSettings());
+    };
+
+    const postInteractionRenderingSettings = (): void => {
+      if (!webviewReady) {
+        return;
+      }
+      void webviewPanel.webview.postMessage(
+        interactionRenderingSettings(),
+      );
     };
 
     const postState = async (
@@ -686,7 +743,13 @@ class DwgEditorProvider
           extensionPath: this.context.extensionPath,
           bundledExtensionPath: bundledLibreDwgExtensionPath(),
         });
-        const engine = new LibreDwgNativeSceneEngine(adapterPath);
+        const engine = new LibreDwgNativeSceneEngine(adapterPath, {
+          onPerformance: (performance) => {
+            this.output.appendLine(
+              `[CONVERSION_PERFORMANCE] ${JSON.stringify(performance)}`,
+            );
+          },
+        });
         activeEngine = engine.descriptor;
         const manager = new SceneCacheManager(
           path.join(this.context.globalStorageUri.fsPath, "cache"),
@@ -970,6 +1033,8 @@ class DwgEditorProvider
           case "dwg-webview-ready/1": {
             webviewReady = true;
             postMenuDisplaySettings();
+            postRenderResolutionSettings();
+            postInteractionRenderingSettings();
             if (activeCacheReadyMessage) {
               void webviewPanel.webview.postMessage(
                 activeCacheReadyMessage,
@@ -1383,6 +1448,26 @@ class DwgEditorProvider
         postMenuDisplaySettings();
       });
 
+    const renderConfigurationSubscription =
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (
+          event.affectsConfiguration(
+            "dwgViewer.renderResolution",
+            document.uri,
+          )
+        ) {
+          postRenderResolutionSettings();
+        }
+        if (
+          event.affectsConfiguration(
+            "dwgViewer.interactionRendering",
+            document.uri,
+          )
+        ) {
+          postInteractionRenderingSettings();
+        }
+      });
+
     let resolutionCancellation: vscode.Disposable | undefined;
     const disposeSession = (): void => {
       if (disposed) {
@@ -1393,6 +1478,7 @@ class DwgEditorProvider
       messageSubscription.dispose();
       fontConfigurationSubscription.dispose();
       menuConfigurationSubscription.dispose();
+      renderConfigurationSubscription.dispose();
       resolutionCancellation?.dispose();
       resolutionCancellation = undefined;
       void emitQualification("editor-dispose-start");

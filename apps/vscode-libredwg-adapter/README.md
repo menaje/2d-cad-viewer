@@ -3,7 +3,7 @@
 This companion extension supplies the local LibreDWG conversion process used
 by [DWG Viewer](https://marketplace.visualstudio.com/items?itemName=menaje.dwg-viewer-vscode).
 Install DWG Viewer and VS Code installs the matching engine automatically for
-Linux x64, macOS arm64, or Windows x64.
+Linux x64, macOS arm64, macOS Intel x64, or Windows x64.
 
 The engine runs as a separate local process. Drawings are not uploaded, and
 the original DWG file is not modified. This extension has no commands or user

@@ -84,6 +84,24 @@ test("cache identity is deterministic and changes with source metadata", () => {
   );
 });
 
+test("adapter revision follows executable contents instead of its path", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dwg-engine-revision-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const firstPath = path.join(root, "first-adapter");
+  const movedPath = path.join(root, "moved-adapter");
+  await writeFile(firstPath, "same native adapter bytes");
+  await writeFile(movedPath, "same native adapter bytes");
+
+  const first = await new LibreDwgNativeSceneEngine(firstPath).snapshot();
+  const moved = await new LibreDwgNativeSceneEngine(movedPath).snapshot();
+  assert.equal(first.revision, moved.revision);
+  assert.match(first.revision, /^[a-f0-9]{64}$/u);
+
+  await writeFile(movedPath, "changed native adapter bytes");
+  const changed = await new LibreDwgNativeSceneEngine(movedPath).snapshot();
+  assert.notEqual(changed.revision, first.revision);
+});
+
 test("adapter report requires the expected schema, validation, and size", () => {
   parseAdapterReport(
     JSON.stringify({
@@ -104,6 +122,51 @@ test("adapter report requires the expected schema, validation, and size", () => 
         5n,
       ),
     /ADAPTER_REPORT_REJECTED/u,
+  );
+});
+
+test("adapter report returns validated conversion performance", () => {
+  assert.deepEqual(
+    parseAdapterReport(
+      JSON.stringify({
+        schema: "dwg-scene-cache/1",
+        status: "ok",
+        cache: { size_bytes: "5", validated: true },
+        performance: {
+          parse_ms: 101,
+          write_ms: 202,
+          total_ms: 303,
+          worker_count: 6,
+          parallel_sort_workers: 4,
+          parallel_section_workers: 6,
+          stages: {
+            reference_resolution_ms: 8,
+            section_write_ms: 181,
+            ignored_negative_ms: -1,
+            section_groups: {
+              metadata_ms: 12,
+              gpu_cache_ms: 78,
+              ignored_fraction_ms: 1.5,
+            },
+          },
+        },
+      }),
+      5n,
+    ),
+    {
+      parseMs: 101,
+      writeMs: 202,
+      totalMs: 303,
+      workerCount: 6,
+      parallelSortWorkers: 4,
+      parallelSectionWorkers: 6,
+      stages: {
+        reference_resolution_ms: 8,
+        section_write_ms: 181,
+        "section_groups.metadata_ms": 12,
+        "section_groups.gpu_cache_ms": 78,
+      },
+    },
   );
 });
 
@@ -294,13 +357,23 @@ setTimeout(() => {
   process.stdout.write(JSON.stringify({
     schema: "dwg-scene-cache/1",
     status: "ok",
-    cache: { size_bytes: 5, validated: true }
+    cache: { size_bytes: 5, validated: true },
+    performance: {
+      parse_ms: 11,
+      write_ms: 22,
+      total_ms: 33,
+      worker_count: 4,
+      parallel_sort_workers: 3,
+      parallel_section_workers: 4,
+      stages: { section_write_ms: 19 }
+    }
   }) + "\\n");
 }, 120);
 `,
     );
 
     let previewCount = 0;
+    let performanceCount = 0;
     await runLibreDwgAdapter({
       adapterPath: process.execPath,
       argumentPrefix: [adapterScript],
@@ -316,9 +389,15 @@ setTimeout(() => {
         assert.equal(await readFile(preview.path, "utf8"), "preview");
         await assert.rejects(readFile(outputPath), /ENOENT/u);
       },
+      onPerformance(performance) {
+        performanceCount++;
+        assert.equal(performance.workerCount, 4);
+        assert.equal(performance.stages.section_write_ms, 19);
+      },
     });
 
     assert.equal(previewCount, 1);
+    assert.equal(performanceCount, 1);
     assert.equal(await readFile(outputPath, "utf8"), "cache");
   },
 );

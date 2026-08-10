@@ -5,6 +5,17 @@ export {
   WebGlLineRenderer,
 } from "./renderer.mjs";
 export {
+  normalizeRenderResolutionMode,
+  renderAntialiasingForMode,
+  RenderResolutionMode,
+  resolveRenderSurfaceSize,
+} from "./render-resolution.mjs";
+export {
+  HYBRID_INTERACTION_REFRESH_MS,
+  InteractionRenderingMode,
+  normalizeInteractionRenderingMode,
+} from "./interaction-rendering.mjs";
+export {
   mountWebGlPresentation,
 } from "./presentation.mjs";
 export {

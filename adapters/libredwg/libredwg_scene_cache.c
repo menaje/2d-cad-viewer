@@ -10,6 +10,9 @@
 
 #define _POSIX_C_SOURCE 200809L
 #define _FILE_OFFSET_BITS 64
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#endif
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -29,14 +32,17 @@
 #include <float.h>
 #include <limits.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #include <io.h>
+#include <process.h>
 #include <windows.h>
 #define close _close
 #define fdopen _fdopen
@@ -50,6 +56,9 @@
 #endif
 typedef __int64 DwgViewerFileOffset;
 #else
+#if !defined(__EMSCRIPTEN__)
+#include <pthread.h>
+#endif
 #include <unistd.h>
 #define O_BINARY 0
 typedef off_t DwgViewerFileOffset;
@@ -64,6 +73,7 @@ typedef off_t DwgViewerFileOffset;
 extern char *bit_TV_to_utf8 (const char *restrict src,
                              const BITCODE_RS codepage);
 extern char *bit_convert_TU (const BITCODE_TU restrict src);
+extern void dwg_resolve_objectrefs_silent (Dwg_Data *restrict dwg);
 
 #define CACHE_VERSION_MAJOR LIBREDWG_SCENE_CACHE_VERSION_MAJOR
 #define CACHE_VERSION_MINOR LIBREDWG_SCENE_CACHE_VERSION_MINOR
@@ -81,6 +91,8 @@ extern char *bit_convert_TU (const BITCODE_TU restrict src);
   (MAX_GPU_OVERVIEW_BYTES / (2u * GPU_LINE_VERTEX_RECORD_SIZE))
 #define SPATIAL_SORT_RUN_SEGMENTS 8192u
 #define SPATIAL_MERGE_BUFFER_RECORDS 16u
+#define SPATIAL_MERGE_OUTPUT_RECORDS 4096u
+#define MAX_CONVERSION_WORKERS 8u
 _Static_assert (
     GPU_BATCH_SEGMENTS * 2u * GPU_LINE_VERTEX_RECORD_SIZE
         <= MAX_GPU_DETAIL_BATCH_BYTES,
@@ -476,13 +488,12 @@ typedef struct
 
 typedef struct
 {
-  CacheWriter *writer;
+  BatchDirectoryBuilder batches;
+  CacheWriter *vertex_writer;
   LineSegment *segments;
-  uint32_t current_group;
-  uint32_t count;
-  int has_group;
+  uint8_t *vertex_bytes;
   uint64_t vertices;
-} VertexBuilder;
+} GpuSectionBuilder;
 
 typedef struct
 {
@@ -792,6 +803,80 @@ set_error (CacheWriter *writer, const char *message)
     }
 }
 
+static uint64_t
+monotonic_nanoseconds (void)
+{
+#if defined(_WIN32)
+  LARGE_INTEGER counter;
+  LARGE_INTEGER frequency;
+  uint64_t seconds;
+  uint64_t remainder;
+  if (!QueryPerformanceCounter (&counter)
+      || !QueryPerformanceFrequency (&frequency)
+      || counter.QuadPart < 0 || frequency.QuadPart <= 0)
+    return 0;
+  seconds = (uint64_t)counter.QuadPart / (uint64_t)frequency.QuadPart;
+  remainder
+      = (uint64_t)counter.QuadPart % (uint64_t)frequency.QuadPart;
+  if (seconds > UINT64_MAX / 1000000000u)
+    return 0;
+  return seconds * 1000000000u
+         + remainder * 1000000000u / (uint64_t)frequency.QuadPart;
+#else
+  struct timespec value;
+  if (clock_gettime (CLOCK_MONOTONIC, &value) != 0
+      || value.tv_sec < 0 || value.tv_nsec < 0)
+    return 0;
+  if ((uint64_t)value.tv_sec > UINT64_MAX / 1000000000u)
+    return 0;
+  return (uint64_t)value.tv_sec * 1000000000u
+         + (uint64_t)value.tv_nsec;
+#endif
+}
+
+static uint64_t
+elapsed_nanoseconds (uint64_t started)
+{
+  uint64_t finished = monotonic_nanoseconds ();
+  return started && finished >= started ? finished - started : 0;
+}
+
+static uint64_t
+milliseconds_from_nanoseconds (uint64_t value)
+{
+  return value / 1000000u;
+}
+
+static uint32_t
+conversion_worker_count (void)
+{
+  const char *configured = getenv ("DWG_VIEWER_CONVERSION_WORKERS");
+  unsigned long parsed = 0;
+  char *end = NULL;
+  uint64_t available = 1;
+  if (configured && configured[0])
+    {
+      errno = 0;
+      parsed = strtoul (configured, &end, 10);
+      if (!errno && end && *end == '\0' && parsed >= 1
+          && parsed <= MAX_CONVERSION_WORKERS)
+        return (uint32_t)parsed;
+    }
+#if defined(__EMSCRIPTEN__)
+  available = 1;
+#elif defined(_WIN32)
+  available = (uint64_t)GetActiveProcessorCount (ALL_PROCESSOR_GROUPS);
+#else
+  {
+    long processors = sysconf (_SC_NPROCESSORS_ONLN);
+    available = processors > 0 ? (uint64_t)processors : 1u;
+  }
+#endif
+  if (available > MAX_CONVERSION_WORKERS)
+    available = MAX_CONVERSION_WORKERS;
+  return (uint32_t)(available ? available : 1u);
+}
+
 static int
 write_bytes (CacheWriter *writer, const void *value, size_t size)
 {
@@ -858,6 +943,23 @@ write_f32 (CacheWriter *writer, float value)
   uint32_t encoded;
   memcpy (&encoded, &value, sizeof (encoded));
   return write_u32 (writer, encoded);
+}
+
+static void
+store_u32_le (uint8_t *bytes, uint32_t value)
+{
+  bytes[0] = (uint8_t)value;
+  bytes[1] = (uint8_t)(value >> 8);
+  bytes[2] = (uint8_t)(value >> 16);
+  bytes[3] = (uint8_t)(value >> 24);
+}
+
+static void
+store_f32_le (uint8_t *bytes, float value)
+{
+  uint32_t encoded;
+  memcpy (&encoded, &value, sizeof (encoded));
+  store_u32_le (bytes, encoded);
 }
 
 static int
@@ -993,10 +1095,18 @@ reference_handle (const Dwg_Object_Ref *reference)
 static Dwg_Object *
 reference_object (const Dwg_Data *dwg, Dwg_Object_Ref *reference)
 {
+  uint64_t handle;
   if (!reference)
     return NULL;
   if (reference->obj)
     return reference->obj;
+  if (!dwg->dirty_refs)
+    {
+      handle = reference_handle (reference);
+      return handle
+                 ? dwg_resolve_handle_silent (dwg, (BITCODE_HV)handle)
+                 : NULL;
+    }
   return dwg_ref_object_silent ((Dwg_Data *)dwg, reference);
 }
 
@@ -2019,7 +2129,7 @@ iterate_polyline_vertices (const Dwg_Object *object,
       else if (version <= R_2000)
         {
           Dwg_Object *current
-              = first ? dwg_ref_object_silent (dwg, first) : NULL;
+              = first ? reference_object (dwg, first) : NULL;
           uint64_t visited = 0;
           uint64_t limit = (uint64_t)dwg->num_objects;
           while (current && visited < limit)
@@ -2048,7 +2158,7 @@ iterate_polyline_vertices (const Dwg_Object *object,
             {
               Dwg_Object *current
                   = references[i]
-                        ? dwg_ref_object_silent (dwg, references[i])
+                        ? reference_object (dwg, references[i])
                         : NULL;
               if (!consume_polyline_subentity (
                       current, info.kind, consumer, context, &count))
@@ -10605,13 +10715,20 @@ typedef struct
   CacheWriter *writer;
   OverviewPlan *overview;
   FILE *file;
-  SpatialSegmentRecord *buffer;
+  SpatialSegmentRecord *buffers;
   SpatialSortRun *runs;
+  size_t batch_counts[MAX_CONVERSION_WORKERS];
   size_t buffered;
+  size_t batch_count;
   size_t run_count;
   size_t run_capacity;
   uint64_t records_written;
+  uint64_t records_scheduled;
   uint64_t source_order;
+  uint64_t sort_nanoseconds;
+  uint64_t write_nanoseconds;
+  uint32_t worker_count;
+  uint32_t parallel_sort_workers;
 } SpatialSortBuilder;
 
 static FILE *
@@ -10758,32 +10875,147 @@ spatial_record_compare (const void *left, const void *right)
   return 0;
 }
 
+typedef struct
+{
+  SpatialSegmentRecord *records;
+  size_t count;
+} SpatialSortTask;
+
+static void
+sort_spatial_task (SpatialSortTask *task)
+{
+  qsort (task->records, task->count, sizeof (SpatialSegmentRecord),
+         spatial_record_compare);
+}
+
+#if defined(_WIN32)
+static unsigned __stdcall
+sort_spatial_thread (void *context)
+{
+  sort_spatial_task ((SpatialSortTask *)context);
+  return 0;
+}
+#elif !defined(__EMSCRIPTEN__)
+static void *
+sort_spatial_thread (void *context)
+{
+  sort_spatial_task ((SpatialSortTask *)context);
+  return NULL;
+}
+#endif
+
+static void
+sort_spatial_tasks (SpatialSortBuilder *builder,
+                    SpatialSortTask *tasks, size_t count)
+{
+  size_t launched = 0;
+  size_t index;
+  if (count <= 1 || builder->worker_count <= 1)
+    {
+      for (index = 0; index < count; index++)
+        sort_spatial_task (&tasks[index]);
+      if (count && builder->parallel_sort_workers < 1)
+        builder->parallel_sort_workers = 1;
+      return;
+    }
+#if defined(_WIN32)
+  {
+    HANDLE threads[MAX_CONVERSION_WORKERS - 1u];
+    for (index = 0; index + 1u < count; index++)
+      {
+        uintptr_t thread = _beginthreadex (
+            NULL, 0, sort_spatial_thread, &tasks[index], 0, NULL);
+        if (!thread)
+          break;
+        threads[launched++] = (HANDLE)thread;
+      }
+    for (index = launched; index < count; index++)
+      sort_spatial_task (&tasks[index]);
+    for (index = 0; index < launched; index++)
+      {
+        (void)WaitForSingleObject (threads[index], INFINITE);
+        (void)CloseHandle (threads[index]);
+      }
+  }
+#elif defined(__EMSCRIPTEN__)
+  for (index = 0; index < count; index++)
+    sort_spatial_task (&tasks[index]);
+#else
+  {
+    pthread_t threads[MAX_CONVERSION_WORKERS - 1u];
+    for (index = 0; index + 1u < count; index++)
+      {
+        if (pthread_create (&threads[launched], NULL,
+                            sort_spatial_thread, &tasks[index])
+            != 0)
+          break;
+        launched++;
+      }
+    for (index = launched; index < count; index++)
+      sort_spatial_task (&tasks[index]);
+    for (index = 0; index < launched; index++)
+      (void)pthread_join (threads[index], NULL);
+  }
+#endif
+  if (builder->parallel_sort_workers < launched + 1u)
+    builder->parallel_sort_workers = (uint32_t)(launched + 1u);
+}
+
 static int
-flush_spatial_sort_run (SpatialSortBuilder *builder)
+flush_spatial_sort_batch (SpatialSortBuilder *builder)
+{
+  SpatialSortTask tasks[MAX_CONVERSION_WORKERS];
+  uint64_t started;
+  size_t index;
+  if (!builder->batch_count)
+    return 1;
+  for (index = 0; index < builder->batch_count; index++)
+    {
+      tasks[index].records
+          = builder->buffers + index * SPATIAL_SORT_RUN_SEGMENTS;
+      tasks[index].count = builder->batch_counts[index];
+    }
+  started = monotonic_nanoseconds ();
+  sort_spatial_tasks (builder, tasks, builder->batch_count);
+  builder->sort_nanoseconds += elapsed_nanoseconds (started);
+  started = monotonic_nanoseconds ();
+  for (index = 0; index < builder->batch_count; index++)
+    {
+      if (fwrite (tasks[index].records, sizeof (SpatialSegmentRecord),
+                  tasks[index].count, builder->file)
+          != tasks[index].count)
+        {
+          set_error (builder->writer, "cannot write spatial-sort run");
+          return 0;
+        }
+      builder->records_written += tasks[index].count;
+    }
+  builder->write_nanoseconds += elapsed_nanoseconds (started);
+  builder->batch_count = 0;
+  return 1;
+}
+
+static int
+queue_spatial_sort_run (SpatialSortBuilder *builder)
 {
   SpatialSortRun *run;
   if (!builder->buffered)
     return 1;
-  if (builder->run_count >= builder->run_capacity)
+  if (builder->run_count >= builder->run_capacity
+      || builder->batch_count >= builder->worker_count
+      || UINT64_MAX - builder->records_scheduled < builder->buffered)
     {
       set_error (builder->writer, "spatial-sort run count is inconsistent");
       return 0;
     }
-  qsort (builder->buffer, builder->buffered,
-         sizeof (SpatialSegmentRecord), spatial_record_compare);
   run = &builder->runs[builder->run_count++];
-  run->start = builder->records_written;
+  run->start = builder->records_scheduled;
   run->count = builder->buffered;
-  if (fwrite (builder->buffer, sizeof (SpatialSegmentRecord),
-              builder->buffered, builder->file)
-      != builder->buffered)
-    {
-      set_error (builder->writer, "cannot write spatial-sort run");
-      return 0;
-    }
-  builder->records_written += builder->buffered;
+  builder->records_scheduled += builder->buffered;
+  builder->batch_counts[builder->batch_count++] = builder->buffered;
   builder->buffered = 0;
-  return 1;
+  return builder->batch_count < builder->worker_count
+         || flush_spatial_sort_batch (builder);
 }
 
 static int
@@ -10799,9 +11031,11 @@ spatial_sort_consume (void *context, const LineSegment *segment)
       return 0;
     }
   if (builder->buffered == SPATIAL_SORT_RUN_SEGMENTS
-      && !flush_spatial_sort_run (builder))
+      && !queue_spatial_sort_run (builder))
     return 0;
-  record = &builder->buffer[builder->buffered++];
+  record = &builder->buffers[
+      builder->batch_count * SPATIAL_SORT_RUN_SEGMENTS
+      + builder->buffered++];
   record->segment = *segment;
   record->source_order = builder->source_order++;
   record->morton = spatial_morton_key (segment, builder->overview);
@@ -10913,8 +11147,10 @@ merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
                          uint64_t expected)
 {
   SpatialMergeRun *runs = NULL;
+  SpatialSegmentRecord *output_records = NULL;
   size_t *heap = NULL;
   size_t heap_count = run_count;
+  size_t output_count = 0;
   uint64_t written = 0;
   int descriptor = fileno (input);
   size_t i;
@@ -10932,7 +11168,9 @@ merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
     }
   runs = (SpatialMergeRun *)calloc (run_count, sizeof (*runs));
   heap = (size_t *)malloc (run_count * sizeof (*heap));
-  if (!runs || !heap)
+  output_records = (SpatialSegmentRecord *)malloc (
+      SPATIAL_MERGE_OUTPUT_RECORDS * sizeof (*output_records));
+  if (!runs || !heap || !output_records)
     {
       set_error (writer, "out of memory while merging spatial-sort runs");
       goto done;
@@ -10952,13 +11190,17 @@ merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
     {
       size_t run_index = heap[0];
       SpatialMergeRun *run = &runs[run_index];
-      if (fwrite (&run->buffer[run->position],
-                  sizeof (SpatialSegmentRecord), 1, output)
-          != 1)
+      output_records[output_count++] = run->buffer[run->position];
+      if (output_count == SPATIAL_MERGE_OUTPUT_RECORDS
+          && fwrite (output_records, sizeof (SpatialSegmentRecord),
+                     output_count, output)
+                 != output_count)
         {
           set_error (writer, "cannot write sorted spatial geometry");
           goto done;
         }
+      if (output_count == SPATIAL_MERGE_OUTPUT_RECORDS)
+        output_count = 0;
       written++;
       run->position++;
       if (run->position == run->buffered)
@@ -10976,7 +11218,11 @@ merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
       if (heap_count)
         sift_spatial_heap (heap, heap_count, 0, runs);
     }
-  if (written != expected || fflush (output) != 0
+  if ((output_count
+       && fwrite (output_records, sizeof (SpatialSegmentRecord),
+                  output_count, output)
+              != output_count)
+      || written != expected || fflush (output) != 0
       || fseeko (output, 0, SEEK_SET) != 0)
     {
       set_error (writer, "sorted spatial geometry is incomplete");
@@ -10985,6 +11231,7 @@ merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
   success = 1;
 
 done:
+  free (output_records);
   free (heap);
   free (runs);
   return success;
@@ -10994,7 +11241,8 @@ static int
 build_spatial_segment_store (CacheWriter *writer, const Dwg_Data *dwg,
                              const CacheTables *tables,
                              OverviewPlan *overview, uint64_t total,
-                             SpatialSegmentStore *store)
+                             SpatialSegmentStore *store,
+                             LibreDwgSceneCachePerformance *performance)
 {
   SpatialSortBuilder builder;
   FILE *runs_file = NULL;
@@ -11003,6 +11251,9 @@ build_spatial_segment_store (CacheWriter *writer, const Dwg_Data *dwg,
   uint64_t run_capacity
       = total / SPATIAL_SORT_RUN_SEGMENTS
         + (total % SPATIAL_SORT_RUN_SEGMENTS != 0);
+  uint64_t collect_started = 0;
+  uint64_t collect_total = 0;
+  uint64_t merge_started = 0;
   int success = 0;
   memset (&builder, 0, sizeof (builder));
   memset (store, 0, sizeof (*store));
@@ -11020,12 +11271,17 @@ build_spatial_segment_store (CacheWriter *writer, const Dwg_Data *dwg,
   sorted_file = open_spatial_temp_file (writer);
   if (!sorted_file)
     goto done;
-  builder.buffer = (SpatialSegmentRecord *)malloc (
-      SPATIAL_SORT_RUN_SEGMENTS * sizeof (SpatialSegmentRecord));
+  builder.worker_count = performance->worker_count;
+  if (!builder.worker_count
+      || builder.worker_count > MAX_CONVERSION_WORKERS)
+    builder.worker_count = 1;
+  builder.buffers = (SpatialSegmentRecord *)malloc (
+      (size_t)builder.worker_count * SPATIAL_SORT_RUN_SEGMENTS
+      * sizeof (SpatialSegmentRecord));
   builder.runs
       = (SpatialSortRun *)calloc ((size_t)run_capacity,
                                  sizeof (SpatialSortRun));
-  if (!builder.buffer || !builder.runs)
+  if (!builder.buffers || !builder.runs)
     {
       if (!writer->failed)
         set_error (writer, "out of memory while preparing spatial sort");
@@ -11035,22 +11291,42 @@ build_spatial_segment_store (CacheWriter *writer, const Dwg_Data *dwg,
   builder.overview = overview;
   builder.file = runs_file;
   builder.run_capacity = (size_t)run_capacity;
+  collect_started = monotonic_nanoseconds ();
   if (!iterate_gpu_segments (dwg, tables, NULL, spatial_sort_consume,
                              &builder, &selected, NULL, NULL)
-      || !flush_spatial_sort_run (&builder)
+      || !queue_spatial_sort_run (&builder)
+      || !flush_spatial_sort_batch (&builder)
       || selected != total || builder.records_written != total
+      || builder.records_scheduled != total
       || fflush (runs_file) != 0)
     {
       if (!writer->failed)
         set_error (writer, "cannot prepare complete spatial geometry");
       goto done;
     }
-  free (builder.buffer);
-  builder.buffer = NULL;
+  collect_total = elapsed_nanoseconds (collect_started);
+  performance->spatial_sort_ms
+      = milliseconds_from_nanoseconds (builder.sort_nanoseconds);
+  performance->spatial_run_write_ms
+      = milliseconds_from_nanoseconds (builder.write_nanoseconds);
+  if (collect_total >= builder.sort_nanoseconds
+                          + builder.write_nanoseconds)
+    performance->spatial_collect_ms = milliseconds_from_nanoseconds (
+        collect_total - builder.sort_nanoseconds
+        - builder.write_nanoseconds);
+  performance->parallel_sort_workers
+      = builder.parallel_sort_workers
+            ? builder.parallel_sort_workers
+            : 1u;
+  free (builder.buffers);
+  builder.buffers = NULL;
+  merge_started = monotonic_nanoseconds ();
   if (!merge_spatial_sort_runs (
           writer, runs_file, builder.runs, builder.run_count,
           sorted_file, total))
     goto done;
+  performance->spatial_merge_ms = milliseconds_from_nanoseconds (
+      elapsed_nanoseconds (merge_started));
   store->file = sorted_file;
   store->count = total;
   sorted_file = NULL;
@@ -11058,7 +11334,7 @@ build_spatial_segment_store (CacheWriter *writer, const Dwg_Data *dwg,
 
 done:
   free (builder.runs);
-  free (builder.buffer);
+  free (builder.buffers);
   if (sorted_file)
     fclose (sorted_file);
   if (runs_file)
@@ -11199,16 +11475,11 @@ write_batch_record (BatchDirectoryBuilder *builder)
   return 1;
 }
 
-static int
-batch_directory_consume (void *context, const LineSegment *segment)
+static void
+include_batch_segment (BatchDirectoryBuilder *builder,
+                       const LineSegment *segment)
 {
-  BatchDirectoryBuilder *builder = (BatchDirectoryBuilder *)context;
   size_t axis;
-  if (builder->has_group
-      && (builder->current_group != segment->group
-          || builder->count == GPU_BATCH_SEGMENTS)
-      && !write_batch_record (builder))
-    return 0;
   if (!builder->has_group)
     {
       builder->current_group = segment->group;
@@ -11236,94 +11507,17 @@ batch_directory_consume (void *context, const LineSegment *segment)
   if (segment->approximated_curve)
     builder->batch_flags |= GPU_BATCH_FLAG_APPROXIMATED_CURVE;
   builder->count++;
-  return 1;
 }
 
-static int
-write_batch_pass (CacheWriter *writer, const Dwg_Data *dwg,
-                  const CacheTables *tables,
-                  LibreDwgGpuLineSummary *summary, OverviewPlan *overview,
-                  SpatialSegmentStore *spatial,
-                  uint16_t lod_level, int separate_overview,
-                  uint64_t *selected)
-{
-  BatchDirectoryBuilder builder;
-  memset (&builder, 0, sizeof (builder));
-  builder.writer = writer;
-  builder.summary = summary;
-  builder.lod_level = lod_level;
-  builder.separate_overview = separate_overview;
-  builder.first_vertex = summary->vertices;
-  if (!(spatial
-            ? iterate_spatial_segment_store (
-                  writer, spatial, batch_directory_consume, &builder,
-                  selected)
-            : iterate_gpu_segments (
-                  dwg, tables, overview, batch_directory_consume, &builder,
-                  selected, NULL, NULL))
-      || !write_batch_record (&builder))
-    return 0;
-  summary->vertices = builder.first_vertex;
-  return 1;
-}
-
-static int
-write_gpu_batch_section (CacheWriter *writer, const Dwg_Data *dwg,
-                         const CacheTables *tables,
-                         LibreDwgGpuLineSummary *summary,
-                         OverviewPlan *overview,
-                         SpatialSegmentStore *spatial, SectionEntry *entry,
-                         int overview_only, int *separate_overview)
-{
-  uint64_t offset;
-  uint64_t total
-      = summary->model_segments + summary->block_segments;
-  uint64_t selected = 0;
-  uint64_t before_batches;
-  if (!align_writer (writer, &offset))
-    return 0;
-  *separate_overview = total > SCENE_OVERVIEW_SEGMENTS;
-  if (*separate_overview && !overview_only
-      && (!spatial || !spatial->file || spatial->count != total))
-    {
-      set_error (writer, "sorted spatial geometry count is inconsistent");
-      return 0;
-    }
-  before_batches = summary->batches;
-  if (*separate_overview)
-    {
-      if (!write_batch_pass (writer, dwg, tables, summary, overview, NULL,
-                             0, 1, &selected))
-        return 0;
-      summary->overview_segments = selected;
-      if (!overview_only
-          && !write_batch_pass (writer, dwg, tables, summary, NULL, spatial,
-                                1, 1, NULL))
-        return 0;
-    }
-  else
-    {
-      summary->overview_segments = total;
-      if (!write_batch_pass (writer, dwg, tables, summary, NULL, NULL,
-                             0, 0, NULL))
-        return 0;
-    }
-  return finish_fixed_section (
-      writer, entry, SECTION_GPU_LINE_BATCHES, GPU_LINE_BATCH_RECORD_SIZE,
-      "gpu_line_batches", offset, summary->batches - before_batches);
-}
-
-static int
-write_gpu_vertex (CacheWriter *writer, const double point[3],
-                  const double origin[3], const LineSegment *segment)
+static uint32_t
+gpu_vertex_style (const LineSegment *segment)
 {
   static const int16_t line_weights[] = {
     -3, -2, -1, 0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40,
     50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211
   };
-  uint32_t style = 0;
   size_t line_weight_index;
-  size_t axis;
+  uint32_t style;
   for (line_weight_index = 0;
        line_weight_index
        < sizeof (line_weights) / sizeof (line_weights[0]);
@@ -11337,169 +11531,609 @@ write_gpu_vertex (CacheWriter *writer, const double point[3],
   style
       |= ((uint32_t)segment->linetype_code & GPU_STYLE_LINETYPE_MASK)
          << GPU_STYLE_LINETYPE_SHIFT;
-  for (axis = 0; axis < 3; axis++)
-    {
-      double relative = point[axis] - origin[axis];
-      float encoded = (float)relative;
-      if (!isfinite (encoded))
-        {
-          set_error (writer, "GPU vertex exceeds f32 range");
-          return 0;
-        }
-      if (!write_f32 (writer, encoded))
-        return 0;
-    }
   if (segment->flags & 1u)
     style |= GPU_STYLE_INVISIBLE;
   style |= (uint32_t)segment->source_kind
            << GPU_STYLE_SOURCE_KIND_SHIFT;
   if (segment->approximated_curve)
     style |= GPU_STYLE_APPROXIMATED_CURVE;
-  return write_u32 (writer, segment->layer_index)
-         && write_u32 (writer, segment->color)
-         && write_u32 (writer, (uint32_t)segment->handle)
-         && write_u32 (writer, (uint32_t)(segment->handle >> 32))
-         && write_u32 (writer, style)
-         && write_f32 (
-             writer,
-             (float)(point == segment->start ? segment->pattern_start
-                                             : segment->pattern_end));
+  return style;
 }
 
 static int
-flush_vertex_batch (VertexBuilder *builder)
+encode_gpu_vertex (CacheWriter *writer, uint8_t *record,
+                   const double point[3], const double origin[3],
+                   const LineSegment *segment, uint32_t style,
+                   double pattern)
 {
-  double min[3];
-  double max[3];
-  double origin[3];
-  uint32_t i;
   size_t axis;
-  if (!builder->count)
+  for (axis = 0; axis < 3; axis++)
+    {
+      float encoded = (float)(point[axis] - origin[axis]);
+      if (!isfinite (encoded))
+        {
+          set_error (writer, "GPU vertex exceeds f32 range");
+          return 0;
+        }
+      store_f32_le (record + axis * 4u, encoded);
+    }
+  store_u32_le (record + 12u, segment->layer_index);
+  store_u32_le (record + 16u, segment->color);
+  store_u32_le (record + 20u, (uint32_t)segment->handle);
+  store_u32_le (record + 24u, (uint32_t)(segment->handle >> 32));
+  store_u32_le (record + 28u, style);
+  store_f32_le (record + 32u, (float)pattern);
+  return 1;
+}
+
+static int
+flush_gpu_section_batch (GpuSectionBuilder *builder)
+{
+  BatchDirectoryBuilder *batches = &builder->batches;
+  double origin[3];
+  uint32_t index;
+  size_t axis;
+  size_t byte_length;
+  if (!batches->count)
     return 1;
   for (axis = 0; axis < 3; axis++)
+    origin[axis]
+        = batches->min[axis] * 0.5 + batches->max[axis] * 0.5;
+  for (index = 0; index < batches->count; index++)
     {
-      min[axis] = fmin (builder->segments[0].start[axis],
-                        builder->segments[0].end[axis]);
-      max[axis] = fmax (builder->segments[0].start[axis],
-                        builder->segments[0].end[axis]);
-    }
-  for (i = 1; i < builder->count; i++)
-    {
-      for (axis = 0; axis < 3; axis++)
-        {
-          min[axis]
-              = fmin (min[axis],
-                      fmin (builder->segments[i].start[axis],
-                            builder->segments[i].end[axis]));
-          max[axis]
-              = fmax (max[axis],
-                      fmax (builder->segments[i].start[axis],
-                            builder->segments[i].end[axis]));
-        }
-    }
-  for (axis = 0; axis < 3; axis++)
-    origin[axis] = min[axis] * 0.5 + max[axis] * 0.5;
-  for (i = 0; i < builder->count; i++)
-    {
-      if (!write_gpu_vertex (builder->writer, builder->segments[i].start,
-                             origin, &builder->segments[i])
-          || !write_gpu_vertex (builder->writer, builder->segments[i].end,
-                                origin, &builder->segments[i]))
+      const LineSegment *segment = &builder->segments[index];
+      uint8_t *start
+          = builder->vertex_bytes
+            + (size_t)index * 2u * GPU_LINE_VERTEX_RECORD_SIZE;
+      uint8_t *end = start + GPU_LINE_VERTEX_RECORD_SIZE;
+      uint32_t style = gpu_vertex_style (segment);
+      if (!encode_gpu_vertex (
+              batches->writer, start, segment->start, origin,
+              segment, style, segment->pattern_start)
+          || !encode_gpu_vertex (
+              batches->writer, end, segment->end, origin,
+              segment, style, segment->pattern_end))
         return 0;
-      builder->vertices += 2;
     }
-  builder->count = 0;
-  builder->has_group = 0;
-  return 1;
-}
-
-static int
-vertex_consume (void *context, const LineSegment *segment)
-{
-  VertexBuilder *builder = (VertexBuilder *)context;
-  if (builder->has_group
-      && (builder->current_group != segment->group
-          || builder->count == GPU_BATCH_SEGMENTS)
-      && !flush_vertex_batch (builder))
-    return 0;
-  if (!builder->has_group)
+  byte_length = (size_t)batches->count * 2u
+                * GPU_LINE_VERTEX_RECORD_SIZE;
+  if (!write_bytes (
+          builder->vertex_writer, builder->vertex_bytes, byte_length))
     {
-      builder->current_group = segment->group;
-      builder->has_group = 1;
+      if (!batches->writer->failed)
+        set_error (batches->writer,
+                   "cannot stage packed GPU line vertices");
+      return 0;
     }
-  builder->segments[builder->count++] = *segment;
+  builder->vertices += (uint64_t)batches->count * 2u;
+  return write_batch_record (batches);
+}
+
+static int
+gpu_section_consume (void *context, const LineSegment *segment)
+{
+  GpuSectionBuilder *builder = (GpuSectionBuilder *)context;
+  BatchDirectoryBuilder *batches = &builder->batches;
+  if (batches->has_group
+      && (batches->current_group != segment->group
+          || batches->count == GPU_BATCH_SEGMENTS)
+      && !flush_gpu_section_batch (builder))
+    return 0;
+  builder->segments[batches->count] = *segment;
+  include_batch_segment (batches, segment);
   return 1;
 }
 
 static int
-write_vertex_pass (CacheWriter *writer, const Dwg_Data *dwg,
-                   const CacheTables *tables, OverviewPlan *overview,
-                   SpatialSegmentStore *spatial,
-                   uint64_t *vertices)
+write_gpu_pass (CacheWriter *writer, CacheWriter *vertex_writer,
+                const Dwg_Data *dwg, const CacheTables *tables,
+                LibreDwgGpuLineSummary *summary,
+                OverviewPlan *overview, SpatialSegmentStore *spatial,
+                uint16_t lod_level, int separate_overview,
+                uint64_t *selected)
 {
-  VertexBuilder builder;
+  GpuSectionBuilder builder;
+  uint64_t first_vertex = summary->vertices;
+  int success = 0;
   memset (&builder, 0, sizeof (builder));
-  builder.writer = writer;
+  builder.batches.writer = writer;
+  builder.batches.summary = summary;
+  builder.batches.lod_level = lod_level;
+  builder.batches.separate_overview = separate_overview;
+  builder.batches.first_vertex = first_vertex;
+  builder.vertex_writer = vertex_writer;
   builder.segments
       = (LineSegment *)malloc (GPU_BATCH_SEGMENTS * sizeof (LineSegment));
-  if (!builder.segments)
+  builder.vertex_bytes = (uint8_t *)malloc (
+      GPU_BATCH_SEGMENTS * 2u * GPU_LINE_VERTEX_RECORD_SIZE);
+  if (!builder.segments || !builder.vertex_bytes)
     {
-      set_error (writer, "out of memory while writing GPU vertices");
-      return 0;
+      set_error (writer, "out of memory while writing GPU cache");
+      goto done;
     }
   if (!(spatial
             ? iterate_spatial_segment_store (
-                  writer, spatial, vertex_consume, &builder, NULL)
+                  writer, spatial, gpu_section_consume, &builder, selected)
             : iterate_gpu_segments (
-                  dwg, tables, overview, vertex_consume, &builder, NULL,
-                  NULL, NULL))
-      || !flush_vertex_batch (&builder))
+                  dwg, tables, overview, gpu_section_consume, &builder,
+                  selected, NULL, NULL))
+      || !flush_gpu_section_batch (&builder))
+    goto done;
+  if (builder.batches.first_vertex < first_vertex
+      || builder.vertices
+             != builder.batches.first_vertex - first_vertex)
     {
-      free (builder.segments);
-      return 0;
+      set_error (writer, "GPU batch and vertex counts differ");
+      goto done;
     }
-  *vertices += builder.vertices;
+  summary->vertices = builder.batches.first_vertex;
+  success = 1;
+
+done:
+  free (builder.vertex_bytes);
   free (builder.segments);
-  return 1;
+  return success;
 }
 
 static int
-write_gpu_vertex_section (CacheWriter *writer, const Dwg_Data *dwg,
-                          const CacheTables *tables,
-                          LibreDwgGpuLineSummary *summary,
-                          OverviewPlan *overview,
-                          SpatialSegmentStore *spatial, SectionEntry *entry,
-                          int separate_overview, int overview_only)
+write_gpu_sections (CacheWriter *writer, const Dwg_Data *dwg,
+                    const CacheTables *tables,
+                    LibreDwgGpuLineSummary *summary,
+                    OverviewPlan *overview,
+                    SpatialSegmentStore *spatial,
+                    SectionEntry *batch_entry,
+                    SectionEntry *vertex_entry, int overview_only)
 {
-  uint64_t offset;
-  uint64_t vertices = 0;
-  uint64_t expected = summary->vertices;
-  if (!align_writer (writer, &offset))
-    return 0;
-  if (separate_overview
-      && !write_vertex_pass (
-          writer, dwg, tables, overview, NULL, &vertices))
-    return 0;
-  if ((!separate_overview || !overview_only)
-      && !write_vertex_pass (
-          writer, dwg, tables, NULL,
-          separate_overview ? spatial : NULL, &vertices))
-    return 0;
-  if (vertices != expected)
+  CacheWriter vertex_writer;
+  FILE *vertex_file = NULL;
+  uint8_t copy_buffer[64u * 1024u];
+  char vertex_error[160];
+  uint64_t batch_offset;
+  uint64_t vertex_offset;
+  uint64_t staged_bytes;
+  uint64_t remaining;
+  uint64_t selected = 0;
+  uint64_t before_batches = summary->batches;
+  uint64_t total
+      = summary->model_segments + summary->block_segments;
+  int separate_overview = total > SCENE_OVERVIEW_SEGMENTS;
+  int success = 0;
+  memset (&vertex_writer, 0, sizeof (vertex_writer));
+  memset (vertex_error, 0, sizeof (vertex_error));
+  if (separate_overview && !overview_only
+      && (!spatial || !spatial->file || spatial->count != total))
     {
-      set_error (writer, "GPU batch and vertex counts differ");
+      set_error (writer, "sorted spatial geometry count is inconsistent");
       return 0;
     }
+  vertex_file = open_spatial_temp_file (writer);
+  if (!vertex_file)
+    return 0;
+  vertex_writer.file = vertex_file;
+  vertex_writer.error = vertex_error;
+  vertex_writer.error_size = sizeof (vertex_error);
+  if (!align_writer (writer, &batch_offset))
+    goto done;
+  if (separate_overview)
+    {
+      if (!write_gpu_pass (
+              writer, &vertex_writer, dwg, tables, summary, overview,
+              NULL, 0, 1, &selected))
+        goto done;
+      summary->overview_segments = selected;
+      if (!overview_only
+          && !write_gpu_pass (
+              writer, &vertex_writer, dwg, tables, summary, NULL,
+              spatial, 1, 1, NULL))
+        goto done;
+    }
+  else
+    {
+      summary->overview_segments = total;
+      if (!write_gpu_pass (
+              writer, &vertex_writer, dwg, tables, summary, NULL,
+              NULL, 0, 0, NULL))
+        goto done;
+    }
+  if (!finish_fixed_section (
+          writer, batch_entry, SECTION_GPU_LINE_BATCHES,
+          GPU_LINE_BATCH_RECORD_SIZE, "gpu_line_batches", batch_offset,
+          summary->batches - before_batches)
+      || !position (&vertex_writer, &staged_bytes)
+      || staged_bytes
+             != summary->vertices * GPU_LINE_VERTEX_RECORD_SIZE
+      || fflush (vertex_file) != 0
+      || fseeko (vertex_file, 0, SEEK_SET) != 0
+      || !align_writer (writer, &vertex_offset))
+    {
+      if (!writer->failed)
+        set_error (writer, "packed GPU vertex staging is incomplete");
+      goto done;
+    }
+  remaining = staged_bytes;
+  while (remaining)
+    {
+      size_t requested
+          = remaining < sizeof (copy_buffer)
+                ? (size_t)remaining
+                : sizeof (copy_buffer);
+      if (fread (copy_buffer, 1, requested, vertex_file) != requested
+          || !write_bytes (writer, copy_buffer, requested))
+        {
+          set_error (writer, "cannot concatenate packed GPU vertices");
+          goto done;
+        }
+      remaining -= requested;
+    }
+  if (!finish_fixed_section (
+          writer, vertex_entry, SECTION_GPU_LINE_VERTICES,
+          GPU_LINE_VERTEX_RECORD_SIZE, "gpu_line_vertices", vertex_offset,
+          summary->vertices))
+    goto done;
   summary->cached_vertex_bytes
-      = vertices * GPU_LINE_VERTEX_RECORD_SIZE;
+      = summary->vertices * GPU_LINE_VERTEX_RECORD_SIZE;
   summary->first_frame_vertex_bytes
       = summary->overview_segments * 2u * GPU_LINE_VERTEX_RECORD_SIZE;
   summary->full_detail_vertex_bytes
       = (summary->model_segments + summary->block_segments) * 2u
         * GPU_LINE_VERTEX_RECORD_SIZE;
-  return finish_fixed_section (
-      writer, entry, SECTION_GPU_LINE_VERTICES, GPU_LINE_VERTEX_RECORD_SIZE,
-      "gpu_line_vertices", offset, vertices);
+  success = 1;
+
+done:
+  if (!success && vertex_writer.failed && !writer->failed)
+    set_error (writer, vertex_error[0]
+                           ? vertex_error
+                           : "cannot stage packed GPU vertices");
+  if (vertex_file)
+    fclose (vertex_file);
+  return success;
+}
+
+#define SECTION_GROUP_COUNT 7u
+
+typedef struct
+{
+  size_t group;
+  FILE *file;
+  Dwg_Data *dwg;
+  const CacheTables *tables;
+  const LibreDwgPrimitiveCounts *counts;
+  LibreDwgGpuLineSummary *gpu_lines;
+  LibreDwgHatchFillSummary *hatch_fills;
+  OverviewPlan *overview;
+  SpatialSegmentStore *spatial;
+  SectionEntry *sections;
+  uint32_t source_version;
+  uint32_t wipeout_frame;
+  uint64_t byte_length;
+  uint64_t elapsed;
+  char error[160];
+  int success;
+} SectionGroupTask;
+
+typedef struct
+{
+  SectionGroupTask *tasks;
+  size_t count;
+  atomic_size_t next;
+} SectionGroupQueue;
+
+static void
+write_section_group (SectionGroupTask *task)
+{
+  CacheWriter writer;
+  uint64_t started = monotonic_nanoseconds ();
+  int success = 0;
+  memset (&writer, 0, sizeof (writer));
+  writer.file = task->file;
+  writer.error = task->error;
+  writer.error_size = sizeof (task->error);
+  switch (task->group)
+    {
+    case 0:
+      success
+          = write_drawing_section (
+                &writer, task->dwg, task->counts,
+                task->source_version, task->wipeout_frame,
+                &task->sections[0])
+            && write_layer_section (
+                &writer, task->tables, &task->sections[1])
+            && write_block_section (
+                &writer, task->tables, &task->sections[2])
+            && write_text_style_section (
+                &writer, task->tables, &task->sections[3]);
+      break;
+    case 1:
+      success
+          = write_line_section (
+                &writer, task->dwg, task->tables, &task->sections[4])
+            && write_arc_section (
+                &writer, task->dwg, task->tables, &task->sections[5])
+            && write_circle_section (
+                &writer, task->dwg, task->tables, &task->sections[6])
+            && write_insert_section (
+                &writer, task->dwg, task->tables, &task->sections[7])
+            && write_polyline_header_section (
+                &writer, task->dwg, task->tables, &task->sections[8])
+            && write_polyline_vertex_section (
+                &writer, task->dwg, &task->sections[9]);
+      break;
+    case 2:
+      success
+          = write_ellipse_section (
+                &writer, task->dwg, task->tables, &task->sections[10])
+            && write_spline_header_section (
+                &writer, task->dwg, task->tables, &task->sections[11])
+            && write_spline_knot_section (
+                &writer, task->dwg, &task->sections[12])
+            && write_spline_weight_section (
+                &writer, task->dwg, &task->sections[13])
+            && write_spline_control_point_section (
+                &writer, task->dwg, &task->sections[14])
+            && write_spline_fit_point_section (
+                &writer, task->dwg, &task->sections[15])
+            && write_text_entity_section (
+                &writer, task->dwg, task->tables, &task->sections[16])
+            && write_text_column_height_section (
+                &writer, task->dwg, &task->sections[17]);
+      break;
+    case 3:
+      success
+          = write_gpu_sections (
+                &writer, task->dwg, task->tables, task->gpu_lines,
+                task->overview, task->spatial, &task->sections[18],
+                &task->sections[19], 0);
+      break;
+    case 4:
+      success
+          = write_hatch_entity_section (
+                &writer, task->dwg, task->tables, task->counts,
+                task->hatch_fills, &task->sections[20])
+            && write_hatch_loop_section (
+                &writer, task->dwg, &task->sections[21])
+            && write_hatch_vertex_section (
+                &writer, task->dwg, &task->sections[22])
+            && write_hatch_gradient_color_section (
+                &writer, task->dwg, &task->sections[23])
+            && write_hatch_seed_point_section (
+                &writer, task->dwg, &task->sections[24])
+            && write_hatch_pattern_line_section (
+                &writer, task->dwg, &task->sections[25])
+            && write_hatch_pattern_dash_section (
+                &writer, task->dwg, &task->sections[26]);
+      break;
+    case 5:
+      success
+          = write_point_entity_section (
+                &writer, task->dwg, task->tables, &task->sections[27])
+            && write_solid_entity_section (
+                &writer, task->dwg, task->tables, &task->sections[28])
+            && write_face_entity_section (
+                &writer, task->dwg, task->tables, &task->sections[29])
+            && write_wipeout_entity_section (
+                &writer, task->dwg, task->tables, &task->sections[30])
+            && write_wipeout_clip_vertex_section (
+                &writer, task->dwg, &task->sections[31])
+            && write_draw_order_table_section (
+                &writer, task->dwg, &task->sections[32])
+            && write_draw_order_entry_section (
+                &writer, task->dwg, &task->sections[33])
+            && write_insert_clip_section (
+                &writer, task->dwg, &task->sections[34])
+            && write_insert_clip_vertex_section (
+                &writer, task->dwg, &task->sections[35]);
+      break;
+    case 6:
+      success
+          = write_linetype_section (
+                &writer, task->tables, &task->sections[36])
+            && write_linetype_dash_section (
+                &writer, task->dwg, task->tables, &task->sections[37])
+            && write_layout_section (
+                &writer, task->dwg, task->tables, &task->sections[38])
+            && write_viewport_section (
+                &writer, task->dwg, task->tables, &task->sections[39])
+            && write_viewport_frozen_layer_section (
+                &writer, task->dwg, task->tables, &task->sections[40])
+            && write_viewport_clip_vertex_section (
+                &writer, task->dwg, task->tables, &task->sections[41])
+            && write_image_entity_section (
+                &writer, task->dwg, task->tables, &task->sections[42])
+            && write_image_clip_vertex_section (
+                &writer, task->dwg, &task->sections[43])
+            && write_text_annotation_context_section (
+                &writer, task->dwg, &task->sections[44])
+            && write_text_annotation_column_height_section (
+                &writer, task->dwg, &task->sections[45])
+            && write_viewport_layer_override_section (
+                &writer, task->dwg, task->tables, &task->sections[46]);
+      break;
+    default:
+      set_error (&writer, "scene-cache section group is invalid");
+      break;
+    }
+  if (success
+      && (!position (&writer, &task->byte_length)
+          || fflush (task->file) != 0))
+    success = 0;
+  if (!success && !writer.failed)
+    set_error (&writer, "cannot write scene-cache section group");
+  task->success = success;
+  task->elapsed = elapsed_nanoseconds (started);
+}
+
+static void
+consume_section_group_queue (SectionGroupQueue *queue)
+{
+  for (;;)
+    {
+      size_t index = atomic_fetch_add_explicit (
+          &queue->next, 1u, memory_order_relaxed);
+      if (index >= queue->count)
+        return;
+      write_section_group (&queue->tasks[index]);
+    }
+}
+
+#if defined(_WIN32)
+static unsigned __stdcall
+write_section_group_thread (void *context)
+{
+  consume_section_group_queue ((SectionGroupQueue *)context);
+  return 0;
+}
+#elif !defined(__EMSCRIPTEN__)
+static void *
+write_section_group_thread (void *context)
+{
+  consume_section_group_queue ((SectionGroupQueue *)context);
+  return NULL;
+}
+#endif
+
+static uint32_t
+run_section_group_queue (SectionGroupQueue *queue, uint32_t worker_count)
+{
+  size_t launched = 0;
+  size_t desired
+      = worker_count < queue->count ? worker_count : queue->count;
+  size_t index;
+  if (desired < 1)
+    desired = 1;
+#if defined(_WIN32)
+  {
+    HANDLE threads[SECTION_GROUP_COUNT - 1u];
+    for (index = 0; index + 1u < desired; index++)
+      {
+        uintptr_t thread = _beginthreadex (
+            NULL, 0, write_section_group_thread, queue, 0, NULL);
+        if (!thread)
+          break;
+        threads[launched++] = (HANDLE)thread;
+      }
+    consume_section_group_queue (queue);
+    for (index = 0; index < launched; index++)
+      {
+        (void)WaitForSingleObject (threads[index], INFINITE);
+        (void)CloseHandle (threads[index]);
+      }
+  }
+#elif defined(__EMSCRIPTEN__)
+  consume_section_group_queue (queue);
+#else
+  {
+    pthread_t threads[SECTION_GROUP_COUNT - 1u];
+    for (index = 0; index + 1u < desired; index++)
+      {
+        if (pthread_create (&threads[launched], NULL,
+                            write_section_group_thread, queue)
+            != 0)
+          break;
+        launched++;
+      }
+    consume_section_group_queue (queue);
+    for (index = 0; index < launched; index++)
+      (void)pthread_join (threads[index], NULL);
+  }
+#endif
+  return (uint32_t)(launched + 1u);
+}
+
+static int
+write_section_groups (
+    CacheWriter *writer, Dwg_Data *dwg, const CacheTables *tables,
+    const LibreDwgPrimitiveCounts *counts, uint32_t source_version,
+    uint32_t wipeout_frame, LibreDwgGpuLineSummary *gpu_lines,
+    OverviewPlan *overview, SpatialSegmentStore *spatial,
+    LibreDwgHatchFillSummary *hatch_fills, SectionEntry *sections,
+    LibreDwgSceneCachePerformance *performance)
+{
+  static const size_t first_sections[SECTION_GROUP_COUNT]
+      = { 0, 4, 10, 18, 20, 27, 36 };
+  static const size_t last_sections[SECTION_GROUP_COUNT]
+      = { 3, 9, 17, 19, 26, 35, 46 };
+  SectionGroupTask tasks[SECTION_GROUP_COUNT];
+  SectionGroupQueue queue;
+  uint8_t copy_buffer[64u * 1024u];
+  size_t group;
+  int success = 0;
+  memset (tasks, 0, sizeof (tasks));
+  for (group = 0; group < SECTION_GROUP_COUNT; group++)
+    {
+      tasks[group].group = group;
+      tasks[group].dwg = dwg;
+      tasks[group].tables = tables;
+      tasks[group].counts = counts;
+      tasks[group].gpu_lines = gpu_lines;
+      tasks[group].hatch_fills = hatch_fills;
+      tasks[group].overview = overview;
+      tasks[group].spatial = spatial;
+      tasks[group].sections = sections;
+      tasks[group].source_version = source_version;
+      tasks[group].wipeout_frame = wipeout_frame;
+      tasks[group].file = open_spatial_temp_file (writer);
+      if (!tasks[group].file)
+        goto done;
+    }
+  queue.tasks = tasks;
+  queue.count = SECTION_GROUP_COUNT;
+  atomic_init (&queue.next, 0u);
+  performance->parallel_section_workers = run_section_group_queue (
+      &queue, performance->worker_count);
+  for (group = 0; group < SECTION_GROUP_COUNT; group++)
+    {
+      uint64_t base;
+      uint64_t remaining;
+      size_t section;
+      performance->section_group_ms[group]
+          = milliseconds_from_nanoseconds (tasks[group].elapsed);
+      if (!tasks[group].success)
+        {
+          set_error (writer, tasks[group].error[0]
+                                 ? tasks[group].error
+                                 : "cannot write scene-cache section group");
+          goto done;
+        }
+      if (!align_writer (writer, &base)
+          || fseeko (tasks[group].file, 0, SEEK_SET) != 0)
+        {
+          set_error (writer, "cannot concatenate scene-cache sections");
+          goto done;
+        }
+      remaining = tasks[group].byte_length;
+      while (remaining)
+        {
+          size_t requested
+              = remaining < sizeof (copy_buffer)
+                    ? (size_t)remaining
+                    : sizeof (copy_buffer);
+          if (fread (copy_buffer, 1, requested, tasks[group].file)
+                  != requested
+              || !write_bytes (writer, copy_buffer, requested))
+            {
+              set_error (writer, "cannot concatenate scene-cache sections");
+              goto done;
+            }
+          remaining -= requested;
+        }
+      for (section = first_sections[group];
+           section <= last_sections[group]; section++)
+        {
+          if (sections[section].offset > UINT64_MAX - base)
+            {
+              set_error (writer, "scene-cache section offset overflow");
+              goto done;
+            }
+          sections[section].offset += base;
+        }
+    }
+  success = 1;
+
+done:
+  for (group = 0; group < SECTION_GROUP_COUNT; group++)
+    if (tasks[group].file)
+      fclose (tasks[group].file);
+  return success;
 }
 
 static int
@@ -11581,7 +12215,6 @@ write_scene_preview (
   LibreDwgGpuLineSummary preview_gpu_lines;
   uint64_t body_offset;
   uint64_t file_size;
-  int separate_overview;
   int descriptor = -1;
   FILE *file = NULL;
   size_t index;
@@ -11635,12 +12268,9 @@ write_scene_preview (
       goto done;
   if (!write_empty_string_section (&writer, &sections[16], 16)
       || !write_empty_fixed_section (&writer, &sections[17], 17)
-      || !write_gpu_batch_section (
+      || !write_gpu_sections (
           &writer, dwg, tables, &preview_gpu_lines, overview, NULL,
-          &sections[18], 1, &separate_overview)
-      || !write_gpu_vertex_section (
-          &writer, dwg, tables, &preview_gpu_lines, overview, NULL,
-          &sections[19], separate_overview, 1)
+          &sections[18], &sections[19], 1)
       || !write_empty_string_section (&writer, &sections[20], 20))
     goto done;
   for (index = 21; index <= 33; index++)
@@ -11725,8 +12355,8 @@ libredwg_write_scene_cache (
   uint64_t body_offset;
   uint64_t file_size;
   uint64_t gpu_segment_count;
+  uint64_t stage_started;
   uint32_t wipeout_frame;
-  int separate_overview;
   int descriptor = -1;
   FILE *file = NULL;
   size_t i;
@@ -11744,7 +12374,21 @@ libredwg_write_scene_cache (
     error_message[0] = '\0';
   writer.error = error_message;
   writer.error_size = error_message_size;
+  report->performance.worker_count = conversion_worker_count ();
+  report->performance.parallel_sort_workers = 1u;
+  report->performance.parallel_section_workers = 1u;
 
+  stage_started = monotonic_nanoseconds ();
+  dwg_resolve_objectrefs_silent (dwg);
+  if (dwg->dirty_refs)
+    {
+      set_error (&writer, "cannot freeze LibreDWG object references");
+      return 0;
+    }
+  report->performance.reference_resolution_ms
+      = milliseconds_from_nanoseconds (
+          elapsed_nanoseconds (stage_started));
+  stage_started = monotonic_nanoseconds ();
   if (!build_tables (dwg, &tables))
     {
       if (error_message && error_message_size)
@@ -11752,7 +12396,14 @@ libredwg_write_scene_cache (
                         "cannot prepare bounded scene-cache tables");
       return 0;
     }
+  report->performance.table_ms = milliseconds_from_nanoseconds (
+      elapsed_nanoseconds (stage_started));
+  stage_started = monotonic_nanoseconds ();
   counts = count_primitives (dwg, &tables);
+  report->performance.primitive_count_ms
+      = milliseconds_from_nanoseconds (
+          elapsed_nanoseconds (stage_started));
+  stage_started = monotonic_nanoseconds ();
   if (!read_drawing_wipeout_frame (&writer, dwg, &wipeout_frame))
     goto done;
   if (!initialize_overview_plan (&tables, &overview))
@@ -11776,6 +12427,8 @@ libredwg_write_scene_cache (
                         "cannot allocate bounded overview quotas");
       goto done;
     }
+  report->performance.gpu_count_ms = milliseconds_from_nanoseconds (
+      elapsed_nanoseconds (stage_started));
   if (UINT64_MAX - gpu_lines.model_segments < gpu_lines.block_segments)
     {
       set_error (&writer, "GPU segment count exceeds cache limits");
@@ -11784,6 +12437,7 @@ libredwg_write_scene_cache (
   if (preview_path && preview_path[0] && preview_ready_path
       && preview_ready_path[0])
     {
+      stage_started = monotonic_nanoseconds ();
       if (!write_scene_preview (
               dwg, preview_path, source_size, source_version,
               wipeout_frame, &tables, &counts, &gpu_lines, &overview,
@@ -11794,12 +12448,21 @@ libredwg_write_scene_cache (
           unlink (preview_ready_path);
           report->preview_size = 0;
         }
+      report->performance.preview_ms = milliseconds_from_nanoseconds (
+          elapsed_nanoseconds (stage_started));
     }
   gpu_segment_count = gpu_lines.model_segments + gpu_lines.block_segments;
-  if (gpu_segment_count > SCENE_OVERVIEW_SEGMENTS
-      && !build_spatial_segment_store (
-          &writer, dwg, &tables, &overview, gpu_segment_count, &spatial))
-    goto done;
+  if (gpu_segment_count > SCENE_OVERVIEW_SEGMENTS)
+    {
+      stage_started = monotonic_nanoseconds ();
+      if (!build_spatial_segment_store (
+              &writer, dwg, &tables, &overview, gpu_segment_count,
+              &spatial, &report->performance))
+        goto done;
+      report->performance.spatial_index_ms
+          = milliseconds_from_nanoseconds (
+              elapsed_nanoseconds (stage_started));
+    }
 
   descriptor
       = open (output_path,
@@ -11828,93 +12491,27 @@ libredwg_write_scene_cache (
       CACHE_HEADER_SIZE
           + (uint64_t)LIBREDWG_SCENE_SECTION_COUNT * DIRECTORY_ENTRY_SIZE,
       8);
-  if (!seek_to (&writer, body_offset)
-      || !write_drawing_section (
-          &writer, dwg, &counts, source_version, wipeout_frame,
-          &sections[0])
-      || !write_layer_section (&writer, &tables, &sections[1])
-      || !write_block_section (&writer, &tables, &sections[2])
-      || !write_text_style_section (&writer, &tables, &sections[3])
-      || !write_line_section (&writer, dwg, &tables, &sections[4])
-      || !write_arc_section (&writer, dwg, &tables, &sections[5])
-      || !write_circle_section (&writer, dwg, &tables, &sections[6])
-      || !write_insert_section (&writer, dwg, &tables, &sections[7])
-      || !write_polyline_header_section (&writer, dwg, &tables,
-                                         &sections[8])
-      || !write_polyline_vertex_section (&writer, dwg, &sections[9])
-      || !write_ellipse_section (&writer, dwg, &tables, &sections[10])
-      || !write_spline_header_section (&writer, dwg, &tables,
-                                       &sections[11])
-      || !write_spline_knot_section (&writer, dwg, &sections[12])
-      || !write_spline_weight_section (&writer, dwg, &sections[13])
-      || !write_spline_control_point_section (&writer, dwg,
-                                              &sections[14])
-      || !write_spline_fit_point_section (&writer, dwg,
-                                          &sections[15])
-      || !write_text_entity_section (&writer, dwg, &tables,
-                                     &sections[16])
-      || !write_text_column_height_section (&writer, dwg,
-                                            &sections[17])
-      || !write_gpu_batch_section (&writer, dwg, &tables, &gpu_lines,
-                                   &overview, &spatial, &sections[18],
-                                   0, &separate_overview)
-      || !write_gpu_vertex_section (&writer, dwg, &tables, &gpu_lines,
-                                    &overview, &spatial, &sections[19],
-                                    separate_overview, 0)
-      || !write_hatch_entity_section (
-          &writer, dwg, &tables, &counts, &hatch_fills,
-          &sections[20])
-      || !write_hatch_loop_section (&writer, dwg, &sections[21])
-      || !write_hatch_vertex_section (&writer, dwg, &sections[22])
-      || !write_hatch_gradient_color_section (
-          &writer, dwg, &sections[23])
-      || !write_hatch_seed_point_section (
-          &writer, dwg, &sections[24])
-      || !write_hatch_pattern_line_section (
-          &writer, dwg, &sections[25])
-      || !write_hatch_pattern_dash_section (
-          &writer, dwg, &sections[26])
-      || !write_point_entity_section (
-          &writer, dwg, &tables, &sections[27])
-      || !write_solid_entity_section (
-          &writer, dwg, &tables, &sections[28])
-      || !write_face_entity_section (
-          &writer, dwg, &tables, &sections[29])
-      || !write_wipeout_entity_section (
-          &writer, dwg, &tables, &sections[30])
-      || !write_wipeout_clip_vertex_section (
-          &writer, dwg, &sections[31])
-      || !write_draw_order_table_section (
-          &writer, dwg, &sections[32])
-      || !write_draw_order_entry_section (
-          &writer, dwg, &sections[33])
-      || !write_insert_clip_section (
-          &writer, dwg, &sections[34])
-      || !write_insert_clip_vertex_section (
-          &writer, dwg, &sections[35])
-      || !write_linetype_section (
-          &writer, &tables, &sections[36])
-      || !write_linetype_dash_section (
-          &writer, dwg, &tables, &sections[37])
-      || !write_layout_section (
-          &writer, dwg, &tables, &sections[38])
-      || !write_viewport_section (
-          &writer, dwg, &tables, &sections[39])
-      || !write_viewport_frozen_layer_section (
-          &writer, dwg, &tables, &sections[40])
-      || !write_viewport_clip_vertex_section (
-          &writer, dwg, &tables, &sections[41])
-      || !write_image_entity_section (
-          &writer, dwg, &tables, &sections[42])
-      || !write_image_clip_vertex_section (
-          &writer, dwg, &sections[43])
-      || !write_text_annotation_context_section (
-          &writer, dwg, &sections[44])
-      || !write_text_annotation_column_height_section (
-          &writer, dwg, &sections[45])
-      || !write_viewport_layer_override_section (
-          &writer, dwg, &tables, &sections[46])
-      || !position (&writer, &file_size)
+  if (!seek_to (&writer, body_offset))
+    {
+      if (!writer.failed)
+        set_error (&writer, "cannot initialize scene cache");
+      goto done;
+    }
+  stage_started = monotonic_nanoseconds ();
+  if (!write_section_groups (
+          &writer, dwg, &tables, &counts, source_version,
+          wipeout_frame, &gpu_lines, &overview, &spatial,
+          &hatch_fills, sections, &report->performance))
+    {
+      if (!writer.failed)
+        set_error (&writer, "cannot write scene-cache sections");
+      goto done;
+    }
+  report->performance.section_write_ms
+      = milliseconds_from_nanoseconds (
+          elapsed_nanoseconds (stage_started));
+  stage_started = monotonic_nanoseconds ();
+  if (!position (&writer, &file_size)
       || !write_header (
           &writer, file_size, source_size, source_version,
           (uint32_t)LIBREDWG_MAINTENANCE_VERSION (dwg), 0)
@@ -11932,6 +12529,8 @@ libredwg_write_scene_cache (
       goto done;
     }
   file = NULL;
+  report->performance.finalize_ms = milliseconds_from_nanoseconds (
+      elapsed_nanoseconds (stage_started));
   report->cache_size = file_size;
   report->coverage = counts;
   report->gpu_lines = gpu_lines;

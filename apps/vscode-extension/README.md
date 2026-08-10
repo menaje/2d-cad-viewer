@@ -8,7 +8,8 @@ drawings, Korean SHX/BigFont text, external references, and paper-space
 layouts. Your drawings and fonts stay on your computer.
 
 > This is an early public release. Editing and DWG saving are not available,
-> and the viewer currently supports Linux x64, macOS arm64, and Windows x64.
+> and the viewer currently supports Linux x64, macOS arm64, macOS Intel x64,
+> and Windows x64.
 
 ## Why we built DWG Viewer
 
@@ -53,6 +54,9 @@ of starting a separate task.
   next views, and save named view bookmarks.
 - The top-right and left tool shelves can independently remain icon-only or
   reveal every tool name together on hover or keyboard focus.
+- High-DPI interaction defaults to a hybrid strategy: it moves the completed
+  frame immediately, refreshes low-resolution geometry about every 80 ms to
+  cover newly exposed areas, and restores bounded detail after interaction.
 - In-viewer controls follow the VS Code environment language for English and
   Korean.
 
@@ -94,7 +98,7 @@ of starting a separate task.
 ### Requirements
 
 - VS Code 1.125 or newer
-- Linux x64, macOS arm64, or Windows x64
+- Linux x64, macOS arm64, macOS Intel x64, or Windows x64
 - The GPL LibreDWG Engine companion, installed automatically with DWG Viewer
 
 ### Installation
@@ -126,6 +130,13 @@ platform-specific commands, see the
 - **Find a tool:** hover or focus a shelf to expand all of its tool names.
 - **Choose compact menus:** set **Top Toolbar Labels** and **Left Toolbar
   Labels** under the DWG Viewer settings to `icons` or `hover` independently.
+- **Tune high-DPI rendering:** keep **Render Resolution** on `auto` to reuse a
+  bounded pixel budget with MSAA disabled, choose `performance` for the lowest
+  pixel budget, or `quality` for full redraw quality and MSAA.
+- **Choose interaction behavior:** keep **Interaction Rendering** on `hybrid`
+  for an immediate retained-frame response plus periodic live refreshes, use
+  `continuous` to redraw newly exposed areas on every movement frame, or use
+  `maximumPerformance` to defer live redraws until interaction stops.
 - **Manage layers:** open the left layer panel and search or change visibility.
 - **Inspect or measure:** choose a tool, then select points or objects in the
   drawing.
@@ -173,8 +184,8 @@ equally ranked files.
 ## Current limitations
 
 - Viewing is read-only; editing, overwriting, and Save As are not available.
-- Native companions are currently published for Linux x64, macOS arm64, and
-  Windows x64.
+- Native companions are currently published for Linux x64, macOS arm64,
+  macOS Intel x64, and Windows x64.
 - Embedded OLE content such as an Excel sheet is not rendered; its placement
   frame may still be shown.
 - External raster images currently support JPG/JPEG and PNG.

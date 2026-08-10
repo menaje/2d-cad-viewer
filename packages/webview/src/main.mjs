@@ -36,6 +36,8 @@ import {
   DRAW_ORDER_SUBDIVISIONS,
 } from "./mask-order.mjs";
 import { WebviewMemoryTelemetry } from "./memory-telemetry.mjs";
+import { normalizeInteractionRenderingMode } from "./interaction-rendering.mjs";
+import { normalizeRenderResolutionMode } from "./render-resolution.mjs";
 import { BlobRangeSource, TrackedRangeSource } from "./range-source.mjs";
 import {
   calculateRasterImageBounds,
@@ -155,6 +157,15 @@ applyMenuDisplaySettings({
   leftToolbarLabels: document.body.dataset.leftToolbarLabels,
 });
 
+let renderResolutionMode = normalizeRenderResolutionMode(
+  document.body.dataset.renderResolution,
+);
+document.body.dataset.renderResolution = renderResolutionMode;
+let interactionRenderingMode = normalizeInteractionRenderingMode(
+  document.body.dataset.interactionRendering,
+);
+document.body.dataset.interactionRendering = interactionRenderingMode;
+
 function setViewerToolMessage(element, key, values) {
   const message = t(key, values);
   const label = element?.querySelector(".viewer-tool-label");
@@ -183,6 +194,7 @@ const metrics = document.querySelector("#metrics");
 const canvas = document.querySelector("#drawing");
 const imageCanvas = document.querySelector("#image-overlay");
 const textCanvas = document.querySelector("#text-overlay");
+const interactionCanvas = document.querySelector("#interaction-frame");
 const reviewCanvas = document.querySelector("#review-overlay");
 const windowZoomGuide = document.querySelector("#window-zoom-guide");
 const reviewToolbar = document.querySelector("#review-toolbar");
@@ -6111,7 +6123,11 @@ async function openCache(source, workerSource, cacheSha256) {
   activeViewerRuntime = undefined;
   await previousRuntime?.dispose().catch(console.error);
   activeScene = undefined;
-  const renderer = new WebGlLineRenderer(canvas);
+  const renderer = new WebGlLineRenderer(canvas, {
+    renderResolutionMode,
+    interactionRenderingMode,
+    interactionCanvas,
+  });
   renderer.setWipeoutMasksVisible(activeWipeoutMasksVisible);
   let runtime;
   try {
@@ -6444,6 +6460,27 @@ if (vscodeApi) {
     const message = event.data;
     if (message?.type === "dwg-menu-display-settings/1") {
       applyMenuDisplaySettings(message);
+      return;
+    }
+    if (message?.type === "dwg-render-resolution/1") {
+      renderResolutionMode = normalizeRenderResolutionMode(message.mode);
+      document.body.dataset.renderResolution = renderResolutionMode;
+      activeScene?.renderer.setRenderResolutionMode(
+        renderResolutionMode,
+      );
+      activeInteraction?.refresh();
+      return;
+    }
+    if (message?.type === "dwg-interaction-rendering/1") {
+      interactionRenderingMode = normalizeInteractionRenderingMode(
+        message.mode,
+      );
+      document.body.dataset.interactionRendering =
+        interactionRenderingMode;
+      activeScene?.renderer.setInteractionRenderingMode(
+        interactionRenderingMode,
+      );
+      activeInteraction?.refresh();
       return;
     }
     if (message?.type === "dwg-export-save-result/1") {

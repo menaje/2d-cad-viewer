@@ -1,7 +1,7 @@
 {
   "schema": "dwg-native-document-adapter-compatibility/1",
   "status": "query-preview",
-  "asOf": "2026-08-04",
+  "asOf": "2026-08-10",
   "protocol": "dwg-native-document-adapter/0.1.0",
   "native": {
     "engine": "GNU LibreDWG",
@@ -95,6 +95,7 @@
     "qualifiedTargets": [
       "linux-x64",
       "darwin-arm64",
+      "darwin-x64",
       "win32-x64"
     ],
     "windows": "qualified",

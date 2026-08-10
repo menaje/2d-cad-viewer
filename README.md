@@ -8,7 +8,8 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 데 초점을 맞추고 있습니다.
 
 > 현재 버전은 초기 공개 버전입니다. 도면 편집이나 DWG 저장 기능은
-> 제공하지 않으며 Linux x64, macOS arm64, Windows x64를 지원합니다.
+> 제공하지 않으며 Linux x64, macOS arm64, macOS Intel x64, Windows x64를
+> 지원합니다.
 
 ## 주요 특징
 
@@ -35,6 +36,9 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 - 도면 전체를 한꺼번에 화면 메모리에 올리지 않고 현재 화면에 필요한
   형상과 이미지를 불러옵니다.
 - 확대가 멈추면 곡선과 패턴을 현재 배율에 맞게 더 정밀하게 표시합니다.
+- 고해상도 화면에서는 기본 `hybrid` 모드가 마지막 완성 프레임을 즉시
+  이동시키면서 약 80ms마다 저해상도 실제 화면으로 갱신합니다. 따라서
+  새로 드러난 영역을 채우면서 픽셀과 드로 호출 부담을 함께 줄입니다.
 - 편집기를 닫거나 변환을 취소하면 진행 중인 작업과 임시 자원을
   정리합니다.
 
@@ -84,7 +88,7 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 ### 요구 사항
 
 - VS Code 1.125 이상
-- Linux x64, macOS arm64 또는 Windows x64
+- Linux x64, macOS arm64, macOS Intel x64 또는 Windows x64
 - DWG Viewer 설치 시 함께 자동 설치되는 GPL LibreDWG Engine 동반 확장
 
 ### 설치
@@ -110,6 +114,11 @@ Marketplace에 연결할 수 없다면 GPL 동반 VSIX를 먼저 설치합니다
   옮기면 전체 메뉴명이 함께 펼쳐짐
 - **간략 메뉴 설정:** VS Code의 DWG Viewer 설정에서 **Top Toolbar
   Labels**와 **Left Toolbar Labels**를 각각 `icons` 또는 `hover`로 선택
+- **렌더 해상도:** **Render Resolution**을 `auto`(권장), `quality`,
+  `performance` 중에서 선택
+- **이동·확대 표시 방식:** **Interaction Rendering**을 `hybrid`(권장),
+  `continuous`(새 영역을 매 프레임 표시), `maximumPerformance`(멈출 때까지
+  완성 프레임만 이동) 중에서 선택
 - **레이어:** 왼쪽 레이어 패널에서 검색하고 표시 상태 변경
 - **객체 확인·측정:** 화면 가장자리의 도구 아이콘 선택 후 도면 클릭
 - **배치 전환:** 화면 아래쪽 배치 탭 사용

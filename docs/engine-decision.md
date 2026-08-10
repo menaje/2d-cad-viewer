@@ -296,13 +296,13 @@ The project therefore does not treat process isolation alone as a legal
 conclusion.
 
 The repository now has a deterministic GPL package builder and a public
-Linux x64/macOS arm64/Windows x64 release workflow. It requires a stripped,
+Linux x64/macOS arm64/macOS Intel x64/Windows x64 release workflow. It requires a stripped,
 statically linked adapter, validates the adapter's bounded doctor report,
 rejects dynamic LibreDWG dependencies and local build paths, and includes the
 exact LibreDWG archive, adapter source, build scripts, license texts, manifest
 and checksums. Corresponding source is therefore shipped in the same archive
 rather than delegated to an unpinned external URL. The workflow reproduces all
-three adapter archives and the VSIX, rejects a GPL adapter inside the VSIX,
+four adapter archives and the VSIX, rejects a GPL adapter inside the VSIX,
 emits combined checksums, and creates GitHub build-provenance attestations.
 Only a qualified merge through `dev` → `prerelease` or
 `prerelease` → `main` can publish the corresponding channel; the workflow
@@ -337,7 +337,7 @@ engineering distribution policy, not legal advice.
 - Keep the ACadSharp inspection adapter, package lock and parser preflight test;
   do not build an ACadSharp Scene Cache converter unless a future release
   materially changes the measured memory architecture.
-- Keep the source-complete GPL package and three-platform release workflow as the
+- Keep the source-complete GPL package and four-target release workflow as the
   issue #6 release boundary; use the reviewed checksum and build-provenance
   gates before publication.
 - Keep LibreDWG Native as the product default behind

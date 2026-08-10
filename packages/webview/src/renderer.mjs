@@ -55,6 +55,16 @@ import {
   isDwgRenderDeltaOwnerInvalidated,
   isDwgRenderDeltaSceneInvalidated,
 } from "./render-delta-dependency.mjs";
+import {
+  normalizeRenderResolutionMode,
+  renderAntialiasingForMode,
+  resolveRenderSurfaceSize,
+} from "./render-resolution.mjs";
+import {
+  HYBRID_INTERACTION_REFRESH_MS,
+  InteractionRenderingMode,
+  normalizeInteractionRenderingMode,
+} from "./interaction-rendering.mjs";
 
 const VERTEX_STRIDE = 36;
 const FILL_VERTEX_STRIDE = 32;
@@ -99,6 +109,11 @@ const RENDER_DELTA_PICK_STATUSES = new Set([
   "upsert",
   "tombstone",
 ]);
+
+function currentMilliseconds() {
+  const value = globalThis.performance?.now?.();
+  return Number.isFinite(value) ? value : Date.now();
+}
 const RENDER_DELTA_PICK_ASPECTS = new Set([
   "entity",
   "geometry",
@@ -1677,6 +1692,60 @@ function retainOverlayForCamera(
   return true;
 }
 
+function setCanvasHidden(canvas, hidden) {
+  const style = canvas?.style;
+  if (!style) {
+    return false;
+  }
+  style.opacity = hidden ? "0" : "";
+  return true;
+}
+
+function setInteractionCanvasActive(canvas, active) {
+  const style = canvas?.style;
+  if (!style) {
+    return false;
+  }
+  style.opacity = active ? "1" : "0";
+  return true;
+}
+
+function resetCanvasTransform(canvas) {
+  const style = canvas?.style;
+  if (!style) {
+    return false;
+  }
+  style.transform = "";
+  style.transformOrigin = "";
+  style.willChange = "";
+  return true;
+}
+
+function transformCanvasForCamera(canvas, anchor, camera) {
+  const style = canvas?.style;
+  if (
+    !style ||
+    !anchor ||
+    !camera ||
+    canvas.clientWidth <= 0 ||
+    canvas.clientHeight <= 0
+  ) {
+    return false;
+  }
+  const transform = overlayCameraTransform(
+    anchor,
+    camera,
+    canvas.clientWidth,
+    canvas.clientHeight,
+  );
+  style.transformOrigin = "0 0";
+  style.willChange = "transform";
+  style.transform =
+    `matrix(${transform.scaleX},0,0,${transform.scaleY},` +
+    `${transform.translateX},${transform.translateY})`;
+  return true;
+}
+
 function modelOwnerHandle(blocks) {
   const modelBlocks = blocks.filter(
     (block) => block.name.toUpperCase() === "*MODEL_SPACE",
@@ -2651,6 +2720,9 @@ export class WebGlLineRenderer {
         MAX_RENDER_DELTA_TRANSFORM_BYTES,
       maximumRenderDeltaStyleBytes =
         MAX_RENDER_DELTA_STYLE_BYTES,
+      renderResolutionMode = "auto",
+      interactionRenderingMode = "hybrid",
+      interactionCanvas = null,
     } = {},
   ) {
     if (
@@ -2671,9 +2743,16 @@ export class WebGlLineRenderer {
     ) {
       throw new RangeError("renderer byte budgets must be positive");
     }
+    const normalizedRenderResolutionMode =
+      normalizeRenderResolutionMode(renderResolutionMode);
+    const normalizedInteractionRenderingMode =
+      normalizeInteractionRenderingMode(interactionRenderingMode);
+    const renderAntialiasing = renderAntialiasingForMode(
+      normalizedRenderResolutionMode,
+    );
     const gl = canvas.getContext("webgl2", {
       alpha: true,
-      antialias: true,
+      antialias: renderAntialiasing,
       depth: true,
       preserveDrawingBuffer: false,
       powerPreference: "high-performance",
@@ -2683,6 +2762,19 @@ export class WebGlLineRenderer {
     }
     this.canvas = canvas;
     this.gl = gl;
+    this.renderResolutionMode = normalizedRenderResolutionMode;
+    this.renderAntialiasing = renderAntialiasing;
+    this.lastRenderSurface = null;
+    this.interactionRenderingMode =
+      normalizedInteractionRenderingMode;
+    this.interactionCanvas = interactionCanvas;
+    this.interactionFrameCamera = null;
+    this.interactionFrameAvailable = false;
+    this.interactionFrameMetrics = null;
+    this.interactionSequenceActive = false;
+    this.lastHybridRefreshAt = 0;
+    setInteractionCanvasActive(this.interactionCanvas, false);
+    resetCanvasTransform(this.interactionCanvas);
     this.program = createProgram(gl);
     this.fillProgram = createProgram(
       gl,
@@ -5692,35 +5784,206 @@ export class WebGlLineRenderer {
     return ranges;
   }
 
-  resize(targetSize = null) {
-    const ratio = Math.min(globalThis.devicePixelRatio ?? 1, 2);
-    const width = targetSize
-      ? targetSize.width
-      : Math.max(1, Math.round(this.canvas.clientWidth * ratio));
-    const height = targetSize
-      ? targetSize.height
-      : Math.max(1, Math.round(this.canvas.clientHeight * ratio));
-    if (
-      !Number.isSafeInteger(width) ||
-      width <= 0 ||
-      !Number.isSafeInteger(height) ||
-      height <= 0
-    ) {
-      throw new RangeError("render target size must use positive integers");
+  setRenderResolutionMode(mode) {
+    this.renderResolutionMode = normalizeRenderResolutionMode(mode);
+    return this.renderResolutionMode;
+  }
+
+  setInteractionRenderingMode(mode) {
+    const normalized = normalizeInteractionRenderingMode(mode);
+    if (normalized !== this.interactionRenderingMode) {
+      this.interactionRenderingMode = normalized;
+      this.interactionSequenceActive = false;
+      this.lastHybridRefreshAt = 0;
+      this.deactivateInteractionFrame();
     }
+    return this.interactionRenderingMode;
+  }
+
+  deactivateInteractionFrame() {
+    setInteractionCanvasActive(this.interactionCanvas, false);
+    resetCanvasTransform(this.interactionCanvas);
+    setCanvasHidden(this.canvas, false);
+    setCanvasHidden(this.imageOverlay?.canvas, false);
+    setCanvasHidden(this.textOverlay?.canvas, false);
+  }
+
+  captureInteractionFrame(camera, metrics) {
+    const target = this.interactionCanvas;
+    if (
+      !target ||
+      !target.style ||
+      target.clientWidth <= 0 ||
+      target.clientHeight <= 0
+    ) {
+      this.interactionFrameAvailable = false;
+      this.interactionFrameCamera = null;
+      return false;
+    }
+    const width = Math.max(1, Math.round(target.clientWidth));
+    const height = Math.max(1, Math.round(target.clientHeight));
+    try {
+      if (target.width !== width || target.height !== height) {
+        target.width = width;
+        target.height = height;
+      }
+      const context = target.getContext?.("2d", { alpha: true });
+      if (!context) {
+        this.interactionFrameAvailable = false;
+        this.interactionFrameCamera = null;
+        return false;
+      }
+      resetCanvasTransform(target);
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, width, height);
+      context.globalAlpha = 1;
+      context.globalCompositeOperation = "source-over";
+      context.filter = "none";
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      const draw = (source) => {
+        if (!source || source.width <= 0 || source.height <= 0) {
+          return;
+        }
+        context.drawImage(
+          source,
+          0,
+          0,
+          source.width,
+          source.height,
+          0,
+          0,
+          width,
+          height,
+        );
+      };
+      if (!metrics.orderedImageOverlayComposited) {
+        draw(this.imageOverlay?.canvas);
+      }
+      draw(this.canvas);
+      if (!metrics.orderedTextOverlayComposited) {
+        draw(this.textOverlay?.canvas);
+      }
+      this.interactionFrameCamera = camera;
+      this.interactionFrameAvailable = true;
+      setInteractionCanvasActive(target, false);
+      return true;
+    } catch {
+      this.interactionFrameAvailable = false;
+      this.interactionFrameCamera = null;
+      setInteractionCanvasActive(target, false);
+      resetCanvasTransform(target);
+      return false;
+    }
+  }
+
+  reuseInteractionFrame(view, targetSize) {
+    if (
+      targetSize !== null ||
+      !this.interactionFrameAvailable ||
+      !this.interactionFrameCamera ||
+      !this.interactionFrameMetrics
+    ) {
+      return null;
+    }
+    if (!view || !Array.isArray(view.origin)) {
+      throw new TypeError("cannot resolve an invalid camera view");
+    }
+    const renderSurface = resolveRenderSurfaceSize(this.canvas, {
+      mode: this.renderResolutionMode,
+      interactive: true,
+    });
+    const camera = makeCameraFromView(
+      view.origin,
+      view.worldHeight,
+      renderSurface.width,
+      renderSurface.height,
+    );
+    if (
+      !transformCanvasForCamera(
+        this.interactionCanvas,
+        this.interactionFrameCamera,
+        camera,
+      )
+    ) {
+      return null;
+    }
+    if (!setInteractionCanvasActive(this.interactionCanvas, true)) {
+      return null;
+    }
+    setCanvasHidden(this.canvas, true);
+    setCanvasHidden(this.imageOverlay?.canvas, true);
+    setCanvasHidden(this.textOverlay?.canvas, true);
+    this.lastRenderSurface = renderSurface;
+    return Object.freeze({
+      ...this.interactionFrameMetrics,
+      drawCalls: 0,
+      detailDrawCalls: 0,
+      renderDeltaDrawCalls: 0,
+      renderDeltaSubmittedVertices: 0,
+      renderDeltaFillDrawCalls: 0,
+      renderDeltaFillSubmittedVertices: 0,
+      renderDeltaPointDrawCalls: 0,
+      renderDeltaPointSubmittedVertices: 0,
+      hatchFillDrawCalls: 0,
+      hatchFillSubmittedVertices: 0,
+      hatchPatternDrawCalls: 0,
+      hatchPatternSubmittedVertices: 0,
+      pointDrawCalls: 0,
+      pointSubmittedVertices: 0,
+      solidFillDrawCalls: 0,
+      solidFillSubmittedVertices: 0,
+      solidOutlineDrawCalls: 0,
+      solidOutlineSubmittedVertices: 0,
+      wipeoutMaskDrawCalls: 0,
+      wipeoutMaskSubmittedVertices: 0,
+      curveRefinementDrawCalls: 0,
+      curveRefinementSubmittedVertices: 0,
+      submittedInstances: 0,
+      submittedVertices: 0,
+      detailSubmittedVertices: 0,
+      orderedOverlayDrawCalls: 0,
+      instanceUploadBytes: 0,
+      interactive: true,
+      interactionFrameCaptured: false,
+      interactionFrameReused: true,
+      interactionRenderingMode: this.interactionRenderingMode,
+      retainedImageOverlay: false,
+      retainedTextOverlay: false,
+      renderResolutionMode: renderSurface.mode,
+      renderPixelRatio: renderSurface.pixelRatio,
+      renderPixelCount: renderSurface.pixelCount,
+      renderWidth: camera.width,
+      renderHeight: camera.height,
+      camera,
+    });
+  }
+
+  resize(targetSize = null, { interactive = false } = {}) {
+    const surface = resolveRenderSurfaceSize(this.canvas, {
+      mode: this.renderResolutionMode,
+      interactive,
+      targetSize,
+    });
+    const { width, height } = surface;
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
       this.canvas.height = height;
     }
     this.gl.viewport(0, 0, width, height);
-    return { width, height };
+    this.lastRenderSurface = surface;
+    return surface;
   }
 
-  cameraForView(view = this.overviewScene?.camera, targetSize = null) {
+  cameraForView(
+    view = this.overviewScene?.camera,
+    targetSize = null,
+    { interactive = false } = {},
+  ) {
     if (!view || !Array.isArray(view.origin)) {
       throw new TypeError("cannot resolve an invalid camera view");
     }
-    const size = this.resize(targetSize);
+    const size = this.resize(targetSize, { interactive });
     return makeCameraFromView(
       view.origin,
       view.worldHeight,
@@ -7374,8 +7637,46 @@ export class WebGlLineRenderer {
     if (!this.overviewScene || !view) {
       throw new Error("cannot redraw before the overview is initialized");
     }
+    if (!interactive) {
+      this.interactionSequenceActive = false;
+      this.lastHybridRefreshAt = 0;
+    } else if (
+      this.interactionRenderingMode !==
+      InteractionRenderingMode.CONTINUOUS
+    ) {
+      const now = currentMilliseconds();
+      let reuseFrame =
+        this.interactionRenderingMode ===
+        InteractionRenderingMode.MAXIMUM_PERFORMANCE;
+      if (
+        this.interactionRenderingMode ===
+        InteractionRenderingMode.HYBRID
+      ) {
+        if (!this.interactionSequenceActive) {
+          this.interactionSequenceActive = true;
+          this.lastHybridRefreshAt = now;
+          reuseFrame = true;
+        } else {
+          reuseFrame =
+            now - this.lastHybridRefreshAt <
+            HYBRID_INTERACTION_REFRESH_MS;
+        }
+      } else {
+        this.interactionSequenceActive = true;
+      }
+      if (reuseFrame) {
+        const reused = this.reuseInteractionFrame(view, targetSize);
+        if (reused) {
+          return reused;
+        }
+      }
+    }
+    this.deactivateInteractionFrame();
     const gl = this.gl;
-    const camera = this.cameraForView(view, targetSize);
+    const camera = this.cameraForView(view, targetSize, {
+      interactive,
+    });
+    const renderSurface = this.lastRenderSurface;
     let cachedDetailGpuBytes = 0;
     for (const entry of this.detailResources.values()) {
       cachedDetailGpuBytes += entry.byteLength;
@@ -7516,6 +7817,16 @@ export class WebGlLineRenderer {
       submittedVertices: 0,
       detailSubmittedVertices: 0,
       interactive,
+      interactionFrameCaptured: false,
+      interactionFrameReused: false,
+      interactionRenderingMode: this.interactionRenderingMode,
+      renderAntialiasing: this.renderAntialiasing,
+      renderResolutionMode:
+        renderSurface?.mode ?? this.renderResolutionMode,
+      renderPixelRatio: renderSurface?.pixelRatio ?? null,
+      renderPixelCount: renderSurface?.pixelCount ?? 0,
+      renderWidth: camera.width,
+      renderHeight: camera.height,
       orderedOverlayDrawCalls: 0,
       orderedOverlayGpuBytes: 0,
       orderedOverlayCompositionEnabled: false,
@@ -8598,11 +8909,12 @@ export class WebGlLineRenderer {
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       }
       const overlayOptions = (fallbackDepth) => {
+        const size = { width: camera.width, height: camera.height };
         if (!this.maskOrder?.generalOrderEnabled) {
-          return targetSize ? { size: targetSize } : undefined;
+          return { size };
         }
         return {
-          ...(targetSize ? { size: targetSize } : {}),
+          size,
           canDrawOrderedLayer: (overlay) =>
             Boolean(this.orderedOverlayDimensions(overlay)),
           drawOrderedLayer: (overlay) =>
@@ -8702,7 +9014,30 @@ export class WebGlLineRenderer {
       metrics.gpuTrackedBytes,
     );
     metrics.peakGpuTrackedBytes = this.peakGpuTrackedBytes;
-    return Object.freeze(metrics);
+    const captureReusableFrame =
+      updateOverlaySnapshots &&
+      targetSize === null &&
+      (!interactive ||
+        this.interactionRenderingMode !==
+          InteractionRenderingMode.CONTINUOUS);
+    if (captureReusableFrame) {
+      metrics.interactionFrameCaptured = this.captureInteractionFrame(
+        camera,
+        metrics,
+      );
+    }
+    const frame = Object.freeze(metrics);
+    if (captureReusableFrame && metrics.interactionFrameCaptured) {
+      this.interactionFrameMetrics = frame;
+      if (
+        interactive &&
+        this.interactionRenderingMode ===
+          InteractionRenderingMode.HYBRID
+      ) {
+        this.lastHybridRefreshAt = currentMilliseconds();
+      }
+    }
+    return frame;
   }
 
   maximumRasterSize() {
@@ -8849,6 +9184,16 @@ export class WebGlLineRenderer {
     this.rootLineSuppressionKeys.clear();
     this.externalScenes.clear();
     this.supplementalBounds.clear();
+    this.deactivateInteractionFrame();
+    this.interactionFrameAvailable = false;
+    this.interactionFrameCamera = null;
+    this.interactionFrameMetrics = null;
+    this.interactionSequenceActive = false;
+    this.lastHybridRefreshAt = 0;
+    if (this.interactionCanvas) {
+      this.interactionCanvas.width = 1;
+      this.interactionCanvas.height = 1;
+    }
     setOverlayComposited(this.imageOverlay, false);
     resetOverlayTransform(this.imageOverlay);
     this.imageOverlay?.dispose();

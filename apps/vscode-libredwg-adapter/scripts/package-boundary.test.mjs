@@ -85,7 +85,12 @@ test("release automation publishes every GPL target before the MPL viewer", asyn
       "utf8",
     ),
   ]);
-  for (const target of ["linux-x64", "darwin-arm64", "win32-x64"]) {
+  for (const target of [
+    "linux-x64",
+    "darwin-arm64",
+    "darwin-x64",
+    "win32-x64",
+  ]) {
     assert.match(releaseWorkflow, new RegExp(`target: ${target}`, "u"));
     assert.match(
       releaseWorkflow,
@@ -109,7 +114,9 @@ test("release automation publishes every GPL target before the MPL viewer", asyn
     /github-release:[\s\S]*name: SHA256SUMS[\s\S]*"dist\/SHA256SUMS"/u,
   );
   assert.ok(
-    releaseWorkflow.indexOf("for target in linux-x64 darwin-arm64 win32-x64") <
+    releaseWorkflow.indexOf(
+      "for target in linux-x64 darwin-arm64 darwin-x64 win32-x64",
+    ) <
       releaseWorkflow.indexOf(
         "pnpm --dir apps/vscode-extension exec vsce publish",
       ),

@@ -109,11 +109,32 @@ typedef struct
 
 typedef struct
 {
+  uint64_t reference_resolution_ms;
+  uint64_t table_ms;
+  uint64_t primitive_count_ms;
+  uint64_t gpu_count_ms;
+  uint64_t preview_ms;
+  uint64_t spatial_index_ms;
+  uint64_t spatial_collect_ms;
+  uint64_t spatial_sort_ms;
+  uint64_t spatial_run_write_ms;
+  uint64_t spatial_merge_ms;
+  uint64_t section_write_ms;
+  uint64_t finalize_ms;
+  uint64_t section_group_ms[7];
+  uint32_t worker_count;
+  uint32_t parallel_sort_workers;
+  uint32_t parallel_section_workers;
+} LibreDwgSceneCachePerformance;
+
+typedef struct
+{
   uint64_t cache_size;
   uint64_t preview_size;
   LibreDwgPrimitiveCounts coverage;
   LibreDwgGpuLineSummary gpu_lines;
   LibreDwgHatchFillSummary hatch_fills;
+  LibreDwgSceneCachePerformance performance;
   LibreDwgSectionSummary sections[LIBREDWG_SCENE_SECTION_COUNT];
 } LibreDwgSceneCacheReport;
 

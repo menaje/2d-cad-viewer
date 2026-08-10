@@ -40,11 +40,16 @@ engine_version=$("$pkg_config" --modversion libredwg)
 cflags=$("$pkg_config" --cflags libredwg)
 libdir=$("$pkg_config" --variable=libdir libredwg)
 static_library="$libdir/libredwg.a"
+platform_cflags=
 platform_ldflags=
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     platform_ldflags="-static -static-libgcc"
+    ;;
+  *)
+    platform_cflags="-pthread"
+    platform_ldflags="-pthread"
     ;;
 esac
 
@@ -58,7 +63,7 @@ esac
 "$cc" -std=c11 -O3 -DNDEBUG -Wall -Wextra -Wpedantic \
   "-DDWG_VIEWER_LIBREDWG_VERSION=\"$engine_version\"" \
   '-DDWG_VIEWER_LIBREDWG_LINKAGE="static"' \
-  $cflags \
+  $cflags $platform_cflags \
   "$script_dir/libredwg_adapter.c" \
   "$script_dir/libredwg_scene_cache.c" \
   "$static_library" -lm $platform_ldflags -o "$output"
