@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   chmod,
   mkdir,
+  open,
   rename,
   rm,
   stat,
@@ -24,6 +25,16 @@ import {
   type SceneEngineProgressEvent,
   type SceneEngineProgressPhase,
 } from "./scene-engine";
+
+const SCENE_CACHE_MAGIC = Buffer.from([
+  0x44, 0x57, 0x47, 0x53, 0x43, 0x4e, 0x31, 0x00,
+]);
+const SCENE_CACHE_HEADER_VERSION_BYTES = 12;
+const sceneCacheVersionMatch = /\/(\d+)\.(\d+)$/u.exec(
+  SCENE_CACHE_SCHEMA_VERSION,
+);
+const EXPECTED_SCENE_CACHE_MAJOR = Number(sceneCacheVersionMatch?.[1]);
+const EXPECTED_SCENE_CACHE_MINOR = Number(sceneCacheVersionMatch?.[2]);
 
 export interface CacheIdentity {
   sourcePath: string;
@@ -386,6 +397,13 @@ export class SceneCacheManager {
         await rm(cachePath, { force: true });
         return undefined;
       }
+      if (
+        metadata.size < SCENE_CACHE_HEADER_VERSION_BYTES ||
+        !(await this.hasCompatibleHeader(cachePath))
+      ) {
+        await rm(cachePath, { force: true });
+        return undefined;
+      }
       if (!Number.isSafeInteger(metadata.size)) {
         throw new SceneEngineError(
           "CACHE_TOO_LARGE",
@@ -407,6 +425,29 @@ export class SceneCacheManager {
         throw error;
       }
       return undefined;
+    }
+  }
+
+  private async hasCompatibleHeader(cachePath: string): Promise<boolean> {
+    const handle = await open(cachePath, "r");
+    try {
+      const header = Buffer.alloc(SCENE_CACHE_HEADER_VERSION_BYTES);
+      const { bytesRead } = await handle.read(
+        header,
+        0,
+        header.byteLength,
+        0,
+      );
+      return (
+        bytesRead === header.byteLength &&
+        header.subarray(0, SCENE_CACHE_MAGIC.byteLength).equals(
+          SCENE_CACHE_MAGIC,
+        ) &&
+        header.readUInt16LE(8) === EXPECTED_SCENE_CACHE_MAJOR &&
+        header.readUInt16LE(10) === EXPECTED_SCENE_CACHE_MINOR
+      );
+    } finally {
+      await handle.close();
     }
   }
 }

@@ -36,7 +36,7 @@ export function validateAlignedVersions(versions) {
   const mismatch = entries.find(([, version]) => version !== expected);
   if (mismatch) {
     throw new Error(
-      `repository, viewer, and companion extension versions differ: ${entries
+      `repository and product extension versions differ: ${entries
         .map(([name, version]) => `${name}=${version}`)
         .join(", ")}`,
     );
@@ -157,9 +157,6 @@ function readRepositoryVersions(root) {
   return {
     repository: readJson(resolve(root, "package.json")).version,
     viewer: readJson(resolve(root, "apps/vscode-extension/package.json")).version,
-    companion: readJson(
-      resolve(root, "apps/vscode-libredwg-adapter/package.json"),
-    ).version,
   };
 }
 

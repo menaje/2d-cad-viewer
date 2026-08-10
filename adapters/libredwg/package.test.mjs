@@ -324,7 +324,7 @@ test("keeps Windows in the reproducible attested release set", async () => {
   );
 });
 
-test("builds Intel macOS companions on the standard x64 runner", async () => {
+test("builds Intel macOS converter artifacts on the standard x64 runner", async () => {
   const [releaseWorkflow, qualificationWorkflow, distributionGuide] =
     await Promise.all([
       readFile(

@@ -1,8 +1,8 @@
 {
   "name": "dwg-viewer-vscode",
-  "displayName": "Coni DWG Viewer",
+  "displayName": "DWG Viewer for VS Code",
   "description": "Open-source, local-first DWG viewing with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "menaje",
   "license": "MPL-2.0",
   "private": true,
@@ -33,10 +33,8 @@
   "extensionKind": [
     "workspace"
   ],
-  "extensionDependencies": [
-    "menaje.dwg-viewer-libredwg"
-  ],
   "activationEvents": [
+    "onStartupFinished",
     "onCustomEditor:dwgViewer.dwg",
     "onCommand:dwgViewer.addShxFontFolders",
     "onCommand:dwgViewer.selectLibreDwgAdapter",
@@ -126,7 +124,7 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Optional absolute path overriding the GPL LibreDWG adapter installed automatically with DWG Viewer."
+          "description": "Optional absolute path used only as an offline fallback when the version-matched LibreDWG converter cannot be installed automatically."
         },
         "dwgViewer.progressivePreview": {
           "type": "boolean",

@@ -173,7 +173,7 @@ Per-case version, Hangul-loss, deterministic-output, conversion time and RSS
 decisions are automatic. `--allow-incomplete` writes an incremental report
 without returning a failing exit code while the matrix is still being filled.
 
-## VS Code product qualification
+## Legacy offline VS Code host qualification
 
 The product runner measures the packaged extension in an isolated, stabilized
 VS Code instance rather than adding process RSS values from an existing user
@@ -186,7 +186,7 @@ pnpm --filter dwg-viewer-vscode qualify:host -- \
   --runtime /absolute/path/to/code-runtime \
   --adapter /absolute/path/to/libredwg-adapter \
   --drawing /absolute/path/to/reference.dwg \
-  --vsix apps/vscode-extension/dwg-viewer-vscode-0.1.3.vsix \
+  --vsix apps/vscode-extension/dwg-viewer-vscode-0.1.4.vsix \
   --companion-vsix /absolute/path/to/dwg-viewer-libredwg-0.1.3-platform.vsix \
   --output benchmarks/results/vscode-product.json
 ```
@@ -199,8 +199,11 @@ selection, corresponding highlights and repeated Canvas/GPU cleanup, and does
 not contribute to the drawing timing or memory Gate. Run only that path with
 `--scenario comparison`.
 
-The companion VSIX is installed first so the isolated host matches the real
-two-extension product installation. The adapter path remains explicit for
+This harness deliberately retains the historical companion VSIX as an offline
+fallback fixture; it does not represent the current single-listing Marketplace
+installation. The current viewer's automatic download, catalog validation,
+digest rejection, `doctor` check, and cache repair are covered separately by
+the managed-engine and extension tests. The adapter path remains explicit for
 process classification and to keep the measured engine binary exact. The
 memory gate uses the extension's incremental physical memory above the stable
 VS Code renderer/extension-host baseline. macOS uses `footprint`, which

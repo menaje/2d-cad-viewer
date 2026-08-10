@@ -249,11 +249,12 @@ handles. Its qualification also exercises cancellation plus drive, UNC,
 relative, Unicode, normalization, and case-insensitive paths on the Windows
 runner.
 
-The MPL-only VSIX never bundles this executable. A separate, platform-specific
-GPL companion VSIX is staged only from this verified source-complete package;
-it keeps the executable, exact corresponding source, licenses, manifest and
-checksums together. The complete reviewed publication and verification
-procedure is in
+The MPL-only VSIX never bundles this executable. The release workflow copies
+the verified executable to a viewer-versioned raw converter asset and publishes
+the source-complete archive beside it in the same immutable GitHub Release.
+The main VSIX records both files' exact names, sizes, and SHA-256 digests, then
+downloads and runs the converter as a separate process. The complete reviewed
+publication and verification procedure is in
 [`docs/distribution.md`](../../docs/distribution.md). This packaging policy is
 engineering guidance, not legal advice.
 

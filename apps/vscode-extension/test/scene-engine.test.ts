@@ -21,6 +21,20 @@ import {
   type SceneEngineProgressPhase,
 } from "../src/scene-engine";
 
+function sceneCacheBytes(payload: string): Buffer {
+  const version = /\/(\d+)\.(\d+)$/u.exec(SCENE_CACHE_SCHEMA_VERSION);
+  assert.ok(version);
+  const header = Buffer.alloc(12);
+  Buffer.from("DWGSCN1\0", "binary").copy(header);
+  header.writeUInt16LE(Number(version[1]), 8);
+  header.writeUInt16LE(Number(version[2]), 10);
+  return Buffer.concat([header, Buffer.from(payload, "utf8")]);
+}
+
+function sceneCachePayload(cache: Buffer): string {
+  return cache.subarray(12).toString("utf8");
+}
+
 test("normalizes bounded conversion options into a stable cache identity", () => {
   assert.equal(
     canonicalSceneConversionOptions({
@@ -80,7 +94,7 @@ test("prepares a progressive WASM-shaped engine through the common cache path", 
       request.onProgress?.(
         createSceneEngineProgress(descriptor, "parsing"),
       );
-      await writeFile(request.outputPath, "packed-scene-cache");
+      await writeFile(request.outputPath, sceneCacheBytes("packed-scene-cache"));
       request.onProgress?.(
         createSceneEngineProgress(descriptor, "preview-ready"),
       );
@@ -107,7 +121,7 @@ test("prepares a progressive WASM-shaped engine through the common cache path", 
   assert.equal(prepared.reused, false);
   assert.equal(prepared.engine.backendKind, "wasm-worker");
   assert.equal(
-    await readFile(prepared.cachePath, "utf8"),
+    sceneCachePayload(await readFile(prepared.cachePath)),
     "packed-scene-cache",
   );
 });
@@ -131,7 +145,7 @@ test("publishes and releases an independently readable preview", async (context)
         path: request.previewPath!,
         size: 15,
       });
-      await writeFile(request.outputPath, "packed-scene-cache");
+      await writeFile(request.outputPath, sceneCacheBytes("packed-scene-cache"));
     },
   };
   const phases: SceneEngineProgressPhase[] = [];
@@ -181,7 +195,7 @@ test("keeps the final cache when preview publication fails", async (context) => 
         path: request.previewPath!,
         size: 15,
       });
-      await writeFile(request.outputPath, "packed-scene-cache");
+      await writeFile(request.outputPath, sceneCacheBytes("packed-scene-cache"));
     },
   };
   const prepared = await new SceneCacheManager(
@@ -195,7 +209,7 @@ test("keeps the final cache when preview publication fails", async (context) => 
   });
 
   assert.equal(
-    await readFile(prepared.cachePath, "utf8"),
+    sceneCachePayload(await readFile(prepared.cachePath)),
     "packed-scene-cache",
   );
   assert.ok(previewPath);
@@ -219,7 +233,7 @@ test("rejects an engine revision that changes during conversion", async (context
       request.onProgress?.(
         createSceneEngineProgress(descriptor, "parsing"),
       );
-      await writeFile(request.outputPath, "packed-scene-cache");
+      await writeFile(request.outputPath, sceneCacheBytes("packed-scene-cache"));
       revision = "wasm-probe-revision-2";
     },
   };

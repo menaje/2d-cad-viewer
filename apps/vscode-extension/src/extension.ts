@@ -11,6 +11,10 @@ import {
   LibreDwgNativeSceneEngine,
   resolveLibreDwgAdapter,
 } from "./native-cache";
+import {
+  ENGINE_ASSET_CATALOG_NAME,
+  ManagedEngineManager,
+} from "./managed-engine";
 import { CacheRangeChannel } from "./range-channel";
 import { SceneCacheManager } from "./scene-cache-manager";
 import {
@@ -164,33 +168,119 @@ async function selectLibreDwgAdapter(
 async function diagnoseConfiguredLibreDwgAdapter(
   context: vscode.ExtensionContext,
   output: vscode.OutputChannel,
+  managedEngine: ManagedEngineManager,
 ): Promise<boolean> {
   try {
-    const configuration = vscode.workspace.getConfiguration("dwgViewer");
-    const adapterPath = await resolveLibreDwgAdapter({
-      configuredPath: configuration.get<string>(
-        "libredwgAdapterPath",
-        "",
-      ),
-      environmentPath: process.env.DWG_VIEWER_LIBREDWG_ADAPTER,
-      extensionPath: context.extensionPath,
-      bundledExtensionPath: bundledLibreDwgExtensionPath(),
-    });
+    const installation = await managedEngine.ensure();
+    const adapterPath = installation.adapterPath;
     const report = await diagnoseAdapterWithProgress(adapterPath);
     output.appendLine(
-      `[ADAPTER_READY] engine=${report.engineVersion} linkage=${report.linkage} target=${report.platform}-${report.architecture}`,
+      `[MANAGED_ENGINE_READY] engine=${report.engineVersion} linkage=${report.linkage} target=${installation.target} reused=${installation.reused} source=${installation.sourceUrl}`,
     );
     void vscode.window.showInformationMessage(
-      `DWG Viewer: LibreDWG ${report.engineVersion} 변환기가 정상입니다 (${report.platform}-${report.architecture}, ${report.linkage}).`,
+      `DWG Viewer: 자동 설치된 LibreDWG ${report.engineVersion} 변환기가 정상입니다 (${report.platform}-${report.architecture}, ${report.linkage}).`,
     );
     return true;
   } catch (error) {
+    const fallback = await resolveCompatibleFallbackAdapter(
+      context,
+      output,
+    );
+    if (fallback) {
+      void vscode.window.showInformationMessage(
+        `DWG Viewer: 호환되는 오프라인 변환기를 사용합니다 (${fallback.report.platform}-${fallback.report.architecture}).`,
+      );
+      return true;
+    }
     const details = adapterErrorDetails(error);
     output.appendLine(`[${details.code}] adapter diagnosis failed`);
     void vscode.window.showErrorMessage(
       `DWG Viewer: ${details.message}`,
     );
     return false;
+  }
+}
+
+interface CompatibleFallbackAdapter {
+  readonly adapterPath: string;
+  readonly source: "configured" | "environment" | "legacy-companion";
+  readonly report: Awaited<ReturnType<typeof diagnoseLibreDwgAdapter>>;
+}
+
+async function resolveCompatibleFallbackAdapter(
+  context: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
+): Promise<CompatibleFallbackAdapter | undefined> {
+  const configuration = vscode.workspace.getConfiguration("dwgViewer");
+  const configuredPath = configuration
+    .get<string>("libredwgAdapterPath", "")
+    .trim();
+  const environmentPath = (
+    process.env.DWG_VIEWER_LIBREDWG_ADAPTER ?? ""
+  ).trim();
+  const legacyExtensionPath = bundledLibreDwgExtensionPath();
+  const candidates: ReadonlyArray<{
+    source: CompatibleFallbackAdapter["source"];
+    configuredPath?: string;
+    extensionPath: string;
+  }> = [
+    ...(configuredPath
+      ? [{ source: "configured" as const, configuredPath, extensionPath: "" }]
+      : []),
+    ...(environmentPath
+      ? [{ source: "environment" as const, configuredPath: environmentPath, extensionPath: "" }]
+      : []),
+    ...(legacyExtensionPath
+      ? [{ source: "legacy-companion" as const, extensionPath: legacyExtensionPath }]
+      : []),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const adapterPath = await resolveLibreDwgAdapter({
+        configuredPath: candidate.configuredPath,
+        extensionPath: candidate.extensionPath,
+      });
+      const report = await diagnoseLibreDwgAdapter(adapterPath);
+      output.appendLine(
+        `[FALLBACK_ENGINE_READY] source=${candidate.source} engine=${report.engineVersion} target=${report.platform}-${report.architecture}`,
+      );
+      return Object.freeze({
+        adapterPath,
+        source: candidate.source,
+        report,
+      });
+    } catch (error) {
+      const details = adapterErrorDetails(error);
+      output.appendLine(
+        `[${details.code}] incompatible fallback source=${candidate.source}`,
+      );
+    }
+  }
+  return undefined;
+}
+
+async function resolveViewerAdapter(
+  context: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
+  managedEngine: ManagedEngineManager,
+): Promise<string> {
+  try {
+    const installation = await managedEngine.ensure();
+    output.appendLine(
+      `[MANAGED_ENGINE_SELECTED] target=${installation.target} reused=${installation.reused} sha256=${installation.sha256} source=${installation.sourceUrl}`,
+    );
+    return installation.adapterPath;
+  } catch (error) {
+    const details = adapterErrorDetails(error);
+    output.appendLine(`[${details.code}] managed engine unavailable`);
+    const fallback = await resolveCompatibleFallbackAdapter(
+      context,
+      output,
+    );
+    if (fallback) {
+      return fallback.adapterPath;
+    }
+    throw error;
   }
 }
 
@@ -308,6 +398,7 @@ class DwgEditorProvider
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly output: vscode.OutputChannel,
+    private readonly managedEngine: ManagedEngineManager,
     private readonly qualification?: QualificationReporter,
   ) {}
 
@@ -731,18 +822,11 @@ class DwgEditorProvider
       );
 
       try {
-        const configuration = vscode.workspace.getConfiguration(
-          "dwgViewer",
-          document.uri,
+        const adapterPath = await resolveViewerAdapter(
+          this.context,
+          this.output,
+          this.managedEngine,
         );
-        const configuredPath = configuration
-          .get<string>("libredwgAdapterPath", "");
-        const adapterPath = await resolveLibreDwgAdapter({
-          configuredPath,
-          environmentPath: process.env.DWG_VIEWER_LIBREDWG_ADAPTER,
-          extensionPath: this.context.extensionPath,
-          bundledExtensionPath: bundledLibreDwgExtensionPath(),
-        });
         const engine = new LibreDwgNativeSceneEngine(adapterPath, {
           onPerformance: (performance) => {
             this.output.appendLine(
@@ -1516,9 +1600,42 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
   const output = vscode.window.createOutputChannel("DWG Viewer");
+  const managedEngine = new ManagedEngineManager({
+    storageRoot: path.join(
+      context.globalStorageUri.fsPath,
+      "engines",
+    ),
+    catalogPath: path.join(
+      context.extensionPath,
+      "dist",
+      ENGINE_ASSET_CATALOG_NAME,
+    ),
+    viewerVersion: String(context.extension.packageJSON.version),
+    onEvent: (phase, details) => {
+      output.appendLine(
+        `[MANAGED_ENGINE_${phase.toLocaleUpperCase("en-US")}] ${JSON.stringify(details)}`,
+      );
+    },
+  });
+  if (context.extensionMode === vscode.ExtensionMode.Production) {
+    void managedEngine.ensure().then(
+      (installation) => {
+        output.appendLine(
+          `[MANAGED_ENGINE_PREFETCHED] target=${installation.target} reused=${installation.reused} source=${installation.sourceUrl}`,
+        );
+      },
+      (error) => {
+        const details = adapterErrorDetails(error);
+        output.appendLine(
+          `[${details.code}] managed engine background setup deferred`,
+        );
+      },
+    );
+  }
   const provider = new DwgEditorProvider(
     context,
     output,
+    managedEngine,
     qualificationReporter,
   );
   const textSearch = new WorkspaceTextSearchController(
@@ -1539,7 +1656,12 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand(
       DIAGNOSE_LIBREDWG_ADAPTER_COMMAND,
-      () => diagnoseConfiguredLibreDwgAdapter(context, output),
+      () =>
+        diagnoseConfiguredLibreDwgAdapter(
+          context,
+          output,
+          managedEngine,
+        ),
     ),
     vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider, {
       supportsMultipleEditorsPerDocument: false,

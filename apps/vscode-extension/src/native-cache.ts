@@ -73,7 +73,7 @@ export async function resolveLibreDwgAdapter(
   } catch (error) {
     throw new SceneEngineError(
       "ADAPTER_NOT_FOUND",
-      "LibreDWG 변환기를 찾을 수 없습니다. 동반 확장을 설치하거나 DWG Viewer 설정에서 변환기 경로를 지정해 주세요.",
+      "LibreDWG 변환기를 찾을 수 없습니다. 자동 설치를 다시 시도하거나 DWG Viewer 설정에서 검증된 오프라인 변환기 경로를 지정해 주세요.",
       { cause: error },
     );
   }
@@ -125,6 +125,8 @@ interface AdapterReport {
   schema?: unknown;
   status?: unknown;
   cache?: {
+    format_major?: unknown;
+    format_minor?: unknown;
     size_bytes?: unknown;
     validated?: unknown;
   };
@@ -235,6 +237,9 @@ export function parseAdapterReport(
     );
   }
   const reportSize = report.cache?.size_bytes;
+  const expectedVersion = /\/(\d+)\.(\d+)$/u.exec(
+    CACHE_SCHEMA_VERSION,
+  );
   const sizeMatches =
     (typeof reportSize === "number" &&
       Number.isSafeInteger(reportSize) &&
@@ -245,6 +250,8 @@ export function parseAdapterReport(
   if (
     report.schema !== "dwg-scene-cache/1" ||
     report.status !== "ok" ||
+    report.cache?.format_major !== Number(expectedVersion?.[1]) ||
+    report.cache?.format_minor !== Number(expectedVersion?.[2]) ||
     report.cache?.validated !== true ||
     !sizeMatches ||
     actualCacheBytes <= 0n

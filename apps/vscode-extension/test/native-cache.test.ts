@@ -107,7 +107,12 @@ test("adapter report requires the expected schema, validation, and size", () => 
     JSON.stringify({
       schema: "dwg-scene-cache/1",
       status: "ok",
-      cache: { size_bytes: 5, validated: true },
+      cache: {
+        format_major: 1,
+        format_minor: 20,
+        size_bytes: 5,
+        validated: true,
+      },
     }),
     5n,
   );
@@ -117,7 +122,29 @@ test("adapter report requires the expected schema, validation, and size", () => 
         JSON.stringify({
           schema: "dwg-scene-cache/1",
           status: "ok",
-          cache: { size_bytes: 4, validated: true },
+          cache: {
+            format_major: 1,
+            format_minor: 20,
+            size_bytes: 4,
+            validated: true,
+          },
+        }),
+        5n,
+      ),
+    /ADAPTER_REPORT_REJECTED/u,
+  );
+  assert.throws(
+    () =>
+      parseAdapterReport(
+        JSON.stringify({
+          schema: "dwg-scene-cache/1",
+          status: "ok",
+          cache: {
+            format_major: 1,
+            format_minor: 18,
+            size_bytes: 5,
+            validated: true,
+          },
         }),
         5n,
       ),
@@ -131,7 +158,12 @@ test("adapter report returns validated conversion performance", () => {
       JSON.stringify({
         schema: "dwg-scene-cache/1",
         status: "ok",
-        cache: { size_bytes: "5", validated: true },
+        cache: {
+          format_major: 1,
+          format_minor: 20,
+          size_bytes: "5",
+          validated: true,
+        },
         performance: {
           parse_ms: 101,
           write_ms: 202,
@@ -357,7 +389,12 @@ setTimeout(() => {
   process.stdout.write(JSON.stringify({
     schema: "dwg-scene-cache/1",
     status: "ok",
-    cache: { size_bytes: 5, validated: true },
+    cache: {
+      format_major: 1,
+      format_minor: 20,
+      size_bytes: 5,
+      validated: true,
+    },
     performance: {
       parse_ms: 11,
       write_ms: 22,
@@ -432,11 +469,20 @@ if (
   )
 ) process.exit(13);
 const mode = source.slice(6);
-fs.writeFileSync(output, "cache");
+const cache = Buffer.alloc(64);
+Buffer.from("DWGSCN1\\0", "binary").copy(cache, 0);
+cache.writeUInt16LE(1, 8);
+cache.writeUInt16LE(20, 10);
+fs.writeFileSync(output, cache);
 const report = () => process.stdout.write(JSON.stringify({
   schema: "dwg-scene-cache/1",
   status: "ok",
-  cache: { size_bytes: 5, validated: true }
+  cache: {
+    format_major: 1,
+    format_minor: 20,
+    size_bytes: 64,
+    validated: true
+  }
 }) + "\\n");
 if (mode === "slow") setInterval(() => {}, 1000);
 else if (mode === "change") setTimeout(report, 300);
@@ -468,7 +514,9 @@ else report();
       onProgress: ({ phase }) => firstPhases.push(phase),
     });
     assert.equal(first.reused, false);
-    assert.equal(await readFile(first.cachePath, "utf8"), "cache");
+    const firstCache = await readFile(first.cachePath);
+    assert.equal(firstCache.readUInt16LE(8), 1);
+    assert.equal(firstCache.readUInt16LE(10), 20);
     assert.deepEqual(firstPhases, [
       "checking",
       "parsing",
@@ -485,6 +533,15 @@ else report();
     assert.equal(second.reused, true);
     assert.equal(second.cacheId, first.cacheId);
     assert.deepEqual(reusedPhases, ["checking", "cache-ready"]);
+
+    const obsoleteCache = Buffer.from(firstCache);
+    obsoleteCache.writeUInt16LE(18, 10);
+    await writeFile(first.cachePath, obsoleteCache);
+    const migrated = await manager.prepare(sourcePath, {
+      signal: new AbortController().signal,
+    });
+    assert.equal(migrated.reused, false);
+    assert.equal((await readFile(migrated.cachePath)).readUInt16LE(10), 20);
 
     const rebuilt = await manager.prepare(sourcePath, {
       force: true,

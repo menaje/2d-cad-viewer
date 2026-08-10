@@ -70,13 +70,12 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   const manifest = JSON.parse(manifestText);
   const repositoryManifest = JSON.parse(repositoryManifestText);
 
-  assert.equal(manifest.displayName, "Coni DWG Viewer");
+  assert.equal(manifest.displayName, "DWG Viewer for VS Code");
   assert.equal(manifest.license, "MPL-2.0");
   assert.equal(manifest.icon, "images/icon.png");
   assert.deepEqual(manifest.extensionKind, ["workspace"]);
-  assert.deepEqual(manifest.extensionDependencies, [
-    "menaje.dwg-viewer-libredwg",
-  ]);
+  assert.equal(manifest.extensionDependencies, undefined);
+  assert.ok(manifest.activationEvents.includes("onStartupFinished"));
   assert.deepEqual(
     [...marketplaceIcon.subarray(0, 8)],
     [137, 80, 78, 71, 13, 10, 26, 10],
@@ -95,6 +94,10 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   assert.match(
     readme,
     /GPL-3\.0-or-later LibreDWG adapter is never included in the MPL VSIX/u,
+  );
+  assert.match(
+    readme,
+    /matching GitHub Release[\s\S]*SHA-256/iu,
   );
   assert.deepEqual(packagedLicense, repositoryLicense);
   assert.equal(

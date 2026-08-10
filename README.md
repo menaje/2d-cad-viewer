@@ -89,19 +89,21 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 
 - VS Code 1.125 이상
 - Linux x64, macOS arm64, macOS Intel x64 또는 Windows x64
-- DWG Viewer 설치 시 함께 자동 설치되는 GPL LibreDWG Engine 동반 확장
 
 ### 설치
 
-VS Code Marketplace에서 **DWG Viewer**를 설치하면 현재 운영체제에 맞는
-**DWG Viewer — LibreDWG Engine** 동반 확장도 자동으로 설치됩니다. 별도
-경로 설정 없이 Explorer에서 `.dwg` 파일을 열면 됩니다.
+VS Code Marketplace에서 **DWG Viewer for VS Code**를 설치하면 현재
+운영체제와 확장 버전에 정확히 맞는 네이티브 변환기를 같은 GitHub
+Release에서 백그라운드로 준비합니다. 다운로드 크기와 SHA-256, 실행 전
+자체 진단을 모두 통과한 변환기만 사용합니다. 별도 경로 설정 없이
+Explorer에서 `.dwg` 파일을 열면 됩니다.
 
 수동 또는 오프라인 설치에서는
 [GitHub Releases](https://github.com/menaje/dwg-viewer/releases)의
 `dwg-viewer-vscode-<version>.vsix`와 운영체제에 맞는
-`dwg-viewer-libredwg-<version>-<platform>.vsix`를 모두 설치합니다.
-Marketplace에 연결할 수 없다면 GPL 동반 VSIX를 먼저 설치합니다.
+`dwg-viewer-native-converter-<version>-<platform>`을 내려받습니다. 변환기
+선택 명령은 자동 설치를 사용할 수 없는 통제된 오프라인 환경을 위한
+대체 경로로만 사용됩니다.
 
 체크섬 확인, macOS 보안 승인과 플랫폼별 자세한 절차는
 [배포 및 설치 안내](docs/distribution.md)를 참고하세요.
@@ -142,8 +144,9 @@ Marketplace에 연결할 수 없다면 GPL 동반 VSIX를 먼저 설치합니다
 
 - 이 프로젝트는 뷰어입니다. 도면 편집, DWG 덮어쓰기와 Save As는
   제공하지 않습니다.
-- MPL-2.0 확장과 GPL-3.0-or-later LibreDWG 변환기는 라이선스 경계를
-  유지하기 위해 별도 VSIX로 배포되며, VS Code가 함께 설치합니다.
+- MPL-2.0 확장과 GPL-3.0-or-later LibreDWG 변환기는 별도 릴리스
+  파일입니다. 확장은 자기 버전에 고정된 변환기와 대응 소스의 체크섬을
+  확인한 뒤 로컬 전역 저장소에서 별도 프로세스로 실행합니다.
 - OLE 객체는 삽입 영역의 외곽선만 표시하며, 포함된 Excel이나 그림
   본문은 아직 표시하지 않습니다.
 - 외부 이미지는 현재 JPG/JPEG와 PNG를 지원합니다.
@@ -158,7 +161,7 @@ Marketplace에 연결할 수 없다면 GPL 동반 VSIX를 먼저 설치합니다
 - [엔진 선택 근거](docs/engine-decision.md)
 - [배포와 재현 가능한 패키징](docs/distribution.md)
 - [라이선스와 배포 경계](docs/licensing.md)
-- [LibreDWG Engine 동반 확장](apps/vscode-libredwg-adapter/README.md)
+- [LibreDWG 네이티브 변환기](adapters/libredwg/README.md)
 - [Scene Cache 명세](specs/scene-cache.md)
 - [Viewer Core 경계 ADR](docs/adr/ADR-0001-viewer-core-boundary.md)
 - [`@menaje/viewer-core`](packages/viewer-core/README.md)
@@ -180,11 +183,11 @@ VSIX 빌드와 배포 재현 방법은
 ## 라이선스
 
 - VS Code 확장과 Viewer 소스: MPL-2.0
-- 별도 LibreDWG Engine 동반 확장과 변환기 패키지: GPL-3.0-or-later
+- 별도 LibreDWG 네이티브 변환기와 대응 소스 패키지: GPL-3.0-or-later
 
 공식 MPL 2.0 원문은 [LICENSE](LICENSE), 프로젝트 저작권 고지는
 [NOTICE](NOTICE)에 분리되어 있습니다. 적용 범위와 배포 시 확인 사항은
 [라이선스 안내](docs/licensing.md)를, 번들된 구성요소의 원 저작권·허가문은
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요. 각 플랫폼
-동반 VSIX에는 해당 실행 파일의 정확한 대응 소스와 원문 라이선스가 함께
-포함됩니다.
+변환기의 정확한 대응 소스와 원문 라이선스는 같은 버전의 GitHub
+Release에 함께 제공됩니다.
