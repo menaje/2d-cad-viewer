@@ -2,7 +2,7 @@
   "name": "dwg-viewer-vscode",
   "displayName": "DWG Viewer for VS Code",
   "description": "Open-source, local-first DWG viewing with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "menaje",
   "license": "MPL-2.0",
   "private": true,
@@ -163,6 +163,22 @@
           "default": "hybrid",
           "scope": "window",
           "description": "Choose how the viewer redraws while panning or zooming. Conversion and export performance are unaffected."
+        },
+        "dwgViewer.mouseWheelZoomSensitivity": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 4,
+          "default": 1,
+          "scope": "window",
+          "description": "Adjust mouse-wheel zoom distance. 1.0 is the standard response; higher values zoom farther per wheel step."
+        },
+        "dwgViewer.trackpadPinchZoomSensitivity": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 4,
+          "default": 1.5,
+          "scope": "window",
+          "description": "Adjust trackpad pinch zoom distance. 1.0 matches the original response; the faster 1.5 default zooms 50% farther for the same gesture."
         },
         "dwgViewer.topToolbarLabels": {
           "type": "string",

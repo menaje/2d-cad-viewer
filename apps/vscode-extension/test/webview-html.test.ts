@@ -36,7 +36,7 @@ test("renders a nonce-protected VS Code webview without an import map", () => {
   assert.match(html, /data-host="vscode"/u);
   assert.match(
     html,
-    /<body data-host="vscode" data-top-toolbar-labels="hover" data-left-toolbar-labels="hover" data-render-resolution="auto" data-interaction-rendering="hybrid">/u,
+    /<body data-host="vscode" data-top-toolbar-labels="hover" data-left-toolbar-labels="hover" data-render-resolution="auto" data-interaction-rendering="hybrid" data-mouse-wheel-zoom-sensitivity="1" data-trackpad-pinch-zoom-sensitivity="1\.5">/u,
   );
   assert.match(html, /<html lang="ko-KR" data-locale="ko-KR">/u);
   assert.match(html, /vscode-webview:\/\/test\/styles\.css/u);
@@ -54,12 +54,28 @@ test("renders independent toolbar preferences", () => {
     leftToolbarLabels: "hover",
     renderResolution: "performance",
     interactionRendering: "maximumPerformance",
+    mouseWheelZoomSensitivity: 1.75,
+    trackpadPinchZoomSensitivity: 2.25,
   });
 
   assert.match(
     html,
-    /<body data-host="vscode" data-top-toolbar-labels="icons" data-left-toolbar-labels="hover" data-render-resolution="performance" data-interaction-rendering="maximumPerformance">/u,
+    /<body data-host="vscode" data-top-toolbar-labels="icons" data-left-toolbar-labels="hover" data-render-resolution="performance" data-interaction-rendering="maximumPerformance" data-mouse-wheel-zoom-sensitivity="1\.75" data-trackpad-pinch-zoom-sensitivity="2\.25">/u,
   );
+});
+
+test("clamps host zoom sensitivity before writing data attributes", () => {
+  const html = renderWebviewHtml(template, {
+    cspSource: "vscode-webview:",
+    nonce: "abcdefghijklmnopqrstuvwxyz",
+    stylesUri: "vscode-webview://test/styles.css",
+    scriptUri: "vscode-webview://test/main.mjs",
+    mouseWheelZoomSensitivity: -1,
+    trackpadPinchZoomSensitivity: 10,
+  });
+
+  assert.match(html, /data-mouse-wheel-zoom-sensitivity="0\.25"/u);
+  assert.match(html, /data-trackpad-pinch-zoom-sensitivity="4"/u);
 });
 
 test("falls back to English for an invalid host locale", () => {
@@ -280,6 +296,7 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   assert.match(mainModule, /setViewerToolsOpen/u);
   assert.match(mainModule, /applyMenuDisplaySettings/u);
   assert.match(mainModule, /dwg-menu-display-settings\/1/u);
+  assert.match(mainModule, /dwg-zoom-sensitivity\/1/u);
   assert.match(
     mainModule,
     /if\s*\(!open\)\s*\{\s*closeViewerPanels\(\);/u,
@@ -324,6 +341,8 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
             description?: unknown;
             enum?: unknown;
             enumDescriptions?: unknown;
+            maximum?: unknown;
+            minimum?: unknown;
             scope?: unknown;
             type?: unknown;
           }
@@ -415,6 +434,34 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
       scope: "window",
       description:
         "Choose how the viewer redraws while panning or zooming. Conversion and export performance are unaffected.",
+    },
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.[
+      "dwgViewer.mouseWheelZoomSensitivity"
+    ],
+    {
+      type: "number",
+      minimum: 0.25,
+      maximum: 4,
+      default: 1,
+      scope: "window",
+      description:
+        "Adjust mouse-wheel zoom distance. 1.0 is the standard response; higher values zoom farther per wheel step.",
+    },
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.[
+      "dwgViewer.trackpadPinchZoomSensitivity"
+    ],
+    {
+      type: "number",
+      minimum: 0.25,
+      maximum: 4,
+      default: 1.5,
+      scope: "window",
+      description:
+        "Adjust trackpad pinch zoom distance. 1.0 matches the original response; the faster 1.5 default zooms 50% farther for the same gesture.",
     },
   );
   assert.deepEqual(

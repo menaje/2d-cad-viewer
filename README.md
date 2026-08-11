@@ -112,6 +112,8 @@ Explorer에서 `.dwg` 파일을 열면 됩니다.
 
 - **화면 이동:** 클릭 드래그 또는 트랙패드 두 손가락 스크롤
 - **확대·축소:** 마우스 휠 또는 트랙패드 핀치
+- **확대 감도:** VS Code의 DWG Viewer 설정에서 **Mouse Wheel Zoom
+  Sensitivity**와 **Trackpad Pinch Zoom Sensitivity**를 각각 조절
 - **도구 이름 확인:** 도구 모음에 마우스를 올리거나 키보드로 초점을
   옮기면 전체 메뉴명이 함께 펼쳐짐
 - **간략 메뉴 설정:** VS Code의 DWG Viewer 설정에서 **Top Toolbar

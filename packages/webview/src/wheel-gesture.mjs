@@ -1,6 +1,10 @@
 import { WHEEL_ZOOM_RATE } from "@menaje/viewer-core/interaction";
 
 const PINCH_ZOOM_RATE = 0.008;
+const DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY = 1;
+const DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY = 1.5;
+const MINIMUM_ZOOM_SENSITIVITY = 0.25;
+const MAXIMUM_ZOOM_SENSITIVITY = 4;
 const WHEEL_GESTURE_IDLE_MS = 180;
 const WHEEL_LINE_PIXELS = 32;
 const WHEEL_PAGE_PIXELS = 240;
@@ -17,6 +21,32 @@ const MAXIMUM_PINCH_ZOOM_PIXELS = 60;
 
 function clamp(value, minimum, maximum) {
   return Math.min(Math.max(value, minimum), maximum);
+}
+
+function sensitivityNumber(value) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    return Number(value);
+  }
+  return Number.NaN;
+}
+
+export function normalizeZoomSensitivity(
+  value,
+  fallback = DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+) {
+  const fallbackNumber = sensitivityNumber(fallback);
+  const resolvedFallback = Number.isFinite(fallbackNumber)
+    ? fallbackNumber
+    : DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY;
+  const candidate = sensitivityNumber(value);
+  return clamp(
+    Number.isFinite(candidate) ? candidate : resolvedFallback,
+    MINIMUM_ZOOM_SENSITIVITY,
+    MAXIMUM_ZOOM_SENSITIVITY,
+  );
 }
 
 function finiteWheelDelta(value) {
@@ -61,7 +91,14 @@ function continuesWheelGesture(previous, timeStamp) {
 export function normalizeWheelGesture(
   event,
   previous = null,
-  { width = 1, height = 1 } = {},
+  {
+    width = 1,
+    height = 1,
+    mouseWheelZoomSensitivity =
+      DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+    trackpadPinchZoomSensitivity =
+      DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  } = {},
 ) {
   if (event === null || typeof event !== "object") {
     throw new TypeError("Wheel gesture requires an event object");
@@ -115,20 +152,34 @@ export function normalizeWheelGesture(
       : MAXIMUM_WHEEL_ZOOM_PIXELS;
   const rate =
     kind === "pinch" ? PINCH_ZOOM_RATE : WHEEL_ZOOM_RATE;
+  const sensitivity =
+    kind === "pinch"
+      ? normalizeZoomSensitivity(
+          trackpadPinchZoomSensitivity,
+          DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+        )
+      : normalizeZoomSensitivity(
+          mouseWheelZoomSensitivity,
+          DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+        );
   const boundedDelta = clamp(deltaY, -maximum, maximum);
   return Object.freeze({
     kind,
     timeStamp,
     panX: 0,
     panY: 0,
-    zoomFactor: Math.exp(boundedDelta * rate),
+    zoomFactor: Math.exp(boundedDelta * rate * sensitivity),
   });
 }
 
 export {
+  DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+  DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  MAXIMUM_ZOOM_SENSITIVITY,
   MAXIMUM_PINCH_ZOOM_PIXELS,
   MAXIMUM_TRACKPAD_PAN_PIXELS,
   MAXIMUM_WHEEL_ZOOM_PIXELS,
+  MINIMUM_ZOOM_SENSITIVITY,
   PINCH_ZOOM_RATE,
   TRACKPAD_PIXEL_DELTA_THRESHOLD,
   WHEEL_GESTURE_IDLE_MS,

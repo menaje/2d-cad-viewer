@@ -194,7 +194,7 @@ jobs:
       - name: Upload VSIX
         uses: actions/upload-artifact@v7
         with:
-          name: dwg-viewer-vscode
+          name: dwg-viewer-vscode-${{ steps.version.outputs.version }}.vsix
           retention-days: 14
           path: ${{ runner.temp }}/release/dwg-viewer-vscode-${{ steps.version.outputs.version }}.vsix
           archive: false
@@ -407,7 +407,7 @@ jobs:
           cache: pnpm
       - uses: actions/download-artifact@v8
         with:
-          name: dwg-viewer-vscode
+          name: dwg-viewer-vscode-${{ needs.context.outputs.version }}.vsix
           path: dist
 
       - name: Install locked publishing dependencies
@@ -505,7 +505,7 @@ jobs:
       - name: Upload checksums
         uses: actions/upload-artifact@v7
         with:
-          name: dwg-viewer-checksums
+          name: SHA256SUMS
           retention-days: 14
           path: dist/SHA256SUMS
           archive: false
@@ -532,7 +532,7 @@ jobs:
           ref: ${{ needs.context.outputs.release_sha }}
       - uses: actions/download-artifact@v8
         with:
-          pattern: dwg-viewer-*
+          pattern: "*"
           path: dist
           merge-multiple: true
 
@@ -568,7 +568,7 @@ jobs:
           fi
           printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
             "$release_label: open, inspect, search, measure, and export DWG drawings directly in VS Code." \
-            "This version improves compressed R2007 drawings, model and layout view placement, multiline text, nested references, CAD proxy and surface objects, and embedded BMP or EMF content across the expanded qualification corpus." \
+            "This version adds direct mouse-wheel zoom, independently configurable mouse-wheel and trackpad-pinch sensitivity, and a 50% faster default pinch response. It also improves compressed R2007 drawings, model and layout view placement, multiline text, nested references, CAD proxy and surface objects, and embedded BMP or EMF content across the expanded qualification corpus." \
             "The viewer installs and verifies its exact version-matched native converter in the background for Linux x64, macOS arm64, macOS Intel x64, or Windows x64." \
             "The main VSIX is MPL-2.0. Each separately downloaded GPL-3.0-or-later converter has a source-complete archive with unmodified license texts in this same release." \
             "Verify SHA256SUMS and the GitHub artifact attestations before installation." \

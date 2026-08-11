@@ -10,7 +10,12 @@ import {
   WebGlLineRenderer,
 } from "@menaje/viewer-webgl";
 
-import { ViewportInteraction } from "./interaction.mjs?v=1.18.12";
+import {
+  DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+  DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  ViewportInteraction,
+  normalizeZoomSensitivity,
+} from "./interaction.mjs?v=1.18.13";
 import {
   buildExternalLayerMap,
   buildExternalLinetypeMap,
@@ -170,6 +175,42 @@ let interactionRenderingMode = normalizeInteractionRenderingMode(
   document.body.dataset.interactionRendering,
 );
 document.body.dataset.interactionRendering = interactionRenderingMode;
+let zoomSensitivitySettings = Object.freeze({
+  mouseWheelZoomSensitivity: normalizeZoomSensitivity(
+    document.body.dataset.mouseWheelZoomSensitivity,
+    DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+  ),
+  trackpadPinchZoomSensitivity: normalizeZoomSensitivity(
+    document.body.dataset.trackpadPinchZoomSensitivity,
+    DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  ),
+});
+document.body.dataset.mouseWheelZoomSensitivity = String(
+  zoomSensitivitySettings.mouseWheelZoomSensitivity,
+);
+document.body.dataset.trackpadPinchZoomSensitivity = String(
+  zoomSensitivitySettings.trackpadPinchZoomSensitivity,
+);
+
+function applyZoomSensitivitySettings(settings = {}) {
+  zoomSensitivitySettings = Object.freeze({
+    mouseWheelZoomSensitivity: normalizeZoomSensitivity(
+      settings.mouseWheelZoomSensitivity,
+      zoomSensitivitySettings.mouseWheelZoomSensitivity,
+    ),
+    trackpadPinchZoomSensitivity: normalizeZoomSensitivity(
+      settings.trackpadPinchZoomSensitivity,
+      zoomSensitivitySettings.trackpadPinchZoomSensitivity,
+    ),
+  });
+  document.body.dataset.mouseWheelZoomSensitivity = String(
+    zoomSensitivitySettings.mouseWheelZoomSensitivity,
+  );
+  document.body.dataset.trackpadPinchZoomSensitivity = String(
+    zoomSensitivitySettings.trackpadPinchZoomSensitivity,
+  );
+  activeInteraction?.setZoomSensitivity(zoomSensitivitySettings);
+}
 
 function setViewerToolMessage(element, key, values) {
   const message = t(key, values);
@@ -5767,6 +5808,7 @@ function installInteraction(
     render,
   });
   activeInteraction = new ViewportInteraction(interactionScene, canvas, {
+    ...zoomSensitivitySettings,
     onUpdate(viewport) {
       renderMetrics(scene, source, viewport);
       if (viewport.render.interactive) {
@@ -6664,6 +6706,10 @@ if (vscodeApi) {
         interactionRenderingMode,
       );
       activeInteraction?.refresh();
+      return;
+    }
+    if (message?.type === "dwg-zoom-sensitivity/1") {
+      applyZoomSensitivitySettings(message);
       return;
     }
     if (message?.type === "dwg-export-save-result/1") {

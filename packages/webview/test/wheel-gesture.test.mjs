@@ -3,11 +3,16 @@ import test from "node:test";
 
 import { WHEEL_ZOOM_RATE } from "../../viewer-core/src/viewport-interaction.mjs";
 import {
+  DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+  DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  MAXIMUM_ZOOM_SENSITIVITY,
   MAXIMUM_PINCH_ZOOM_PIXELS,
+  MINIMUM_ZOOM_SENSITIVITY,
   PINCH_ZOOM_RATE,
   WHEEL_GESTURE_IDLE_MS,
   WHEEL_LINE_PIXELS,
   normalizeWheelGesture,
+  normalizeZoomSensitivity,
 } from "../src/wheel-gesture.mjs";
 
 test("keeps a macOS smooth-scroll sequence in trackpad pan mode", () => {
@@ -108,9 +113,17 @@ test("uses a stronger bounded zoom curve for trackpad pinch", () => {
   });
   assert.equal(pinch.kind, "pinch");
   assert.ok(
-    Math.abs(pinch.zoomFactor - Math.exp(-10 * PINCH_ZOOM_RATE)) <
+    Math.abs(
+      pinch.zoomFactor -
+        Math.exp(
+          -10 *
+            PINCH_ZOOM_RATE *
+            DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+        ),
+    ) <
       1e-12,
   );
+  assert.equal(DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY, 1.5);
   assert.ok(PINCH_ZOOM_RATE > WHEEL_ZOOM_RATE);
 
   const bounded = normalizeWheelGesture({
@@ -123,7 +136,64 @@ test("uses a stronger bounded zoom curve for trackpad pinch", () => {
   assert.ok(
     Math.abs(
       bounded.zoomFactor -
-        Math.exp(MAXIMUM_PINCH_ZOOM_PIXELS * PINCH_ZOOM_RATE),
+        Math.exp(
+          MAXIMUM_PINCH_ZOOM_PIXELS *
+            PINCH_ZOOM_RATE *
+            DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+        ),
     ) < 1e-12,
+  );
+});
+
+test("applies independent bounded mouse and trackpad zoom sensitivity", () => {
+  const mouse = normalizeWheelGesture(
+    {
+      ctrlKey: false,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: -53,
+      timeStamp: 10,
+    },
+    null,
+    { mouseWheelZoomSensitivity: 2 },
+  );
+  assert.ok(
+    Math.abs(
+      mouse.zoomFactor - Math.exp(-53 * WHEEL_ZOOM_RATE * 2),
+    ) < 1e-12,
+  );
+
+  const trackpad = normalizeWheelGesture(
+    {
+      ctrlKey: true,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: -10,
+      timeStamp: 20,
+    },
+    null,
+    { trackpadPinchZoomSensitivity: 0.5 },
+  );
+  assert.ok(
+    Math.abs(
+      trackpad.zoomFactor - Math.exp(-10 * PINCH_ZOOM_RATE * 0.5),
+    ) < 1e-12,
+  );
+
+  assert.equal(
+    normalizeZoomSensitivity(-10, DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY),
+    MINIMUM_ZOOM_SENSITIVITY,
+  );
+  assert.equal(
+    normalizeZoomSensitivity(10, DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY),
+    MAXIMUM_ZOOM_SENSITIVITY,
+  );
+  assert.equal(
+    normalizeZoomSensitivity("2.25"),
+    2.25,
+  );
+  assert.equal(
+    normalizeZoomSensitivity("", DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY),
+    DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
   );
 });

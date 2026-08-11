@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
   DETAIL_DEBOUNCE_MS,
   DETAIL_ZOOM_THRESHOLD,
   VIEW_COMMIT_DEBOUNCE_MS,
   ViewportInteraction,
+  WHEEL_ZOOM_RATE,
 } from "../src/interaction.mjs";
 import { DEFAULT_MINIMUM_PIXEL_HEIGHT } from "../src/text-overlay.mjs";
 
@@ -126,9 +128,38 @@ test("injects DWG detail streaming and intercepts platform wheel gestures", () =
       preventDefault() {},
       stopImmediatePropagation() {},
     });
-    assert.ok(interaction.snapshot().zoom > 1.08);
+    assert.equal(DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY, 1.5);
+    assert.ok(interaction.snapshot().zoom > 1.12);
 
     const pinchZoom = interaction.snapshot().zoom;
+    assert.deepEqual(
+      interaction.setZoomSensitivity({
+        mouseWheelZoomSensitivity: 2,
+        trackpadPinchZoomSensitivity: 0.5,
+      }),
+      {
+        mouseWheelZoomSensitivity: 2,
+        trackpadPinchZoomSensitivity: 0.5,
+      },
+    );
+    listeners.get("wheel")[0]({
+      ctrlKey: true,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: -10,
+      offsetX: 400,
+      offsetY: 300,
+      timeStamp: 600,
+      preventDefault() {},
+      stopImmediatePropagation() {},
+    });
+    assert.ok(
+      Math.abs(
+        interaction.snapshot().zoom / pinchZoom - Math.exp(0.04),
+      ) < 1e-9,
+    );
+
+    const customPinchZoom = interaction.snapshot().zoom;
     listeners.get("wheel")[0]({
       ctrlKey: false,
       deltaMode: 0,
@@ -136,11 +167,16 @@ test("injects DWG detail streaming and intercepts platform wheel gestures", () =
       deltaY: -53,
       offsetX: 400,
       offsetY: 300,
-      timeStamp: 600,
+      timeStamp: 900,
       preventDefault() {},
       stopImmediatePropagation() {},
     });
-    assert.ok(interaction.snapshot().zoom > pinchZoom);
+    assert.ok(
+      Math.abs(
+        interaction.snapshot().zoom / customPinchZoom -
+          Math.exp(53 * WHEEL_ZOOM_RATE * 2),
+      ) < 1e-9,
+    );
     interaction.dispose();
     assert.equal(disconnected, true);
   } finally {

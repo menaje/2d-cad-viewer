@@ -127,6 +127,8 @@ platform-specific commands, see the
 
 - **Pan:** click-drag or use a two-finger trackpad scroll.
 - **Zoom:** use the mouse wheel, trackpad pinch, or window-zoom tool.
+- **Tune zoom response:** adjust **Mouse Wheel Zoom Sensitivity** and
+  **Trackpad Pinch Zoom Sensitivity** independently in the DWG Viewer settings.
 - **Find a tool:** hover or focus a shelf to expand all of its tool names.
 - **Choose compact menus:** set **Top Toolbar Labels** and **Left Toolbar
   Labels** under the DWG Viewer settings to `icons` or `hover` independently.
