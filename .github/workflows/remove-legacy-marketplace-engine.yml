@@ -40,4 +40,5 @@ jobs:
           pnpm --dir apps/vscode-extension exec vsce verify-pat menaje
           pnpm --dir apps/vscode-extension exec vsce unpublish \
             menaje.dwg-viewer-libredwg \
+            --pat "$VSCE_PAT" \
             --force
