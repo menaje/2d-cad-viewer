@@ -36,6 +36,9 @@ import {
 } from "./qualification";
 import { activateRevisionComparisonQualification } from "./comparison-qualification";
 import {
+  DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+  DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  normalizeWebviewZoomSensitivity,
   renderWebviewHtml,
   type InteractionRenderingMode,
   type MenuLabelMode,
@@ -89,6 +92,19 @@ function configuredInteractionRendering(
   return value === "continuous" || value === "maximumPerformance"
     ? value
     : "hybrid";
+}
+
+function configuredZoomSensitivity(
+  configuration: vscode.WorkspaceConfiguration,
+  key:
+    | "mouseWheelZoomSensitivity"
+    | "trackpadPinchZoomSensitivity",
+  fallback: number,
+): number {
+  return normalizeWebviewZoomSensitivity(
+    configuration.get<number>(key),
+    fallback,
+  );
 }
 
 function adapterErrorDetails(error: unknown): {
@@ -549,6 +565,26 @@ class DwgEditorProvider
       ),
     } as const);
 
+    const zoomSensitivitySettings = () => {
+      const configuration = vscode.workspace.getConfiguration(
+        "dwgViewer",
+        document.uri,
+      );
+      return {
+        type: "dwg-zoom-sensitivity/1",
+        mouseWheelZoomSensitivity: configuredZoomSensitivity(
+          configuration,
+          "mouseWheelZoomSensitivity",
+          DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+        ),
+        trackpadPinchZoomSensitivity: configuredZoomSensitivity(
+          configuration,
+          "trackpadPinchZoomSensitivity",
+          DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+        ),
+      } as const;
+    };
+
     let disposed = false;
     let webviewInitialized = false;
     let webviewReady = false;
@@ -592,6 +628,7 @@ class DwgEditorProvider
       const menuSettings = menuDisplaySettings();
       const renderSettings = renderResolutionSettings();
       const interactionSettings = interactionRenderingSettings();
+      const zoomSettings = zoomSensitivitySettings();
       webviewPanel.webview.html = renderWebviewHtml(template, {
         cspSource: webviewPanel.webview.cspSource,
         nonce,
@@ -608,6 +645,10 @@ class DwgEditorProvider
         leftToolbarLabels: menuSettings.leftToolbarLabels,
         renderResolution: renderSettings.mode,
         interactionRendering: interactionSettings.mode,
+        mouseWheelZoomSensitivity:
+          zoomSettings.mouseWheelZoomSensitivity,
+        trackpadPinchZoomSensitivity:
+          zoomSettings.trackpadPinchZoomSensitivity,
       });
     };
 
@@ -631,6 +672,15 @@ class DwgEditorProvider
       }
       void webviewPanel.webview.postMessage(
         interactionRenderingSettings(),
+      );
+    };
+
+    const postZoomSensitivitySettings = (): void => {
+      if (!webviewReady) {
+        return;
+      }
+      void webviewPanel.webview.postMessage(
+        zoomSensitivitySettings(),
       );
     };
 
@@ -1119,6 +1169,7 @@ class DwgEditorProvider
             postMenuDisplaySettings();
             postRenderResolutionSettings();
             postInteractionRenderingSettings();
+            postZoomSensitivitySettings();
             if (activeCacheReadyMessage) {
               void webviewPanel.webview.postMessage(
                 activeCacheReadyMessage,
@@ -1549,6 +1600,18 @@ class DwgEditorProvider
           )
         ) {
           postInteractionRenderingSettings();
+        }
+        if (
+          event.affectsConfiguration(
+            "dwgViewer.mouseWheelZoomSensitivity",
+            document.uri,
+          ) ||
+          event.affectsConfiguration(
+            "dwgViewer.trackpadPinchZoomSensitivity",
+            document.uri,
+          )
+        ) {
+          postZoomSensitivitySettings();
         }
       });
 

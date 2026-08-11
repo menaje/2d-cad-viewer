@@ -114,6 +114,20 @@ test("release automation publishes raw GPL targets before the single Marketplace
     releaseWorkflow,
     /github-release:[\s\S]*"dist\/SHA256SUMS"/u,
   );
+  assert.match(
+    releaseWorkflow,
+    /name: Upload checksums[\s\S]*?name: SHA256SUMS/u,
+  );
+  assert.match(
+    releaseWorkflow,
+    /github-release:[\s\S]*?pattern: "\*"[\s\S]*?merge-multiple: true/u,
+  );
+  assert.equal(
+    releaseWorkflow.includes(
+      "name: dwg-viewer-vscode-${{ needs.context.outputs.version }}.vsix",
+    ),
+    true,
+  );
   assert.doesNotMatch(
     releaseWorkflow,
     /apps\/vscode-libredwg-adapter exec vsce publish/u,

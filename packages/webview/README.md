@@ -259,10 +259,11 @@ built-in languages, template keys, or runtime shell keys diverge.
   INSERT style, and source-hidden occurrences remain hidden. WebGL geometry and
   Canvas block text use the same native-handle rule without cloning block
   vertices.
-- Supports anchored mouse-wheel/button zoom, accelerated trackpad pinch zoom,
-  click-drag pan, two-finger scroll pan and fitted-view reset. Pixel, line and
-  page deltas are normalized, while one smooth-scroll sequence stays locked
-  to pan so inertial tail events cannot turn into zoom.
+- Supports anchored mouse-wheel/button zoom, independently configurable mouse
+  and trackpad-pinch sensitivity, accelerated trackpad pinch zoom, click-drag
+  pan, two-finger scroll pan and fitted-view reset. Pixel, line and page deltas
+  are normalized, while one smooth-scroll sequence stays locked to pan so
+  inertial tail events cannot turn into zoom.
 - Keeps byte-budgeted detail streaming active while zooming out so switching
   to the sampled overview cannot abruptly remove visible objects.
 - Selects LOD 1 model and transformed block batches against the viewport.

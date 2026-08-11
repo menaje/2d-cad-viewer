@@ -8,6 +8,8 @@ export interface WebviewHtmlOptions {
   leftToolbarLabels?: MenuLabelMode;
   renderResolution?: RenderResolutionMode;
   interactionRendering?: InteractionRenderingMode;
+  mouseWheelZoomSensitivity?: number;
+  trackpadPinchZoomSensitivity?: number;
 }
 
 export type MenuLabelMode = "hover" | "icons";
@@ -19,6 +21,30 @@ export type InteractionRenderingMode =
   | "continuous"
   | "hybrid"
   | "maximumPerformance";
+export const DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY = 1;
+export const DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY = 1.5;
+export const MINIMUM_ZOOM_SENSITIVITY = 0.25;
+export const MAXIMUM_ZOOM_SENSITIVITY = 4;
+
+export function normalizeWebviewZoomSensitivity(
+  value: number | undefined,
+  fallback: number,
+): number {
+  const resolvedFallback = Number.isFinite(fallback)
+    ? fallback
+    : DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY;
+  const candidate =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : resolvedFallback;
+  return Math.min(
+    Math.max(
+      candidate,
+      MINIMUM_ZOOM_SENSITIVITY,
+    ),
+    MAXIMUM_ZOOM_SENSITIVITY,
+  );
+}
 
 function normalizeWebviewLocale(value: string | undefined): string {
   if (
@@ -70,6 +96,8 @@ export function renderWebviewHtml(
     leftToolbarLabels,
     renderResolution,
     interactionRendering,
+    mouseWheelZoomSensitivity,
+    trackpadPinchZoomSensitivity,
   }: WebviewHtmlOptions,
 ): string {
   if (!/^[A-Za-z0-9_-]{16,}$/.test(nonce)) {
@@ -108,9 +136,19 @@ export function renderWebviewHtml(
   );
   const resolvedInteractionRendering =
     normalizeInteractionRenderingMode(interactionRendering);
+  const resolvedMouseWheelZoomSensitivity =
+    normalizeWebviewZoomSensitivity(
+      mouseWheelZoomSensitivity,
+      DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+    );
+  const resolvedTrackpadPinchZoomSensitivity =
+    normalizeWebviewZoomSensitivity(
+      trackpadPinchZoomSensitivity,
+      DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+    );
   const withHost = withLocale.replace(
     "<body>",
-    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}" data-render-resolution="${resolvedRenderResolution}" data-interaction-rendering="${resolvedInteractionRendering}">`,
+    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}" data-render-resolution="${resolvedRenderResolution}" data-interaction-rendering="${resolvedInteractionRendering}" data-mouse-wheel-zoom-sensitivity="${resolvedMouseWheelZoomSensitivity}" data-trackpad-pinch-zoom-sensitivity="${resolvedTrackpadPinchZoomSensitivity}">`,
   );
   const withStyles = withHost.replace(
     /<link\s+rel=["']stylesheet["']\s+href=["'][^"']+["']\s*\/?>/iu,

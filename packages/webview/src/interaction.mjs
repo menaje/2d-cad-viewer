@@ -6,7 +6,14 @@ import {
   ViewportInteraction as CoreViewportInteraction,
   WHEEL_ZOOM_RATE,
 } from "@menaje/viewer-core/interaction";
-import { normalizeWheelGesture } from "./wheel-gesture.mjs";
+import {
+  DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+  DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  MAXIMUM_ZOOM_SENSITIVITY,
+  MINIMUM_ZOOM_SENSITIVITY,
+  normalizeWheelGesture,
+  normalizeZoomSensitivity,
+} from "./wheel-gesture.mjs";
 
 function createDetailStreamer(...arguments_) {
   return new DetailStreamer(...arguments_);
@@ -14,6 +21,13 @@ function createDetailStreamer(...arguments_) {
 
 export class ViewportInteraction extends CoreViewportInteraction {
   constructor(scene, canvas, options = {}) {
+    const {
+      mouseWheelZoomSensitivity =
+        DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+      trackpadPinchZoomSensitivity =
+        DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+      ...coreOptions
+    } = options;
     const wheelAbortController = new AbortController();
     let interaction = null;
     const handleWheel = (event) => interaction?.handleWheel(event);
@@ -25,7 +39,7 @@ export class ViewportInteraction extends CoreViewportInteraction {
 
     try {
       super(scene, canvas, {
-        ...options,
+        ...coreOptions,
         createDetailStreamer,
       });
     } catch (error) {
@@ -36,6 +50,38 @@ export class ViewportInteraction extends CoreViewportInteraction {
     interaction = this;
     this.wheelAbortController = wheelAbortController;
     this.wheelGesture = null;
+    this.setZoomSensitivity({
+      mouseWheelZoomSensitivity,
+      trackpadPinchZoomSensitivity,
+    });
+  }
+
+  setZoomSensitivity({
+    mouseWheelZoomSensitivity,
+    trackpadPinchZoomSensitivity,
+  } = {}) {
+    const nextMouse = normalizeZoomSensitivity(
+      mouseWheelZoomSensitivity,
+      this.mouseWheelZoomSensitivity ??
+        DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+    );
+    const nextTrackpad = normalizeZoomSensitivity(
+      trackpadPinchZoomSensitivity,
+      this.trackpadPinchZoomSensitivity ??
+        DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+    );
+    if (
+      nextMouse !== this.mouseWheelZoomSensitivity ||
+      nextTrackpad !== this.trackpadPinchZoomSensitivity
+    ) {
+      this.wheelGesture = null;
+    }
+    this.mouseWheelZoomSensitivity = nextMouse;
+    this.trackpadPinchZoomSensitivity = nextTrackpad;
+    return Object.freeze({
+      mouseWheelZoomSensitivity: nextMouse,
+      trackpadPinchZoomSensitivity: nextTrackpad,
+    });
   }
 
   handleWheel(event) {
@@ -47,7 +93,14 @@ export class ViewportInteraction extends CoreViewportInteraction {
     const gesture = normalizeWheelGesture(
       event,
       this.wheelGesture,
-      { width, height },
+      {
+        width,
+        height,
+        mouseWheelZoomSensitivity:
+          this.mouseWheelZoomSensitivity,
+        trackpadPinchZoomSensitivity:
+          this.trackpadPinchZoomSensitivity,
+      },
     );
     this.wheelGesture = gesture;
 
@@ -93,8 +146,13 @@ export class ViewportInteraction extends CoreViewportInteraction {
 }
 
 export {
+  DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
+  DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
   DETAIL_DEBOUNCE_MS,
   DETAIL_ZOOM_THRESHOLD,
+  MAXIMUM_ZOOM_SENSITIVITY,
+  MINIMUM_ZOOM_SENSITIVITY,
   VIEW_COMMIT_DEBOUNCE_MS,
   WHEEL_ZOOM_RATE,
+  normalizeZoomSensitivity,
 };
