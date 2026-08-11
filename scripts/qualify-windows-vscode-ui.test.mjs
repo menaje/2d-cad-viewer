@@ -9,6 +9,7 @@ import {
   adjustedHostViewportSize,
   candidatePositions,
   canvasPointIsUnobstructed,
+  isDetachedFrameError,
   parseWindowsUiArguments,
   parseCoordinateMeasurementRows,
   parseDistanceMeasurementRows,
@@ -20,6 +21,19 @@ import {
   WINDOWS_UI_EXTENSION_ID,
   WINDOWS_UI_LOCALE,
 } from "./qualify-windows-vscode-ui.mjs";
+
+test("retries only transient detached Webview frame errors", () => {
+  assert.equal(
+    isDetachedFrameError(new Error("locator.count: Frame was detached")),
+    true,
+  );
+  assert.equal(
+    isDetachedFrameError(new Error("Execution context was destroyed")),
+    true,
+  );
+  assert.equal(isDetachedFrameError(new Error("selector is invalid")), false);
+  assert.equal(isDetachedFrameError("Frame was detached"), false);
+});
 
 test("reads the installed VS Code CLI product version", () => {
   assert.equal(

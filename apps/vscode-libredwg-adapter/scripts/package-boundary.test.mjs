@@ -131,4 +131,8 @@ test("release automation publishes raw GPL targets before the single Marketplace
     qualificationWorkflow,
     /--companion-vsix \$companionVsixPath/u,
   );
+  for (const workflow of [releaseWorkflow, qualificationWorkflow]) {
+    assert.match(workflow, /\n\s+patch\n/u);
+    assert.match(workflow, /DWG_VIEWER_PATCH=\/usr\/bin\/patch\.exe/u);
+  }
 });
