@@ -1,0 +1,43 @@
+name: Remove legacy Marketplace engine
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: dwg-viewer-remove-legacy-marketplace-engine
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  unpublish:
+    name: Unpublish menaje.dwg-viewer-libredwg
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install locked Marketplace tooling
+        run: pnpm install --frozen-lockfile
+
+      - name: Remove the obsolete companion extension
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [[ -z "$VSCE_PAT" ]]; then
+            echo "VSCE_PAT is required for Marketplace maintenance" >&2
+            exit 1
+          fi
+          pnpm --dir apps/vscode-extension exec vsce verify-pat menaje
+          pnpm --dir apps/vscode-extension exec vsce unpublish \
+            menaje.dwg-viewer-libredwg \
+            --force
