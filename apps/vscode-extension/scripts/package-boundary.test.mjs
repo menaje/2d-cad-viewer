@@ -104,6 +104,7 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   assert.equal(manifest.displayName, "DWG Viewer for VS Code");
   assert.equal(manifest.license, "MPL-2.0");
   assert.equal(manifest.icon, "images/icon.png");
+  assert.equal(manifest.engines.vscode, "^1.85.0");
   assert.deepEqual(manifest.extensionKind, ["workspace"]);
   assert.equal(manifest.extensionDependencies, undefined);
   assert.equal(webviewManifest.dependencies["emf-converter"], "2.0.2");

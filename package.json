@@ -1,6 +1,6 @@
 {
   "name": "dwg-viewer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "Open-source DWG viewer for VS Code",
   "license": "MPL-2.0",
