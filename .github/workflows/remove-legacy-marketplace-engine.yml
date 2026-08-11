@@ -12,9 +12,9 @@ permissions:
 
 jobs:
   unpublish:
-    name: Unpublish menaje.dwg-viewer-libredwg
+    name: Remove legacy Marketplace packages
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
@@ -29,7 +29,7 @@ jobs:
       - name: Install locked Marketplace tooling
         run: pnpm install --frozen-lockfile
 
-      - name: Remove the obsolete companion extension
+      - name: Remove the legacy viewer version and companion extension
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
@@ -38,7 +38,45 @@ jobs:
             exit 1
           fi
           pnpm --dir apps/vscode-extension exec vsce verify-pat menaje
-          pnpm --dir apps/vscode-extension exec vsce unpublish \
-            menaje.dwg-viewer-libredwg \
-            --pat "$VSCE_PAT" \
-            --force
+
+          delete_marketplace_resource() {
+            local label="$1"
+            local url="$2"
+            local response_file="$RUNNER_TEMP/$label-response.json"
+            local http_code
+
+            if ! http_code="$(curl \
+              --silent \
+              --show-error \
+              --max-time 540 \
+              --request DELETE \
+              --user "OAuth:$VSCE_PAT" \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              "$url")"; then
+              cat "$response_file" 2>/dev/null || true
+              echo "Marketplace deletion request failed for $label" >&2
+              exit 1
+            fi
+
+            case "$http_code" in
+              200|202|204)
+                echo "Removed Marketplace resource: $label"
+                ;;
+              404)
+                echo "Marketplace resource was already absent: $label"
+                ;;
+              *)
+                cat "$response_file" 2>/dev/null || true
+                echo "Marketplace returned HTTP $http_code for $label" >&2
+                exit 1
+                ;;
+            esac
+          }
+
+          delete_marketplace_resource \
+            legacy-viewer-0.1.3 \
+            "https://marketplace.visualstudio.com/_apis/gallery/publishers/menaje/extensions/dwg-viewer-vscode?version=0.1.3&api-version=7.2-preview.2"
+          delete_marketplace_resource \
+            legacy-libredwg-engine \
+            "https://marketplace.visualstudio.com/_apis/gallery/publishers/menaje/extensions/dwg-viewer-libredwg?api-version=7.2-preview.2"
