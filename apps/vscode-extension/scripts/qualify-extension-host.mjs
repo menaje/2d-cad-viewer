@@ -510,7 +510,7 @@ export async function writeQualificationDriver(driverDirectory) {
     version: "0.0.0",
     publisher: "local",
     private: true,
-    engines: { vscode: "^1.125.0" },
+    engines: { vscode: "^1.85.0" },
     main: "./extension.js",
     activationEvents: ["onStartupFinished"],
   };

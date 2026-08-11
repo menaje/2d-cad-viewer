@@ -2,7 +2,7 @@
   "name": "dwg-viewer-vscode",
   "displayName": "DWG Viewer for VS Code",
   "description": "Open-source, local-first DWG viewing with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "menaje",
   "license": "MPL-2.0",
   "private": true,
@@ -12,7 +12,7 @@
     "directory": "apps/vscode-extension"
   },
   "engines": {
-    "vscode": "^1.125.0"
+    "vscode": "^1.85.0"
   },
   "categories": [
     "Visualization",
@@ -316,7 +316,7 @@
   },
   "devDependencies": {
     "@types/node": "26.1.2",
-    "@types/vscode": "1.125.0",
+    "@types/vscode": "1.85.0",
     "@vscode/vsce": "3.9.2",
     "esbuild": "0.28.1",
     "typescript": "7.0.2"

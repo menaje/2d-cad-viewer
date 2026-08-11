@@ -129,7 +129,7 @@ four source-complete archives. Generate the version-bound catalog first:
 ```bash
 node scripts/create-engine-catalog.mjs \
   --directory /absolute/path/release-assets \
-  --version 0.1.5 \
+  --version 0.1.6 \
   --output /absolute/path/engine-assets.json
 ```
 
@@ -142,7 +142,7 @@ DWG_VIEWER_ENGINE_CATALOG=/absolute/path/engine-assets.json \
 pnpm --dir apps/vscode-extension exec vsce package \
   --pre-release \
   --no-dependencies \
-  --out /absolute/new/path/dwg-viewer-vscode-0.1.5.vsix
+  --out /absolute/new/path/dwg-viewer-vscode-0.1.6.vsix
 ```
 
 Use the checksum-pinned preparation and deterministic packager in
@@ -167,9 +167,9 @@ shasum -a 256 -c SHA256SUMS
 With GitHub CLI, verify provenance for the files you intend to use:
 
 ```bash
-gh attestation verify dwg-viewer-vscode-0.1.5.vsix \
+gh attestation verify dwg-viewer-vscode-0.1.6.vsix \
   --repo menaje/dwg-viewer
-gh attestation verify dwg-viewer-native-converter-0.1.5-darwin-arm64 \
+gh attestation verify dwg-viewer-native-converter-0.1.6-darwin-arm64 \
   --repo menaje/dwg-viewer
 gh attestation verify dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz \
   --repo menaje/dwg-viewer
@@ -184,7 +184,7 @@ install.
 For a manual VSIX installation:
 
 ```bash
-code --install-extension dwg-viewer-vscode-0.1.5.vsix
+code --install-extension dwg-viewer-vscode-0.1.6.vsix
 ```
 
 If the target computer cannot reach GitHub Releases, copy the matching raw
@@ -192,14 +192,14 @@ converter from another verified computer. On Linux or macOS, make only that
 file executable and run its self-test:
 
 ```bash
-chmod 700 dwg-viewer-native-converter-0.1.5-darwin-arm64
-./dwg-viewer-native-converter-0.1.5-darwin-arm64 doctor
+chmod 700 dwg-viewer-native-converter-0.1.6-darwin-arm64
+./dwg-viewer-native-converter-0.1.6-darwin-arm64 doctor
 ```
 
 On Windows, run:
 
 ```powershell
-.\dwg-viewer-native-converter-0.1.5-win32-x64.exe doctor
+.\dwg-viewer-native-converter-0.1.6-win32-x64.exe doctor
 ```
 
 Then run **DWG Viewer: LibreDWG 변환기 선택** and choose that verified file.
