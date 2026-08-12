@@ -57,6 +57,7 @@ const SELECT_LIBREDWG_ADAPTER_COMMAND =
   "dwgViewer.selectLibreDwgAdapter";
 const DIAGNOSE_LIBREDWG_ADAPTER_COMMAND =
   "dwgViewer.diagnoseLibreDwgAdapter";
+const REUSED_PREVIEW_FRAME_WAIT_MS = 10_000;
 
 function bundledLibreDwgExtensionPath(): string | undefined {
   return vscode.extensions.getExtension(
@@ -397,6 +398,22 @@ interface HostMessage {
   requestId?: unknown;
   name?: unknown;
   suggestedName?: unknown;
+  webviewSettleMs?: unknown;
+  detailPendingCount?: unknown;
+  xrefCount?: unknown;
+  xrefIssueCount?: unknown;
+  imageCount?: unknown;
+  imageIssueCount?: unknown;
+  fontCount?: unknown;
+  fontIssueCount?: unknown;
+}
+
+function visualCompletionCount(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) &&
+    (value as number) >= 0 &&
+    (value as number) <= 1_000_000
+    ? (value as number)
+    : undefined;
 }
 
 class DwgEditorProvider
@@ -592,6 +609,7 @@ class DwgEditorProvider
     let conversion: AbortController | undefined;
     const rangeChannels = new Map<string, CacheRangeChannel>();
     const previewReleases = new Map<string, () => Promise<void>>();
+    const previewFrameWaiters = new Map<string, () => void>();
     let fontChannel: ShxFontChannel | undefined;
     let plotStyleChannel: CtbPlotStyleChannel | undefined;
     let xrefController: XrefController | undefined;
@@ -711,8 +729,13 @@ class DwgEditorProvider
       pendingStateMessage = undefined;
       const channels = [...rangeChannels.values()];
       const releases = [...previewReleases.values()];
+      const previewWaiters = [...previewFrameWaiters.values()];
       rangeChannels.clear();
       previewReleases.clear();
+      previewFrameWaiters.clear();
+      for (const settle of previewWaiters) {
+        settle();
+      }
       fontChannel?.dispose();
       fontChannel = undefined;
       plotStyleChannel?.dispose();
@@ -727,7 +750,47 @@ class DwgEditorProvider
       await Promise.allSettled(releases.map((release) => release()));
     };
 
+    const settlePreviewFrame = (cacheId: string): void => {
+      const settle = previewFrameWaiters.get(cacheId);
+      previewFrameWaiters.delete(cacheId);
+      settle?.();
+    };
+
+    const waitForPreviewFrame = (
+      cacheId: string,
+      signal: AbortSignal,
+    ): Promise<void> => {
+      settlePreviewFrame(cacheId);
+      return new Promise((resolve) => {
+        let settled = false;
+        let timer: NodeJS.Timeout | undefined;
+        const finish = (): void => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (timer) {
+            clearTimeout(timer);
+          }
+          signal.removeEventListener("abort", finish);
+          if (previewFrameWaiters.get(cacheId) === finish) {
+            previewFrameWaiters.delete(cacheId);
+          }
+          resolve();
+        };
+        previewFrameWaiters.set(cacheId, finish);
+        timer = setTimeout(finish, REUSED_PREVIEW_FRAME_WAIT_MS);
+        timer.unref();
+        if (signal.aborted) {
+          finish();
+        } else {
+          signal.addEventListener("abort", finish, { once: true });
+        }
+      });
+    };
+
     const disposePreview = async (cacheId: string): Promise<void> => {
+      settlePreviewFrame(cacheId);
       const channel = rangeChannels.get(cacheId);
       const release = previewReleases.get(cacheId);
       rangeChannels.delete(cacheId);
@@ -940,8 +1003,14 @@ class DwgEditorProvider
                         preview.cacheId,
                         preview.release,
                       );
+                      const firstFrame = preview.reused
+                        ? waitForPreviewFrame(
+                            preview.cacheId,
+                            controller.signal,
+                          )
+                        : undefined;
                       try {
-                        await webviewPanel.webview.postMessage({
+                        const posted = await webviewPanel.webview.postMessage({
                           type: "dwg-cache-preview-ready/1",
                           cacheId: preview.cacheId,
                           size: preview.size,
@@ -950,9 +1019,14 @@ class DwgEditorProvider
                           engineBackend: preview.engine.backendId,
                           bigFontEncodings: bigFontEncodings(),
                         });
+                        if (!posted) {
+                          settlePreviewFrame(preview.cacheId);
+                        }
                         void emitQualification("preview-published", {
                           size_bytes: preview.size,
+                          reused: preview.reused,
                         });
+                        await firstFrame;
                       } catch (error) {
                         await disposePreview(preview.cacheId);
                         throw error;
@@ -1482,6 +1556,60 @@ class DwgEditorProvider
               );
             break;
           }
+          case "dwg-visual-complete/1": {
+            if (raw.cacheId !== activeCacheId) {
+              break;
+            }
+            const webviewSettleMs = visualCompletionCount(
+              raw.webviewSettleMs,
+            );
+            const detailPendingCount = visualCompletionCount(
+              raw.detailPendingCount,
+            );
+            const xrefCount = visualCompletionCount(raw.xrefCount);
+            const xrefIssueCount = visualCompletionCount(
+              raw.xrefIssueCount,
+            );
+            const imageCount = visualCompletionCount(raw.imageCount);
+            const imageIssueCount = visualCompletionCount(
+              raw.imageIssueCount,
+            );
+            const fontCount = visualCompletionCount(raw.fontCount);
+            const fontIssueCount = visualCompletionCount(
+              raw.fontIssueCount,
+            );
+            if (
+              webviewSettleMs === undefined ||
+              detailPendingCount === undefined ||
+              xrefCount === undefined ||
+              xrefIssueCount === undefined ||
+              imageCount === undefined ||
+              imageIssueCount === undefined ||
+              fontCount === undefined ||
+              fontIssueCount === undefined ||
+              xrefIssueCount > xrefCount ||
+              imageIssueCount > imageCount ||
+              fontIssueCount > fontCount
+            ) {
+              break;
+            }
+            const hostElapsed = Math.max(0, Date.now() - openStartedAt);
+            this.output.appendLine(
+              `[VISUAL_COMPLETE] host_to_visual_ms=${hostElapsed} webview_settle_ms=${webviewSettleMs} detail_pending=${detailPendingCount} xrefs=${xrefCount} xref_issues=${xrefIssueCount} images=${imageCount} image_issues=${imageIssueCount} fonts=${fontCount} font_issues=${fontIssueCount}`,
+            );
+            void emitQualification("visual-complete", {
+              host_to_visual_complete_ms: hostElapsed,
+              webview_settle_ms: webviewSettleMs,
+              detail_pending_count: detailPendingCount,
+              xref_count: xrefCount,
+              xref_issue_count: xrefIssueCount,
+              image_count: imageCount,
+              image_issue_count: imageIssueCount,
+              font_count: fontCount,
+              font_issue_count: fontIssueCount,
+            }).finally(() => closeAfterQualification("visual"));
+            break;
+          }
           case "dwg-first-frame-ready/1":
             if (raw.cacheId === activeCacheId) {
               const hostElapsed = Math.max(0, Date.now() - openStartedAt);
@@ -1507,6 +1635,7 @@ class DwgEditorProvider
               typeof raw.cacheId === "string" &&
               previewReleases.has(raw.cacheId)
             ) {
+              settlePreviewFrame(raw.cacheId);
               const hostElapsed = Math.max(0, Date.now() - openStartedAt);
               this.output.appendLine(
                 `[PREVIEW_FRAME_READY] engine=${

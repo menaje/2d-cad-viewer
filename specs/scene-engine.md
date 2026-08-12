@@ -53,8 +53,9 @@ without creating a whole-drawing JavaScript object graph.
 ## Native progressive publication
 
 The preview is optional and best-effort. When the caller supplies an
-`onPreview` callback, the cache manager gives the Native engine a new private
-preview path. The adapter:
+`onPreview` callback, the cache manager first checks a deterministic overview
+path derived from the full-cache identity. If no compatible overview exists,
+it gives the Native engine a new private temporary preview path. The adapter:
 
 1. parses the DWG once and builds the capped overview plan;
 2. writes and closes an independent Scene Cache v1.26 preview;
@@ -65,15 +66,19 @@ The preview contains drawing, layer, block and INSERT metadata plus only the
 LOD-0 GPU line prefix. Its geometry is capped by the existing 4 MiB overview
 limit; source, text, HATCH, primitive and draw-order sections remain present
 but empty. Header flag bit 0 identifies this display-only artifact. It is
-never committed under the canonical cache identity, reused on a later open or
-accepted as the final conversion result.
+never accepted as the final conversion result or committed under the
+canonical full-cache filename.
 
 The extension observes the marker without blocking the converter, verifies
-the preview path and size and rechecks both source and engine snapshots before
-opening a separate range channel. The Webview replaces the preview with the
-ordinary full cache when that cache is validated. The preview channel and file
-are released after the full first frame, or immediately on retry,
-cancellation, editor close or preview-render failure.
+the preview path, size, schema and preview flag, and rechecks both source and
+engine snapshots. It then atomically commits the overview as
+`<full-cache-id>.dwg.preview` and opens a separate range channel. A later
+forced or interrupted full conversion publishes that overview before starting
+the converter, gives its first frame a bounded opportunity to complete, and
+omits a duplicate preview request. The Webview replaces it with the ordinary
+full cache when that cache is validated. Retry, cancellation, editor close and
+preview-render failure release the range channel; the validated overview
+remains reusable.
 
 Preview creation, publication or rendering failure does not weaken the final
 cache contract: conversion continues through the existing validated,

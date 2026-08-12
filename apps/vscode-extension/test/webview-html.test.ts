@@ -327,6 +327,7 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
     mainModule,
     /type: "dwg-plot-style-file-select\/1"/u,
   );
+  assert.match(mainModule, /type: "dwg-visual-complete\/1"/u);
 
   const manifest = JSON.parse(manifestText) as {
     contributes?: {

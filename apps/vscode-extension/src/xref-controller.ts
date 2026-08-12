@@ -1,6 +1,10 @@
 import path from "node:path";
 import * as vscode from "vscode";
 import {
+  BoundedTaskQueue,
+  TaskQueueDisposedError,
+} from "./bounded-task-queue";
+import {
   type PreparedCache,
   SceneCacheManager,
 } from "./scene-cache-manager";
@@ -16,6 +20,7 @@ const XREF_MAPPING_STATE_KEY = "dwgViewer.xrefMappings.v1";
 const MAX_XREF_REFERENCES = 64;
 const MAX_XREF_DEPTH = 8;
 const XREF_MOUNT_TIMEOUT_MS = 30_000;
+const MAX_XREF_TASK_CONCURRENCY = 2;
 
 interface XrefReferenceMessage {
   blockIndex?: unknown;
@@ -161,7 +166,10 @@ export class XrefController {
       timer: NodeJS.Timeout;
     }
   >();
-  private queue: Promise<void> = Promise.resolve();
+  private readonly taskQueue = new BoundedTaskQueue(
+    MAX_XREF_TASK_CONCURRENCY,
+  );
+  private readonly prepareQueue = new BoundedTaskQueue(1);
   private referenceCount = 0;
   private disposed = false;
 
@@ -203,6 +211,8 @@ export class XrefController {
     }
     this.disposed = true;
     this.abortController.abort();
+    this.taskQueue.dispose();
+    this.prepareQueue.dispose();
     this.sources.clear();
     this.pending.clear();
     this.preparedBySource.clear();
@@ -214,20 +224,46 @@ export class XrefController {
   }
 
   private enqueue(task: () => Promise<void>): void {
-    this.queue = this.queue
-      .catch(() => undefined)
-      .then(async () => {
+    void this.taskQueue
+      .run(async () => {
         if (!this.disposed) {
           await task();
         }
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
+        if (
+          this.disposed ||
+          error instanceof TaskQueueDisposedError
+        ) {
+          return;
+        }
         this.options.output.appendLine(
           `[XREF_TASK_FAILED] ${
             error instanceof Error ? error.message.slice(0, 200) : "unknown"
           }`,
         );
       });
+  }
+
+  private prepareSource(
+    resolvedKey: string,
+    sourcePath: string,
+  ): Promise<PreparedCache> {
+    const existing = this.preparedBySource.get(resolvedKey);
+    if (existing) {
+      return Promise.resolve(existing);
+    }
+    return this.prepareQueue.run(async () => {
+      let prepared = this.preparedBySource.get(resolvedKey);
+      if (!prepared) {
+        prepared = await this.options.manager.prepare(sourcePath, {
+          signal: this.abortController.signal,
+        });
+        await this.options.publishCache(prepared, sourcePath);
+        this.preparedBySource.set(resolvedKey, prepared);
+      }
+      return prepared;
+    });
   }
 
   private enqueueDiscovery(message: XrefDiscoveryMessage): void {
@@ -392,14 +428,10 @@ export class XrefController {
       await this.postStatus(reference, "converting", {
         method: resolution.method,
       });
-      let prepared = this.preparedBySource.get(resolvedKey);
-      if (!prepared) {
-        prepared = await this.options.manager.prepare(resolution.path, {
-          signal: this.abortController.signal,
-        });
-        await this.options.publishCache(prepared, resolution.path);
-        this.preparedBySource.set(resolvedKey, prepared);
-      }
+      const prepared = await this.prepareSource(
+        resolvedKey,
+        resolution.path,
+      );
       if (this.disposed || this.abortController.signal.aborted) {
         return;
       }
@@ -633,6 +665,7 @@ export class XrefController {
 export {
   MAX_XREF_DEPTH,
   MAX_XREF_REFERENCES,
+  MAX_XREF_TASK_CONCURRENCY,
   XREF_MOUNT_TIMEOUT_MS,
   XREF_MAPPING_STATE_KEY,
 };

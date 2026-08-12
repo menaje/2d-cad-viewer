@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   mkdtemp,
+  readdir,
   readFile,
   rm,
   writeFile,
@@ -21,18 +22,19 @@ import {
   type SceneEngineProgressPhase,
 } from "../src/scene-engine";
 
-function sceneCacheBytes(payload: string): Buffer {
+function sceneCacheBytes(payload: string, flags = 0): Buffer {
   const version = /\/(\d+)\.(\d+)$/u.exec(SCENE_CACHE_SCHEMA_VERSION);
   assert.ok(version);
-  const header = Buffer.alloc(12);
+  const header = Buffer.alloc(28);
   Buffer.from("DWGSCN1\0", "binary").copy(header);
   header.writeUInt16LE(Number(version[1]), 8);
   header.writeUInt16LE(Number(version[2]), 10);
+  header.writeUInt32LE(flags, 24);
   return Buffer.concat([header, Buffer.from(payload, "utf8")]);
 }
 
 function sceneCachePayload(cache: Buffer): string {
-  return cache.subarray(12).toString("utf8");
+  return cache.subarray(28).toString("utf8");
 }
 
 test("normalizes bounded conversion options into a stable cache identity", () => {
@@ -126,40 +128,58 @@ test("prepares a progressive WASM-shaped engine through the common cache path", 
   );
 });
 
-test("publishes and releases an independently readable preview", async (context) => {
+test("persists and reuses an independently readable preview", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "dwg-scene-preview-"));
   context.after(() => rm(root, { recursive: true, force: true }));
   const sourcePath = path.join(root, "drawing.dwg");
   await writeFile(sourcePath, "drawing");
 
   const descriptor = wasmProbeDescriptor();
+  let conversionCount = 0;
   const engine: SceneEngine = {
     descriptor,
     async snapshot() {
       return { revision: "preview-revision-1" };
     },
     async convert(request) {
-      assert.equal(typeof request.previewPath, "string");
-      await writeFile(request.previewPath!, "bounded-preview");
-      await request.onPreview?.({
-        path: request.previewPath!,
-        size: 15,
-      });
+      conversionCount += 1;
+      if (conversionCount === 1 || conversionCount === 3) {
+        assert.equal(typeof request.previewPath, "string");
+        const preview = sceneCacheBytes(
+          conversionCount === 1
+            ? "bounded-preview"
+            : "replacement-preview",
+          1,
+        );
+        await writeFile(request.previewPath!, preview);
+        await request.onPreview?.({
+          path: request.previewPath!,
+          size: preview.byteLength,
+        });
+      } else {
+        assert.equal(request.previewPath, undefined);
+        assert.equal(request.onPreview, undefined);
+      }
       await writeFile(request.outputPath, sceneCacheBytes("packed-scene-cache"));
     },
   };
+  const cacheRoot = path.join(root, "cache");
+  const manager = new SceneCacheManager(cacheRoot, engine);
   const phases: SceneEngineProgressPhase[] = [];
-  let releasedPreviewPath: string | undefined;
-  const prepared = await new SceneCacheManager(
-    path.join(root, "cache"),
-    engine,
-  ).prepare(sourcePath, {
+  let persistedPreviewPath: string | undefined;
+  let firstPreviewId: string | undefined;
+  const prepared = await manager.prepare(sourcePath, {
     signal: new AbortController().signal,
     onProgress: ({ phase }) => phases.push(phase),
     async onPreview(preview) {
       assert.match(preview.cacheId, /^[a-f0-9]{64}$/u);
-      assert.equal(await readFile(preview.cachePath, "utf8"), "bounded-preview");
-      releasedPreviewPath = preview.cachePath;
+      assert.equal(preview.reused, false);
+      assert.equal(
+        sceneCachePayload(await readFile(preview.cachePath)),
+        "bounded-preview",
+      );
+      persistedPreviewPath = preview.cachePath;
+      firstPreviewId = preview.cacheId;
       await preview.release();
       await preview.release();
     },
@@ -171,8 +191,54 @@ test("publishes and releases an independently readable preview", async (context)
     "preview-ready",
     "cache-ready",
   ]);
-  assert.ok(releasedPreviewPath);
-  await assert.rejects(readFile(releasedPreviewPath));
+  assert.ok(persistedPreviewPath);
+  assert.equal(
+    sceneCachePayload(await readFile(persistedPreviewPath)),
+    "bounded-preview",
+  );
+
+  await rm(prepared.cachePath);
+  let reusedPreviewPath: string | undefined;
+  const rebuilt = await manager.prepare(sourcePath, {
+    signal: new AbortController().signal,
+    async onPreview(preview) {
+      assert.equal(preview.reused, true);
+      assert.equal(preview.cacheId, firstPreviewId);
+      reusedPreviewPath = preview.cachePath;
+    },
+  });
+  assert.equal(conversionCount, 2);
+  assert.equal(reusedPreviewPath, persistedPreviewPath);
+  assert.equal(rebuilt.reused, false);
+  assert.equal(
+    sceneCachePayload(await readFile(rebuilt.cachePath)),
+    "packed-scene-cache",
+  );
+
+  await rm(rebuilt.cachePath);
+  const invalidPreview = await readFile(persistedPreviewPath);
+  invalidPreview.writeUInt32LE(0, 24);
+  await writeFile(persistedPreviewPath, invalidPreview);
+  let replacementPublished = false;
+  await manager.prepare(sourcePath, {
+    signal: new AbortController().signal,
+    async onPreview(preview) {
+      replacementPublished = true;
+      assert.equal(preview.reused, false);
+      assert.equal(
+        sceneCachePayload(await readFile(preview.cachePath)),
+        "replacement-preview",
+      );
+    },
+  });
+  assert.equal(conversionCount, 3);
+  assert.equal(replacementPublished, true);
+  assert.equal(
+    (await readdir(cacheRoot)).some(
+      (name) => name.endsWith(".tmp") || name.endsWith(".ready"),
+    ),
+    false,
+  );
 });
 
 test("keeps the final cache when preview publication fails", async (context) => {
@@ -190,10 +256,11 @@ test("keeps the final cache when preview publication fails", async (context) => 
     },
     async convert(request) {
       previewPath = request.previewPath;
-      await writeFile(request.previewPath!, "bounded-preview");
+      const preview = sceneCacheBytes("bounded-preview", 1);
+      await writeFile(request.previewPath!, preview);
       await request.onPreview?.({
         path: request.previewPath!,
-        size: 15,
+        size: preview.byteLength,
       });
       await writeFile(request.outputPath, sceneCacheBytes("packed-scene-cache"));
     },
@@ -214,6 +281,17 @@ test("keeps the final cache when preview publication fails", async (context) => 
   );
   assert.ok(previewPath);
   await assert.rejects(readFile(previewPath), /ENOENT/u);
+  assert.equal(
+    sceneCachePayload(
+      await readFile(
+        path.join(
+          path.dirname(prepared.cachePath),
+          `${prepared.cacheId}.dwg.preview`,
+        ),
+      ),
+    ),
+    "bounded-preview",
+  );
 });
 
 test("rejects an engine revision that changes during conversion", async (context) => {

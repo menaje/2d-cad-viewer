@@ -17,7 +17,8 @@ export const QUALIFICATION_MODE_ENV =
 export type QualificationCloseStage =
   | "conversion"
   | "preview"
-  | "full";
+  | "full"
+  | "visual";
 export type QualificationFields = Readonly<
   Record<string, boolean | number | string | null>
 >;
@@ -140,7 +141,8 @@ export function createQualificationReporter(
       (!drawingPath || !path.isAbsolute(drawingPath))) ||
     (closeAfter !== "conversion" &&
       closeAfter !== "preview" &&
-      closeAfter !== "full")
+      closeAfter !== "full" &&
+      closeAfter !== "visual")
   ) {
     return undefined;
   }

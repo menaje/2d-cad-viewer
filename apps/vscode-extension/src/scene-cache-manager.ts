@@ -29,7 +29,8 @@ import {
 const SCENE_CACHE_MAGIC = Buffer.from([
   0x44, 0x57, 0x47, 0x53, 0x43, 0x4e, 0x31, 0x00,
 ]);
-const SCENE_CACHE_HEADER_VERSION_BYTES = 12;
+const SCENE_CACHE_HEADER_BYTES = 28;
+const SCENE_CACHE_HEADER_FLAG_PREVIEW = 1;
 const sceneCacheVersionMatch = /\/(\d+)\.(\d+)$/u.exec(
   SCENE_CACHE_SCHEMA_VERSION,
 );
@@ -87,6 +88,7 @@ export interface PreparedPreview {
   cacheId: string;
   cachePath: string;
   size: number;
+  reused: boolean;
   engine: SceneEngineDescriptor;
   release(): Promise<void>;
 }
@@ -191,15 +193,37 @@ export class SceneCacheManager {
         this.cacheRoot,
         `${cacheId}.${randomBytes(8).toString("hex")}.tmp`,
       );
-      const previewPath =
+      const persistentPreviewPath =
         onPreview && this.engine.descriptor.capabilities.progressivePreview
           ? path.join(
               this.cacheRoot,
-              `${cacheId}.${randomBytes(8).toString("hex")}.preview`,
+              `${cacheId}.dwg.preview`,
             )
           : undefined;
       let previewHandedOff = false;
       let previewPublication = Promise.resolve();
+      if (persistentPreviewPath) {
+        const existingPreview = await this.readExistingPreview(
+          cacheId,
+          persistentPreviewPath,
+        );
+        if (existingPreview) {
+          previewHandedOff = true;
+          this.notify(onProgress, "preview-ready");
+          try {
+            await onPreview?.(existingPreview);
+          } catch {
+            // A consumer failure cannot invalidate a reusable overview.
+          }
+        }
+      }
+      const previewPath =
+        persistentPreviewPath && !previewHandedOff
+          ? path.join(
+              this.cacheRoot,
+              `${cacheId}.${randomBytes(8).toString("hex")}.preview.tmp`,
+            )
+          : undefined;
       try {
         await this.engine.convert({
           sourcePath,
@@ -241,33 +265,18 @@ export class SceneCacheManager {
                     ) {
                       return;
                     }
-                    if (process.platform !== "win32") {
-                      await chmod(previewPath, 0o600);
-                    }
-                    let released = false;
-                    const release = async (): Promise<void> => {
-                      if (released) {
-                        return;
-                      }
-                      released = true;
-                      await rm(previewPath, { force: true });
-                    };
+                    const preparedPreview = await this.commitPreview(
+                      cacheId,
+                      previewPath,
+                      persistentPreviewPath!,
+                      artifact.size,
+                    );
                     previewHandedOff = true;
                     this.notify(onProgress, "preview-ready");
                     try {
-                      await onPreview?.({
-                        cacheId: hashFields([
-                          "dwg-scene-preview/1",
-                          cacheId,
-                          previewPath,
-                        ]),
-                        cachePath: previewPath,
-                        size: artifact.size,
-                        engine: this.engine.descriptor,
-                        release,
-                      });
+                      await onPreview?.(preparedPreview);
                     } catch {
-                      await release().catch(() => undefined);
+                      // The committed overview remains available for retry.
                     }
                   })
                   .catch(async () => {
@@ -387,6 +396,98 @@ export class SceneCacheManager {
     this.notify(observer, event.phase);
   }
 
+  private preparedPreview(
+    cacheId: string,
+    cachePath: string,
+    size: number,
+    reused: boolean,
+  ): PreparedPreview {
+    return {
+      cacheId: hashFields(["dwg-scene-preview/2", cacheId]),
+      cachePath,
+      size,
+      reused,
+      engine: this.engine.descriptor,
+      async release(): Promise<void> {
+        // Range channels are released by the consumer. The overview remains
+        // durable so an interrupted or forced full conversion can reuse it.
+      },
+    };
+  }
+
+  private async readExistingPreview(
+    cacheId: string,
+    previewPath: string,
+  ): Promise<PreparedPreview | undefined> {
+    try {
+      const metadata = await stat(previewPath);
+      if (
+        !metadata.isFile() ||
+        metadata.size < SCENE_CACHE_HEADER_BYTES ||
+        !(await this.hasCompatibleHeader(
+          previewPath,
+          SCENE_CACHE_HEADER_FLAG_PREVIEW,
+        ))
+      ) {
+        await rm(previewPath, { force: true });
+        return undefined;
+      }
+      if (!Number.isSafeInteger(metadata.size)) {
+        throw new SceneEngineError(
+          "CACHE_TOO_LARGE",
+          "첫 화면 캐시가 지원 가능한 크기를 넘었습니다.",
+        );
+      }
+      return this.preparedPreview(
+        cacheId,
+        previewPath,
+        metadata.size,
+        true,
+      );
+    } catch (error) {
+      if (
+        error instanceof SceneEngineError ||
+        (error as NodeJS.ErrnoException).code !== "ENOENT"
+      ) {
+        throw error;
+      }
+      return undefined;
+    }
+  }
+
+  private async commitPreview(
+    cacheId: string,
+    temporaryPath: string,
+    previewPath: string,
+    expectedSize: number,
+  ): Promise<PreparedPreview> {
+    try {
+      await rename(temporaryPath, previewPath);
+    } catch (error) {
+      const racedPreview = await this.readExistingPreview(
+        cacheId,
+        previewPath,
+      );
+      if (racedPreview) {
+        await rm(temporaryPath, { force: true }).catch(() => undefined);
+        return racedPreview;
+      }
+      throw error;
+    }
+    if (process.platform !== "win32") {
+      await chmod(previewPath, 0o600);
+    }
+    const prepared = await this.readExistingPreview(cacheId, previewPath);
+    if (!prepared || prepared.size !== expectedSize) {
+      await rm(previewPath, { force: true }).catch(() => undefined);
+      throw new SceneEngineError(
+        "CACHE_PREVIEW_COMMIT_FAILED",
+        "첫 화면 캐시를 저장하지 못했습니다.",
+      );
+    }
+    return { ...prepared, reused: false };
+  }
+
   private async readExistingCache(
     cacheId: string,
     cachePath: string,
@@ -398,8 +499,8 @@ export class SceneCacheManager {
         return undefined;
       }
       if (
-        metadata.size < SCENE_CACHE_HEADER_VERSION_BYTES ||
-        !(await this.hasCompatibleHeader(cachePath))
+        metadata.size < SCENE_CACHE_HEADER_BYTES ||
+        !(await this.hasCompatibleHeader(cachePath, 0))
       ) {
         await rm(cachePath, { force: true });
         return undefined;
@@ -428,10 +529,13 @@ export class SceneCacheManager {
     }
   }
 
-  private async hasCompatibleHeader(cachePath: string): Promise<boolean> {
+  private async hasCompatibleHeader(
+    cachePath: string,
+    expectedFlags: number,
+  ): Promise<boolean> {
     const handle = await open(cachePath, "r");
     try {
-      const header = Buffer.alloc(SCENE_CACHE_HEADER_VERSION_BYTES);
+      const header = Buffer.alloc(SCENE_CACHE_HEADER_BYTES);
       const { bytesRead } = await handle.read(
         header,
         0,
@@ -444,7 +548,8 @@ export class SceneCacheManager {
           SCENE_CACHE_MAGIC,
         ) &&
         header.readUInt16LE(8) === EXPECTED_SCENE_CACHE_MAJOR &&
-        header.readUInt16LE(10) === EXPECTED_SCENE_CACHE_MINOR
+        header.readUInt16LE(10) === EXPECTED_SCENE_CACHE_MINOR &&
+        header.readUInt32LE(24) === expectedFlags
       );
     } finally {
       await handle.close();

@@ -111,6 +111,28 @@ test("writes bounded path-free events and claims one close stage", async (contex
   }
 });
 
+test("accepts visual completion as a terminal qualification stage", async (context) => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "dwg-qualification-visual-"),
+  );
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const reporter = createQualificationReporter(
+    {
+      [QUALIFICATION_REPORT_ENV]: path.join(root, "events.jsonl"),
+      [QUALIFICATION_TOKEN_ENV]: TOKEN,
+      [QUALIFICATION_DRAWING_ENV]: path.join(root, "drawing.dwg"),
+      [QUALIFICATION_CLOSE_AFTER_ENV]: "visual",
+    },
+    4321,
+  );
+
+  assert.ok(reporter);
+  assert.equal(reporter.claimClose("full"), false);
+  assert.equal(reporter.claimClose("visual"), true);
+  assert.equal(reporter.claimClose("visual"), false);
+  await reporter.close();
+});
+
 test("never overwrites an existing qualification report", async (context) => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "dwg-qualification-existing-"),

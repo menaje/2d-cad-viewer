@@ -45,6 +45,7 @@ import {
   DRAW_ORDER_SUBDIVISIONS,
 } from "./mask-order.mjs";
 import { WebviewMemoryTelemetry } from "./memory-telemetry.mjs";
+import { evaluateVisualCompletion } from "./visual-completion.mjs";
 import { normalizeInteractionRenderingMode } from "./interaction-rendering.mjs";
 import { normalizeRenderResolutionMode } from "./render-resolution.mjs";
 import {
@@ -431,8 +432,125 @@ const plotStyleWaiters = new Map();
 const MAX_EXTERNAL_SOURCE_OVERVIEW_BYTES = 32 * 1024 * 1024;
 let externalSourceOverviewBytes = 0;
 let externalLoadQueue = Promise.resolve();
+let visualCompletionState;
+let visualCompletionTimer;
 const LOCAL_CACHE_FINGERPRINT_SAMPLE_BYTES = 64 * 1024;
 const MAX_DWG_SESSION_READ_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
+
+function resetVisualCompletion() {
+  if (visualCompletionTimer !== undefined) {
+    clearTimeout(visualCompletionTimer);
+    visualCompletionTimer = undefined;
+  }
+  visualCompletionState = undefined;
+}
+
+function beginVisualCompletion(revision, cacheId) {
+  resetVisualCompletion();
+  if (!vscodeApi || typeof cacheId !== "string" || cacheId.length === 0) {
+    return;
+  }
+  visualCompletionState = {
+    revision,
+    cacheId,
+    startedAt: performance.now(),
+    firstFrame: false,
+    rootText: false,
+    rootImages: false,
+    emitted: false,
+  };
+}
+
+function visualCompletionEvaluation() {
+  const state = visualCompletionState;
+  if (
+    !state ||
+    state.revision !== openRevision ||
+    state.cacheId !== activeHostCacheId ||
+    state.emitted
+  ) {
+    return undefined;
+  }
+  const viewport = activeInteraction?.snapshot();
+  return evaluateVisualCompletion({
+    firstFrame: state.firstFrame,
+    rootText: state.rootText,
+    rootImages: state.rootImages,
+    detailLoading: viewport?.detail?.loading ?? -1,
+    imageDecoding: viewport?.render?.images?.decodingImages ?? 0,
+    pendingFontRequests: pendingHostFontRequests.size,
+    pendingEmbeddedImages: pendingEmbeddedImageRequests.size,
+    // Curve refinement is a view-dependent quality upgrade and can continue
+    // long after the current drawing, references, text, and images are usable.
+    postprocessBusy: fontRefreshTimer !== undefined,
+    fonts: [...fontDiagnostics.values()],
+    references: [...xrefDiagnostics.values()],
+  });
+}
+
+function scheduleVisualCompletionCheck() {
+  const state = visualCompletionState;
+  if (
+    !state ||
+    state.emitted ||
+    visualCompletionTimer !== undefined
+  ) {
+    return;
+  }
+  visualCompletionTimer = setTimeout(() => {
+    visualCompletionTimer = undefined;
+    const evaluation = visualCompletionEvaluation();
+    if (!evaluation?.complete) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const current = visualCompletionEvaluation();
+        if (!current?.complete || visualCompletionState !== state) {
+          return;
+        }
+        state.emitted = true;
+        vscodeApi.postMessage({
+          type: "dwg-visual-complete/1",
+          cacheId: state.cacheId,
+          webviewSettleMs: Math.max(
+            0,
+            Math.round(performance.now() - state.startedAt),
+          ),
+          detailPendingCount: current.detailLoading,
+          xrefCount: current.xrefCount,
+          xrefIssueCount: current.xrefIssueCount,
+          imageCount: current.imageCount,
+          imageIssueCount: current.imageIssueCount,
+          fontCount: current.fontCount,
+          fontIssueCount: current.fontIssueCount,
+        });
+      });
+    });
+  }, 80);
+}
+
+function markVisualCompletionTask(task, revision) {
+  const state = visualCompletionState;
+  if (!state || state.revision !== revision || state.emitted) {
+    return;
+  }
+  if (task === "text") {
+    state.rootText = true;
+  } else if (task === "images") {
+    state.rootImages = true;
+  }
+  scheduleVisualCompletionCheck();
+}
+
+function markVisualCompletionFirstFrame(cacheId) {
+  const state = visualCompletionState;
+  if (!state || state.cacheId !== cacheId || state.emitted) {
+    return;
+  }
+  state.firstFrame = true;
+  scheduleVisualCompletionCheck();
+}
 
 function bytesToHex(bytes) {
   return [...bytes]
@@ -1889,6 +2007,7 @@ function bigFontEncodingLabel(encoding) {
 }
 
 function renderFontDiagnostics() {
+  scheduleVisualCompletionCheck();
   const entries = [...fontDiagnostics.values()];
   const ready = entries.filter(({ state }) =>
     ["loaded", "mapped"].includes(state),
@@ -2013,6 +2132,7 @@ function xrefStateLabel(state) {
 }
 
 function renderXrefDiagnostics() {
+  scheduleVisualCompletionCheck();
   const entries = [...xrefDiagnostics.values()];
   const ready = entries.filter((entry) => entry.status === "ready").length;
   const unresolved = entries.filter((entry) =>
@@ -2319,6 +2439,7 @@ function scheduleFontRefresh(revision) {
   fontRefreshTimer = setTimeout(() => {
     fontRefreshTimer = undefined;
     refreshTextAfterFontChange(revision);
+    scheduleVisualCompletionCheck();
   }, 40);
 }
 
@@ -3350,6 +3471,7 @@ function requestSceneRasterImage(scene, request) {
     })
     .finally(() => {
       pendingEmbeddedImageRequests.delete(key);
+      scheduleVisualCompletionCheck();
     });
   return true;
 }
@@ -4806,6 +4928,7 @@ async function drainCurveRefinementRequest() {
         drainCurveRefinementRequest();
       }, 0);
     }
+    scheduleVisualCompletionCheck();
   }
 }
 
@@ -6109,6 +6232,7 @@ function installInteraction(
       }
       status.textContent += missingFontSuffix();
       activeReviewTools?.setCamera(viewport.render.camera);
+      scheduleVisualCompletionCheck();
     },
     onError(error) {
       status.textContent = t("status.viewport.detailError", {
@@ -6453,6 +6577,7 @@ async function openCache(source, workerSource, cacheSha256) {
   activeExportController = undefined;
   setExportPanelOpen(false);
   const revision = ++openRevision;
+  resetVisualCompletion();
   viewSwitchRevision += 1;
   activeViewId = undefined;
   activeViewHistory = undefined;
@@ -6586,6 +6711,9 @@ async function openCache(source, workerSource, cacheSha256) {
     activeViewerRuntime = runtime;
     activeScene = scene;
     activeDisplayLayers = scene.metadata.layers;
+    if (!scene.metrics.preview) {
+      beginVisualCompletion(revision, activeHostCacheId);
+    }
     activeTextComposite = new CompositeTextOverlay(textCanvas);
     scene.renderer.setTextOverlay(activeTextComposite);
     activeImageComposite = new CompositeRasterImageOverlay(imageCanvas);
@@ -6647,15 +6775,13 @@ async function openCache(source, workerSource, cacheSha256) {
       activeHostCacheId,
       0,
     );
-    initializeDeferredGeometry(
+    void initializeDeferredGeometry(
       workerSource,
       activeScene,
       revision,
       activeMaskOrder,
-    ).catch(
-      console.error,
-    );
-    initializeTextOverlay(
+    ).catch(console.error);
+    const textReady = initializeTextOverlay(
       activeScene,
       revision,
       activeMaskOrder,
@@ -6668,7 +6794,10 @@ async function openCache(source, workerSource, cacheSha256) {
       }
       console.error(error);
     });
-    initializeImageOverlay(
+    void textReady.finally(() =>
+      markVisualCompletionTask("text", revision),
+    );
+    const imagesReady = initializeImageOverlay(
       activeScene,
       revision,
       activeHostCacheId ?? `local-${revision}`,
@@ -6681,6 +6810,9 @@ async function openCache(source, workerSource, cacheSha256) {
       }
       console.error(error);
     });
+    void imagesReady.finally(() =>
+      markVisualCompletionTask("images", revision),
+    );
   } catch (error) {
     if (activeViewerRuntime === runtime) {
       activeViewerRuntime = undefined;
@@ -7129,6 +7261,9 @@ if (vscodeApi) {
           cacheId: message.cacheId,
           firstFrameMs: activeScene?.metrics.timings.firstFrameMs ?? null,
         });
+        if (!isPreview) {
+          markVisualCompletionFirstFrame(message.cacheId);
+        }
       })
       .catch((error) => {
         if (activeHostCacheId !== message.cacheId) {
