@@ -209,11 +209,17 @@ built-in languages, template keys, or runtime shell keys diverge.
 - Reads current INSERT/XREF spatial clips, propagates nested clip chains through
   shared instances and applies one boundary to WebGL geometry and Canvas text.
 - Reads the v1.26 linetype, saved-view, layout, VIEWPORT and raster IMAGE
-  sections and
-  allows every paper-space tab to be selected without duplicating model data.
+  sections, opens the saved model tab or exact current paper layout through its
+  canonical `*PAPER_SPACE` block, and allows every paper-space tab to be
+  selected without duplicating model data. A missing or duplicate current-paper
+  marker falls back to Model rather than guessing a paper tab and is exposed in
+  first-frame metrics.
 - Applies VIEWPORT group-68 activity/stacking and the group-90 off bit before
   building model roots, including inactive-layout fallback without reviving an
   explicitly off-screen viewport.
+- Applies each paper layout's independent `PSLTSCALE` bit when composing model
+  geometry through that layout's viewports instead of reusing one drawing-wide
+  value for every tab.
 - Applies each viewport's layer color, transparency, linetype and lineweight
   overrides consistently to WebGL geometry, Canvas text/complex linetypes and
   raster images while preserving shared block geometry.

@@ -80,6 +80,13 @@ export function makeViewDescriptors(metadata) {
         metadata.blocks[layout.blockIndex]?.name.toUpperCase() ===
         "*MODEL_SPACE",
     ) ?? null;
+  const currentPaperLayouts = orderedLayouts.filter(
+    (layout) =>
+      metadata.blocks[layout.blockIndex]?.name.toUpperCase() ===
+      "*PAPER_SPACE",
+  );
+  const currentPaperLayout =
+    currentPaperLayouts.length === 1 ? currentPaperLayouts[0] : null;
   const rawViews = [
     Object.freeze({
       id: "model",
@@ -102,10 +109,21 @@ export function makeViewDescriptors(metadata) {
         }),
       ),
   ];
-  const rawActive =
-    metadata.drawing.modelSpaceActive || rawViews.length === 1
-      ? rawViews[0]
-      : rawViews.find((view) => view.kind === "layout") ?? rawViews[0];
+  const rawActive = metadata.drawing.modelSpaceActive
+    ? rawViews[0]
+    : rawViews.find((view) => view.layout === currentPaperLayout) ??
+      rawViews[0];
+  const savedStateRestoration = Object.freeze({
+    requestedSpace: metadata.drawing.modelSpaceActive ? "model" : "paper",
+    status: metadata.drawing.modelSpaceActive
+      ? "restored-model"
+      : currentPaperLayouts.length === 1
+        ? "restored-paper"
+        : currentPaperLayouts.length === 0
+          ? "paper-layout-missing"
+          : "paper-layout-ambiguous",
+    currentPaperLayout: currentPaperLayout?.name ?? null,
+  });
   const views = rawViews.map((view) =>
     Object.freeze({
       ...view,
@@ -121,6 +139,7 @@ export function makeViewDescriptors(metadata) {
   return Object.freeze({
     views: Object.freeze(views),
     active,
+    savedStateRestoration,
   });
 }
 
@@ -307,6 +326,7 @@ export async function loadFirstFrame(
     }),
     renderer: render,
     instanceDiagnostics: instanceGraph.diagnostics,
+    savedStateRestoration: viewSet.savedStateRestoration,
     memory: readJsHeapSnapshot(),
   });
   onProgress("첫 화면 완료");

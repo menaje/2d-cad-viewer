@@ -14,6 +14,7 @@ import {
   describePng,
   displayParityQualificationStatus,
   layoutAnnotationVisibilitySummary,
+  layoutPaperSpaceLinetypeScaleSummary,
   parseArguments,
   parseAutoCadVectorProperty,
   pngPixelSha256,
@@ -27,6 +28,7 @@ import {
   summarizeAutoCadPairCoverage,
   summarizeAutoCadXrefCoverage,
   summarizePresentation,
+  savedCurrentTabSummary,
   validateAutoCad2026Identity,
   validateAutoCadPairPixelStates,
   validateConversionReport,
@@ -388,6 +390,7 @@ test("keeps the AutoCAD annotation gate open until one drawing can switch views"
                   ),
                   modelAnnotationAllVisible: Boolean(model),
                   layoutAnnotationAllVisible: Boolean(layout),
+                  currentPaperLayout: "DWGV_LAYOUT_ANNOTATION_MATRIX",
                 },
               },
             ]),
@@ -841,6 +844,7 @@ test("verifies an AutoCAD annotation 2x2 matrix and decoded pixels", async (cont
           ),
           modelAnnotationAllVisible: Boolean(model),
           layoutAnnotationAllVisible: Boolean(layout),
+          currentPaperLayout: "DWGV_LAYOUT_ANNOTATION_MATRIX",
           modelAnnotationScale: space === "model" ? 2 : 0,
           viewportAnnotationScale: 2,
           textHandle: "1A",
@@ -852,7 +856,7 @@ test("verifies an AutoCAD annotation 2x2 matrix and decoded pixels", async (cont
     states.push({ id, values: { model, layout }, views });
   }
   const report = {
-    schema: "dwg-autocad-annotation-scale-matrix/2",
+    schema: "dwg-autocad-annotation-scale-matrix/3",
     status: "pass",
     observedAt: "2026-08-12T12:00:00Z",
     target: {
@@ -1159,6 +1163,64 @@ test("counts model and paper ANNOALLVISIBLE independently", () => {
         { index: 1, annotationAllVisible: 1 },
       ]),
     /invalid ANNOALLVISIBLE/u,
+  );
+});
+
+test("counts saved current tabs and per-layout PSLTSCALE independently", () => {
+  assert.deepEqual(
+    layoutPaperSpaceLinetypeScaleSummary([
+      { index: 0, flags: 1 },
+      { index: 1, flags: 0 },
+      { index: 2, flags: 1 },
+    ]),
+    { true: 1, false: 1 },
+  );
+  assert.deepEqual(
+    savedCurrentTabSummary([
+      {
+        fixture: "model.dwg",
+        drawing: { modelSpaceActive: true },
+        blocks: [],
+        layouts: [],
+      },
+      {
+        fixture: "resolved.dwg",
+        drawing: { modelSpaceActive: false },
+        blocks: [{ name: "*paper_space" }],
+        layouts: [{ blockIndex: 0 }],
+      },
+      {
+        fixture: "missing.dwg",
+        drawing: { modelSpaceActive: false },
+        blocks: [{ name: "*PAPER_SPACE0" }],
+        layouts: [{ blockIndex: 0 }],
+      },
+      {
+        fixture: "ambiguous.dwg",
+        drawing: { modelSpaceActive: false },
+        blocks: [{ name: "*PAPER_SPACE" }],
+        layouts: [{ blockIndex: 0 }, { blockIndex: 0 }],
+      },
+      {
+        fixture: "legacy.dwg",
+        drawing: { modelSpaceActive: false, version: 1009 },
+        blocks: [{ name: "*MODEL_SPACE" }],
+        layouts: [],
+      },
+    ]),
+    {
+      model: 1,
+      paper: 4,
+      paperResolved: 1,
+      paperMissing: 1,
+      paperAmbiguous: 1,
+      paperLegacyNoLayouts: 1,
+      paperExceptions: [
+        { fixture: "missing.dwg", state: "missing" },
+        { fixture: "ambiguous.dwg", state: "ambiguous" },
+        { fixture: "legacy.dwg", state: "legacy-no-layouts" },
+      ],
+    },
   );
 });
 

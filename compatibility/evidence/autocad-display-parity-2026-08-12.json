@@ -1,7 +1,7 @@
 {
   "schema": "dwg-autocad-display-parity-evidence/1",
   "status": "pass-with-explicit-external-gates",
-  "observedAt": "2026-08-12T13:34:32Z",
+  "observedAt": "2026-08-12T13:56:50Z",
   "scope": {
     "repository": "menaje/dwg-viewer",
     "comparisonTarget": "AutoCAD 2026 2D Wireframe model/layout display",
@@ -809,9 +809,9 @@
       {
         "fixture": "architectural_-_annotation_scaling_and_multileaders.dwg",
         "inputSha256": "0e74f0aa84b1323c922345f067739c42ee26213dea010b407b87a94212271654",
-        "cacheSha256": "2c6a66d2e264eb9da5f0ec3ac4eb195e4aaa259de53f3ba32705a13fac3f310b",
+        "cacheSha256": "0a575378fa82d218d1090f8f92dbc38e3b4bf07d1fba9d774614f0dac07b3709",
         "inputBytes": 188992,
-        "cacheBytes": 491968,
+        "cacheBytes": 492040,
         "coverage": {
           "total_entities": 1846,
           "serialized_entities": 1846,
@@ -949,9 +949,9 @@
       {
         "fixture": "architectural_example-imperial.dwg",
         "inputSha256": "52d14a7bdb946099d3cf16fd276d19bd8924348fd02b2ddd0003cd4f6b34cce7",
-        "cacheSha256": "7958a7b07de3caa981dfcddb6756c2b452520176bf067cd2a2e46e6880b9a940",
+        "cacheSha256": "2522cd8581b54229b5fdaeb73c36fc50692461f2aa715f740609ae07077e1da9",
         "inputBytes": 148638,
-        "cacheBytes": 30160,
+        "cacheBytes": 30168,
         "coverage": {
           "total_entities": 96,
           "serialized_entities": 82,
@@ -1078,9 +1078,9 @@
       {
         "fixture": "blocks_and_tables_-_imperial.dwg",
         "inputSha256": "3c95e8a82d5c8c251483fabc61efa8ca904f4e4bc8c2fce4786d74e812284d07",
-        "cacheSha256": "be2e264016ff2de8bb3e30941ac0a5b1502c4a85f9e8522d176f81257eb3c830",
+        "cacheSha256": "b450b09bd247ee272b2e4ed5d14dfab3b1999b7ef50e1534e0266e85ddcbd554",
         "inputBytes": 227008,
-        "cacheBytes": 826392,
+        "cacheBytes": 826520,
         "coverage": {
           "total_entities": 1587,
           "serialized_entities": 1587,
@@ -1216,9 +1216,9 @@
       {
         "fixture": "blocks_and_tables_-_metric.dwg",
         "inputSha256": "7d5507da05fb70ba55875d99e676524ca2caa0ed7a5582ad130c3c06e8d925f1",
-        "cacheSha256": "f6891178abaf6928b8db67cd35801071c9cfe8ce2a0fb9b9afc7794dbf550b16",
+        "cacheSha256": "07c6e4621d8297d4ce0c49509ad09978f538cfa5a45dc03547ba9269f28c98d8",
         "inputBytes": 258848,
-        "cacheBytes": 914824,
+        "cacheBytes": 914984,
         "coverage": {
           "total_entities": 1913,
           "serialized_entities": 1913,
@@ -1354,7 +1354,7 @@
       {
         "fixture": "civil_example-imperial.dwg",
         "inputSha256": "45b419d0c7382eb271079b80c3237a52183f4fa09e7b495c3d7a65c6baa927dc",
-        "cacheSha256": "d32d73d70f07a610187e278b87ed1fb2ccb5009aa856ec440684cf5a29fd47c5",
+        "cacheSha256": "68b10f0c20e0b81115c2a5ca42f8f7c5a9c4a1b899d528179e23ae73c2238fbe",
         "inputBytes": 169592,
         "cacheBytes": 239464,
         "coverage": {
@@ -1484,7 +1484,7 @@
       {
         "fixture": "colorwh.dwg",
         "inputSha256": "7c70a76ce00647770b5026727fd0156a94a11d456db47db97d0bdf5a81acc344",
-        "cacheSha256": "937feb7e15796414359cf6b1240ce46235af1714ecb6c00036a0d25a8b68c82e",
+        "cacheSha256": "2b90d15bb902c576396d15085c8d673f3ab0b7df33c931ed68adb4a7f7558153",
         "inputBytes": 1786976,
         "cacheBytes": 6140944,
         "coverage": {
@@ -1613,7 +1613,7 @@
       {
         "fixture": "lineweights.dwg",
         "inputSha256": "ad2656f141675aeda06ede347f8921516700b60a0f5ba17af042419be5397b4d",
-        "cacheSha256": "a1d1cc9ec0d1a76272ac526908e64df0d181456120e713eaec0466169901f064",
+        "cacheSha256": "f6495aeb4496cd222ca5bc0ab7e5abc51117df0b9e1f6b6352d6bb23bff2d006",
         "inputBytes": 58496,
         "cacheBytes": 32584,
         "coverage": {
@@ -1867,9 +1867,9 @@
       {
         "fixture": "plot_screening_and_fill_patterns.dwg",
         "inputSha256": "3eb8c946863ca733a289813589ecee8ea383aa63b4c5fa2a22fe31feacf02f71",
-        "cacheSha256": "6d8d413681c584c9d6b92216e7a0bae1cfda97b3d581c8eec14f8d6d8bc8fb1a",
+        "cacheSha256": "f3ba7e65d4b9362a788fcf66484f7a33d30115d3c5b5541e56d16b826a5a66b6",
         "inputBytes": 85952,
-        "cacheBytes": 70464,
+        "cacheBytes": 70472,
         "coverage": {
           "total_entities": 341,
           "serialized_entities": 341,
@@ -1992,9 +1992,9 @@
       {
         "fixture": "tablet.dwg",
         "inputSha256": "7f203649dc8434ef7cf7a46f7f6def2a0192a1163ba34ebcf88ebfe69635ccd4",
-        "cacheSha256": "09bdd6a0a2122bc1f59124f15f97c2d11fefd520ab1cfe23737a06e3ce59d96b",
+        "cacheSha256": "cbfac134e9b0443de4463efd20686b94ab8ef460895923104672c31299f65f4c",
         "inputBytes": 438656,
-        "cacheBytes": 2585432,
+        "cacheBytes": 2585440,
         "coverage": {
           "total_entities": 5412,
           "serialized_entities": 5412,
@@ -2134,7 +2134,7 @@
       {
         "fixture": "title_block-ansi.dwg",
         "inputSha256": "907398897552a090182f5446f18ad1ef82b91176764c8ccf08b5c5799546eeba",
-        "cacheSha256": "9d15627ba865db345f255d36218e6350e40d4d9c48a0b68be0481ec56212f88a",
+        "cacheSha256": "937dbabbb248636bf86618702fea9f593e7870ed17148094bc53d48237808184",
         "inputBytes": 125896,
         "cacheBytes": 260352,
         "coverage": {
@@ -2263,7 +2263,7 @@
       {
         "fixture": "title_block-arch.dwg",
         "inputSha256": "59876d9e1fa9f4d64304d6e7e35cbfafa127e0b5363b3afbe6ed48ef3d2e867d",
-        "cacheSha256": "0707b67071ba542a72b8958bc2c4f6f6da6ab96d9c814d51e9d413d04ae1858b",
+        "cacheSha256": "7b453a2760f5af3c851b696944afe83253caaa139a14fe338d2d692ddbef54e2",
         "inputBytes": 126985,
         "cacheBytes": 260808,
         "coverage": {
@@ -2392,7 +2392,7 @@
       {
         "fixture": "title_block-iso.dwg",
         "inputSha256": "b874d82c5ee04f8a4fa6e907408c4ed770ee8208740fe4e1eb0f96fb2f793bc2",
-        "cacheSha256": "ec56efca4fcb5d43fe6565f14a8af0e572b3ce5479aa6f2746557c8bbf7d08c2",
+        "cacheSha256": "531095f6a1bd5c8075748504f9fe338d76a692c6e88ddaf3b8f17a43f04345d5",
         "inputBytes": 128233,
         "cacheBytes": 259608,
         "coverage": {
@@ -2520,7 +2520,7 @@
       {
         "fixture": "truetype.dwg",
         "inputSha256": "1e105bc884972d3d80cd983965d8dfa17f6f392042ec6c5997d99ae347487a92",
-        "cacheSha256": "a90f26177bee3a87e9179ce5a75b2ab61f3a5a47335915344c02de3e06f5834b",
+        "cacheSha256": "0ad17cc7daea040b854b11ffb455dc7209f474333753e52a340b70e77ffbbb81",
         "inputBytes": 70464,
         "cacheBytes": 35912,
         "coverage": {
@@ -2646,7 +2646,7 @@
       {
         "fixture": "visualization_-_aerial.dwg",
         "inputSha256": "edf22e187337e37d2083b26d6d00ce30ed78d2fd31d6bf0e9869902325ad3ab1",
-        "cacheSha256": "d5714678f88a698db289e3ff4a4e315bd7e71a0b9c9e439597d4187c60cce1e1",
+        "cacheSha256": "355018e4cd973d6dd68e42e986191ea6e2ba22cc412678c6eec96d0f64f5c85d",
         "inputBytes": 733036,
         "cacheBytes": 7568,
         "coverage": {
@@ -2766,7 +2766,7 @@
       {
         "fixture": "visualization_-_condominium_with_skylight.dwg",
         "inputSha256": "1a94d2412b7aac3c1c3ab6fdb2b62c4e8b031e5868ad45d2169f571bfc7cf8d4",
-        "cacheSha256": "369b04092d2b1fd0e092578929cdaeb90233d15c627750212679ded709345501",
+        "cacheSha256": "813799d2acec5573c0dfef7bdf9e828769b2b6ffd8750838f4682f9dc149e529",
         "inputBytes": 1415699,
         "cacheBytes": 504328,
         "coverage": {
@@ -2896,7 +2896,7 @@
       {
         "fixture": "visualization_-_conference_room.dwg",
         "inputSha256": "0579e4b5746593ff41d9326e488b1faddc0f7cc10e7db5317fc1d5b86f0132c4",
-        "cacheSha256": "90f6ea8f7e51460921d68d2bb48f5ef8952f75c50563b010ff343a749a3ccaf9",
+        "cacheSha256": "21f8e72245b6c8cbf29bb585d3aa9e641d1b45099c35721578883c0e03bee277",
         "inputBytes": 973730,
         "cacheBytes": 158864,
         "coverage": {
@@ -3025,7 +3025,7 @@
       {
         "fixture": "visualization_-_sun_and_sky_demo.dwg",
         "inputSha256": "fad5a9f95ac72c1ef572b2b69f831ee08492135acd5da5ff76af01b2ec506881",
-        "cacheSha256": "238843c956af8a27836f5739e34f391c9b00ec5da521d341c9c2885c9b9bd379",
+        "cacheSha256": "ddd4919f83a89b5fc05b4711818d2a930c5f0a14297206020d6cb52ea7201853",
         "inputBytes": 553297,
         "cacheBytes": 43352,
         "coverage": {
@@ -3293,6 +3293,20 @@
   },
   "layoutState": {
     "layouts": 390,
+    "savedCurrentTab": {
+      "model": 138,
+      "paper": 3,
+      "paperResolved": 2,
+      "paperMissing": 0,
+      "paperAmbiguous": 0,
+      "paperLegacyNoLayouts": 1,
+      "paperExceptions": [
+        {
+          "fixture": "r11/ACEB10.dwg",
+          "state": "legacy-no-layouts"
+        }
+      ]
+    },
     "annotationAllVisible": {
       "model": {
         "true": 129,
@@ -3304,6 +3318,10 @@
         "false": 0,
         "unavailable": 0
       }
+    },
+    "paperSpaceLinetypeScale": {
+      "true": 258,
+      "false": 3
     },
     "plotStyles": {
       "empty": 258,
@@ -3486,7 +3504,7 @@
     {
       "fixture": "2004/HatchG.dwg",
       "inputSha256": "9d03bcf4330ff5940a45e0fded1a4278810a626cc93cafe04b5ea0931a1ccc31",
-      "cacheSha256": "9480d7cf3d07c73842de7a298dacea9d74e553160607df9840dad3ef54075c08",
+      "cacheSha256": "2cdb9281315bd08811f80042ecafd9bf509caf09a028d2f1ee506c5383490d5d",
       "inputBytes": 59489,
       "cacheBytes": 130256,
       "coverage": {
@@ -3616,7 +3634,7 @@
     {
       "fixture": "2004/Underlay.dwg",
       "inputSha256": "0f061fe45c2e9a64028b465568e1fcb2b9b57e8ba20d533e53dc0704f4a03268",
-      "cacheSha256": "cd01468e690ad31712b13ea56b84092d68cf3332314de24934fe56f3a1be2613",
+      "cacheSha256": "bbf4d01c8966745b2c4e4ce1de819a3d6f94bb272f7c2d68ffc975173925b7ec",
       "inputBytes": 70412,
       "cacheBytes": 3992,
       "coverage": {
@@ -3734,7 +3752,7 @@
     {
       "fixture": "2013/ConstructionLine.dwg",
       "inputSha256": "7f0349aa01202098e9db748a38224b5bc710f0c88b53c549f4a73c4435a12f12",
-      "cacheSha256": "00ad81098445dbf9e7aaf3af32f90fc2751f5742982358c5f2993e347a4281e5",
+      "cacheSha256": "d9c2e666dbecd66daad567a8b5fc87ce91cf682ec2b3d0b668ed5f9d2b8bc234",
       "inputBytes": 31899,
       "cacheBytes": 4832,
       "coverage": {
@@ -3857,7 +3875,7 @@
     {
       "fixture": "2013/Multiline.dwg",
       "inputSha256": "82d963274ae5d236b3e2206fb47da1c303b6858b6b30460401d42fbcb07920db",
-      "cacheSha256": "70d4cab950dc43a2982fc15774be3542b6d58c4fd604290cfaa2b26c63e0f0b5",
+      "cacheSha256": "219766f6ef7b8a4b1042d72e88e7c88c554c18d24076c5f5ccb617123d58609c",
       "inputBytes": 31614,
       "cacheBytes": 5384,
       "coverage": {
@@ -3978,7 +3996,7 @@
     {
       "fixture": "2013/RAY.dwg",
       "inputSha256": "1c189782df5254881d915596ed1d02debcec26985e93a1b5b29e1ddb17c88777",
-      "cacheSha256": "16bd5ae57f32c7f063bb756c378addef080199311a67b9cafdf232dc52d834e3",
+      "cacheSha256": "d64791a97dc8517993809c574c4b7e64ed962435934c8962486f34b9cf506f05",
       "inputBytes": 37634,
       "cacheBytes": 4832,
       "coverage": {
@@ -4101,7 +4119,7 @@
     {
       "fixture": "2013/Text.dwg",
       "inputSha256": "5410979aab86bf912aa7018845e8723ed756d98c01d6008a223b0fd0b2072ebc",
-      "cacheSha256": "2f91cec779426f73ff24d47328eb7d761a3c0dd0ff723fff34c3e66a93aa5594",
+      "cacheSha256": "33f64738245260e32de5f17f1a7c7d311da85f4f4cf6559b1f3c3cb560f39719",
       "inputBytes": 31164,
       "cacheBytes": 4976,
       "coverage": {
@@ -4221,9 +4239,9 @@
     {
       "fixture": "2013/gh109_1.dwg",
       "inputSha256": "97156d13d70e04c4b3f7f379a6c4568ba24d384449d64127e743471b55bdfadf",
-      "cacheSha256": "4c1ed4c0d5c3e66e7146ec1b2481c25f3ef64569234c217d525d1baf16fda136",
+      "cacheSha256": "0e55ae0033bad9eec00ebfd40fbfdb962637b2025eb7dbac5ce808f34c1cf9e9",
       "inputBytes": 102258,
-      "cacheBytes": 86568,
+      "cacheBytes": 86600,
       "coverage": {
         "total_entities": 360,
         "serialized_entities": 355,
@@ -4614,7 +4632,8 @@
     "namedStb": "identified and reported; named per-entity style application is not rendered",
     "underlayContent": "PDF/DWF/DGN content and placement are deferred; drawing-wide frame settings are preserved",
     "proxyGraphics": "PROXYSHOW=1 with an explicit supported-opcode allowlist; unsupported streams are deferred atomically",
-    "threeDimensionalVisualStyles": "outside the 2D Wireframe renderer and counted as unsupported_3d_entities"
+    "threeDimensionalVisualStyles": "outside the 2D Wireframe renderer and counted as unsupported_3d_entities",
+    "preR13PaperSpace": "TILEMODE=0 is preserved, but a pre-R13 drawing without LAYOUT objects has no qualified paper-layout/view contract and falls back to the model view"
   },
   "pathsIncluded": false
 }

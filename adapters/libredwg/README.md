@@ -26,6 +26,10 @@ The current conversion coverage is corpus-qualified rather than format-wide:
 
 - layer, linetype, block, style and entity strings are converted from the
   DWG code page to valid UTF-8 before serialization, including `ANSI_949`;
+- block names are read from each BLOCK entity, which is the canonical DXF
+  source, rather than trusting a duplicated LibreDWG BLOCK_HEADER name. This
+  keeps the active `*PAPER_SPACE` block distinct from inactive
+  `*PAPER_SPACE0...` layout blocks;
 - the anonymous `inspect` contract applies the same legacy code-page
   conversion before Hangul and corruption metrics, so private corpus
   inventory does not reject valid pre-R2007 Korean drawings as malformed
@@ -125,6 +129,9 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   records;
 - named paper-space layouts retain their paper settings, active viewport and
   bounded VIEWPORT records so every saved layout can be selected independently;
+- pre-R13 `TILEMODE=0` files without modern LAYOUT objects remain an explicit
+  paper-space presentation boundary; the adapter does not synthesize a layout
+  or mislabel model geometry as paper-space content;
 - LAYER extension dictionaries retain sparse per-viewport color, transparency,
   linetype and lineweight overrides, capped at 1,048,576 property records;
 - XLINE and RAY retain exact point/direction sources and are clipped as

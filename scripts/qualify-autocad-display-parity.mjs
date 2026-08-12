@@ -36,7 +36,7 @@ const DOCTOR_SCHEMA = "dwg-engine-doctor/1";
 const AUTOCAD_PAIR_SCHEMA = "dwg-autocad-system-variable-pair/2";
 const AUTOCAD_XREF_SCHEMA = "dwg-autocad-xref-state-matrix/2";
 const AUTOCAD_ANNOTATION_SCHEMA =
-  "dwg-autocad-annotation-scale-matrix/2";
+  "dwg-autocad-annotation-scale-matrix/3";
 const CURRENT_CACHE_SCHEMA = "dwg-scene-cache/1.26";
 const WINDOWS_VSCODE_UI_SCHEMA = "dwg-windows-vscode-ui-qualification/1";
 const MAX_EXTERNAL_EVIDENCE_BYTES = 16 * 1024 * 1024;
@@ -567,6 +567,61 @@ export function layoutAnnotationVisibilitySummary(layouts) {
   return summary;
 }
 
+export function layoutPaperSpaceLinetypeScaleSummary(layouts) {
+  const summary = { true: 0, false: 0 };
+  for (const layout of layouts.filter((candidate) => candidate.index > 0)) {
+    summary[(layout.flags & 1) !== 0 ? "true" : "false"] += 1;
+  }
+  return summary;
+}
+
+export function savedCurrentTabSummary(records) {
+  const summary = {
+    model: 0,
+    paper: 0,
+    paperResolved: 0,
+    paperMissing: 0,
+    paperAmbiguous: 0,
+    paperLegacyNoLayouts: 0,
+    paperExceptions: [],
+  };
+  for (const record of records) {
+    if (record.drawing.modelSpaceActive) {
+      summary.model += 1;
+      continue;
+    }
+    summary.paper += 1;
+    const matches = record.layouts.filter(
+      (layout) =>
+        record.blocks[layout.blockIndex]?.name.toUpperCase() ===
+        "*PAPER_SPACE",
+    );
+    if (matches.length === 1) {
+      summary.paperResolved += 1;
+    } else if (
+      matches.length === 0 &&
+      record.layouts.length === 0 &&
+      record.drawing.version < 1012
+    ) {
+      summary.paperLegacyNoLayouts += 1;
+      summary.paperExceptions.push({
+        fixture: record.fixture,
+        state: "legacy-no-layouts",
+      });
+    } else if (matches.length === 0) {
+      summary.paperMissing += 1;
+      summary.paperExceptions.push({ fixture: record.fixture, state: "missing" });
+    } else {
+      summary.paperAmbiguous += 1;
+      summary.paperExceptions.push({
+        fixture: record.fixture,
+        state: "ambiguous",
+      });
+    }
+  }
+  return summary;
+}
+
 function plotStyleSummary(layouts) {
   const summary = { empty: 0, ctb: 0, stb: 0, other: 0 };
   for (const layout of layouts.filter((candidate) => candidate.index > 0)) {
@@ -588,8 +643,9 @@ async function readCacheMetadata(cachePath, includeConstructionLines = false) {
   const source = await FileRangeSource.open(cachePath);
   try {
     const reader = await SceneCacheReader.open(source);
-    const [drawing, layouts] = await Promise.all([
+    const [drawing, blocks, layouts] = await Promise.all([
       reader.readDrawing(),
+      reader.readBlocks(),
       reader.readLayouts(),
     ]);
     const constructionLines = [];
@@ -604,7 +660,7 @@ async function readCacheMetadata(cachePath, includeConstructionLines = false) {
         );
       }
     }
-    return { drawing, layouts, constructionLines };
+    return { drawing, blocks, layouts, constructionLines };
   } finally {
     await source.close();
   }
@@ -1610,6 +1666,7 @@ export async function readAutoCadAnnotationEvidence(filePath) {
         view.observed?.activeAnnotationAllVisible,
         Boolean(expected[space]),
       );
+      assert.equal(view.observed?.currentPaperLayout, report.case.layout);
       assert.equal(view.observed?.textHandle, report.fixture.textHandle);
       assert.ok(Array.isArray(view.observed?.textContextScales));
       assert.equal(
@@ -1738,7 +1795,8 @@ export function summarizeAutoCadAnnotationCoverage(evidence) {
             observed?.layoutAnnotationAllVisible ===
               Boolean(state.values?.layout) &&
             observed?.activeAnnotationAllVisible ===
-              Boolean(state.values?.[space])
+              Boolean(state.values?.[space]) &&
+            observed?.currentPaperLayout === report.case.layout
           );
         }),
       ),
@@ -2143,7 +2201,8 @@ async function convertCorpus({ adapterPath, corpusPath, dwgs, temporaryRoot }) {
       const report = validateConversionReport(
         await runAdapter(adapterPath, ["convert", inputPath, cachePath], fixture),
       );
-      const { drawing, layouts, constructionLines } = await readCacheMetadata(
+      const { drawing, blocks, layouts, constructionLines } =
+        await readCacheMetadata(
         cachePath,
         AUTOCAD_PROPERTY_FIXTURES.some(
           (candidate) => candidate.fixture === fixture,
@@ -2160,6 +2219,7 @@ async function convertCorpus({ adapterPath, corpusPath, dwgs, temporaryRoot }) {
         cacheSha256: await sha256File(cachePath),
         report,
         drawing,
+        blocks,
         layouts,
         constructionLines,
       };
@@ -2424,7 +2484,10 @@ function buildEvidence({
     ),
     layoutState: {
       layouts: allLayouts.length,
+      savedCurrentTab: savedCurrentTabSummary(records),
       annotationAllVisible: layoutAnnotationVisibilitySummary(allLayouts),
+      paperSpaceLinetypeScale:
+        layoutPaperSpaceLinetypeScaleSummary(allLayouts),
       plotStyles: plotStyleSummary(allLayouts),
       viewports: viewportModeSummary(allLayouts),
       plotStyleFixtures: plotStyleFixtures(records),
@@ -2478,6 +2541,8 @@ function buildEvidence({
         "PROXYSHOW=1 with an explicit supported-opcode allowlist; unsupported streams are deferred atomically",
       threeDimensionalVisualStyles:
         "outside the 2D Wireframe renderer and counted as unsupported_3d_entities",
+      preR13PaperSpace:
+        "TILEMODE=0 is preserved, but a pre-R13 drawing without LAYOUT objects has no qualified paper-layout/view contract and falls back to the model view",
     },
     pathsIncluded: false,
   };

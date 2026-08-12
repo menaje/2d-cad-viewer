@@ -1467,6 +1467,7 @@ function makeLayoutSection(
       firstViewport: 0,
       viewportCount: 2,
       tabOrder: 1,
+      flags: 1,
       name: "배치1",
       annotationAllVisible: layoutAnnotationAllVisible,
       paperWidth: 420,
@@ -1485,6 +1486,7 @@ function makeLayoutSection(
       writeU64(view, offset + 24, row.firstViewport);
       view.setUint32(offset + 32, row.viewportCount, true);
       view.setUint16(offset + 36, row.tabOrder, true);
+      view.setUint16(offset + 38, row.flags ?? 0, true);
       if (minorVersion >= 24) {
         view.setUint16(offset + 54, row.annotationAllVisible ? 1 : 0, true);
       }

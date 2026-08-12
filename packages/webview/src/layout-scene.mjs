@@ -326,6 +326,9 @@ export function buildLayoutRootPlan(
   const modelBlockIndices = blocks
     .filter((block) => block.name.toUpperCase() === "*MODEL_SPACE")
     .map((block) => block.index);
+  const layoutPaperSpaceLinetypeScale = Number.isInteger(layout.flags)
+    ? (layout.flags & 1) !== 0
+    : paperSpaceLinetypeScale;
   const paperViewport = paperViewportForLayout(layout);
   const paperAnnotationScale = viewportAnnotationScale(paperViewport, 1);
   const allVisible = new Uint8Array(layers.length).fill(1);
@@ -389,7 +392,7 @@ export function buildLayoutRootPlan(
     });
   for (const viewport of modelViewports) {
     const paperToModelScale = viewportPaperToModelScale(viewport);
-    const linetypeScale = paperSpaceLinetypeScale
+    const linetypeScale = layoutPaperSpaceLinetypeScale
       ? paperToModelScale
       : 1;
     const annotationScale = viewportAnnotationScale(

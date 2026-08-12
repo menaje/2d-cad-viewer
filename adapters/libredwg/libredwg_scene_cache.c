@@ -1331,6 +1331,21 @@ copy_utf8_field (BITCODE_RS codepage, void *value, const char *type,
 }
 
 static char *
+copy_block_name (Dwg_Data *dwg, Dwg_Object_BLOCK_HEADER *block)
+{
+  Dwg_Object *block_entity
+      = reference_object (dwg, block ? block->block_entity : NULL);
+  if (block_entity && block_entity->fixedtype == DWG_TYPE_BLOCK
+      && block_entity->tio.entity
+      && block_entity->tio.entity->tio.BLOCK)
+    return copy_utf8_field (
+        dwg->header.codepage, block_entity->tio.entity->tio.BLOCK,
+        "BLOCK", "name", "");
+  return copy_utf8_field (dwg->header.codepage, block, "BLOCK_HEADER",
+                          "name", "");
+}
+
+static char *
 copy_versioned_text (BITCODE_RS codepage, Dwg_Version_Type version,
                      const BITCODE_T value)
 {
@@ -2130,10 +2145,8 @@ table_allocation_failed:
           BlockEntry *entry = &tables->blocks[block_index];
           entry->object = object;
           entry->handle = (uint64_t)object->handle.value;
-          entry->name
-              = copy_utf8_field (dwg->header.codepage,
-                                 object->tio.object->tio.BLOCK_HEADER,
-                                 "BLOCK_HEADER", "name", "");
+          entry->name = copy_block_name (
+              dwg, object->tio.object->tio.BLOCK_HEADER);
           entry->xref_path
               = copy_utf8_field (dwg->header.codepage,
                                  object->tio.object->tio.BLOCK_HEADER,

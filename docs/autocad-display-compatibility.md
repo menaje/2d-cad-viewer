@@ -50,6 +50,7 @@ also present in qualification evidence.
 
 | AutoCAD state | Viewer behavior | Audit state |
 | --- | --- | --- |
+| `TILEMODE`, `CTAB` and `CLAYOUT` | The drawing's saved model/paper state chooses the initial tab. When paper space is active, the viewer resolves the layout whose associated block is exactly `*PAPER_SPACE`; it does not assume the first paper tab is current. AutoCAD retains that block name for the most recently active paper layout even while Model is active. The adapter reads the canonical BLOCK entity name rather than a possibly duplicated LibreDWG BLOCK_HEADER name. | Implemented for LAYOUT-bearing drawings. Annotation-matrix schema v3 rejects a converted save unless its named paper layout is the current `*PAPER_SPACE` layout. A missing or ambiguous marker fails closed to Model and is observable in first-frame metrics. Pre-R13 paper space without LAYOUT objects remains an explicit legacy boundary; a native multi-layout same-DWG capture remains an external gate. |
 | `FILLMODE` | Preserved in the drawing record. It gates HATCH solid/gradient/pattern/background results, SOLID/TRACE and wide-polyline interiors. The boundary remains visible when the corresponding entity has one. | Implemented; the public corpus contains only `1`, so the `0/1` AutoCAD pair remains an external gate. |
 | `ATTMODE` / `ATTDISP` | `0` hides ATTRIB and ATTDEF, `1` follows each entity's invisible flag and `2` forces attribute display except structural ATTDEF templates. | Implemented; the public corpus contains only `1`, so `0/1/2` reference pixels remain an external gate. |
 | Entity visibility and layer state | Common entity visibility (DXF group 60) is preserved across native geometry, Canvas overlays, XREFs and draw-order masking. Layer off/frozen suppresses screen display; locked and no-plot do not suppress an ordinary screen view. INSERT-layer visibility still gates every occurrence. | Implemented. `OBJECTISOLATIONMODE=1` fixture authoring must persist the resulting entity visibility in the DWG; the viewer does not infer the author's user setting. |
@@ -65,7 +66,7 @@ also present in qualification evidence.
 | VIEWPORT group 68 and status group 90 | Nonpositive group 68, invisible entities and group-90 off bit `0x20000` are excluded. Positive group 68 supplies stacking order. The primary paper viewport is not drawn as a model viewport. | Implemented. |
 | VIEWPORT perspective, front/back clipping and render mode | Perspective and front/back clipping flags, hidden/shaded render modes and related saved values are preserved. Unsupported model viewports are omitted with named reasons instead of being flattened as 2D Wireframe. Wireframe mode 0/1 remains eligible. | Explicit fail-closed boundary. |
 | `FRAME` family | `FRAME`, `IMAGEFRAME`, `XCLIPFRAME`, `OLEFRAME`, `PDFFRAME`, `DWFFRAME` and `DGNFRAME` values are preserved when present. `FRAME` 0/1/2 overrides IMAGE, XCLIP and WIPEOUT settings; its derived mixed value 3 selects each individual setting. `OLEFRAME` remains independent. Unavailable values remain unavailable. Values 0/1/2 retain the visible-versus-plot distinction even though the interactive viewer performs no plot job. | Implemented for supported IMAGE, XCLIP, WIPEOUT and OLE presentation boundaries. Underlay entities themselves remain deferred. |
-| `LTSCALE`, entity linetype scale, `MSLTSCALE`, `PSLTSCALE` | Global, per-entity, model-annotation and paper-viewport scale factors are combined for first-frame lines, complex linetype overlays and high-zoom curve/XLINE/RAY refinement. | Implemented with bounded dash/shape/text tables. |
+| `LTSCALE`, entity linetype scale, `MSLTSCALE`, `PSLTSCALE` | Global, per-entity and model-annotation factors are combined for first-frame lines, complex linetype overlays and high-zoom curve/XLINE/RAY refinement. Each paper layout independently reads its own `PSLTSCALE` from LAYOUT group-70 bit 1 before scaling model-space objects through that layout's viewports; a drawing-wide header value is not reused for every tab. | Implemented with bounded dash/shape/text tables. A same-DWG pair with conflicting layout values remains an external pixel gate. |
 | `LWDISPLAY` | Drawing-wide lineweight visibility is saved. Layout lineweights use paper units, layout/model scale and device pixels; the displayed width is zoom/DPI aware and capped. | Implemented for the 2D renderer. Plot-device end/join styles are not independently reconstructed. |
 | `VIEWRES` / curve display resolution | Autodesk saves VIEWRES in the drawing and, with hardware acceleration disabled, can deliberately show circles, arcs, splines and arced polylines as coarse vectors. The viewer instead retains analytic curve sources and refines them to a bounded half-pixel screen tolerance. | Known fidelity-policy difference, not an object-presence loss. Scene Cache does not yet preserve the per-viewport VIEWRES value, so an exact low-VIEWRES polygonal screen is a remaining contract change. Native evidence must record hardware acceleration and `WHIPARC`; ordinary parity captures use a smooth-curve profile. |
 | `SORTENTS` | Current AutoCAD releases always sort REGEN display order; the former bit 16 is obsolete. The viewer therefore uses each owner record's `SORTENTSTABLE` rather than treating the current `SORTENTS` bit mask as a screen-display switch. | No modification required for current AutoCAD. Selection, object-snap and plot-only sorting choices are outside the ordinary screen renderer. |
@@ -94,6 +95,7 @@ choice.
 | `LAYLOCKFADECTL` | `0` | Locked-layer fading is disabled for pixel comparison; lock still affects editing, not drawing visibility. |
 | `VISRETAINMODE` | `0` | Xref reload property synchronization is disabled while qualifying `VISRETAIN=1`; nonzero synchronization masks are separate reload-profile cases. |
 | `PROXYSHOW` | `1` | Qualified proxy graphics are displayed. Values 0 and 2 are distinct registry-profile cases (hidden and bounding-box-only), not drawing decode results. |
+| `TEXTFILL` | `1` | Qualified TrueType glyphs are displayed filled. AutoCAD's outline value `0` is a registry-profile effect and is not inferred from drawing bytes; exact native font contours remain outside the bounded Canvas text renderer. |
 | `WHIPARC` / hardware acceleration | smooth-curve profile recorded | `WHIPARC` is obsolete but can still override VIEWRES under some graphics profiles. It is recorded with hardware acceleration so coarse VIEWRES evidence cannot be mislabeled. |
 | `LINESMOOTHING` | `1` | AutoCAD applies registry-backed 2D antialiasing. Pixel evidence records this separately from object geometry because WebGL/Canvas rasterization is not expected to be byte-identical. |
 | `LINEFADING` | `0` | Density-triggered hardware line fading is disabled so a missing-looking line cannot be accepted as source visibility behavior. |
@@ -103,6 +105,11 @@ Viewer background color, reduced-quality/progressive-display modes, font and
 support-file availability, active layout/viewport, and 2D Wireframe visual
 style are also evidence inputs. A reference capture without those values is
 informative only and cannot close a pixel gate.
+
+`FASTSHADEDMODE` is also registry-backed, but Autodesk lists Wireframe and
+shaded visual styles rather than 2D Wireframe among the affected modes. It is
+recorded for any supplemental 3D/Wireframe capture and is not treated as a DWG
+visibility value or as a variable in the primary 2D Wireframe oracle.
 
 ## Color, lineweight and plot styles
 
@@ -190,6 +197,14 @@ The current run records:
   value: 129/129 model records and 261/261 paper records use the saved value
   or Autodesk's documented initial value `1`, with no missing application data
   misclassified as an explicit off state;
+- saved-tab inventory: 138 drawings reopen Model and 3 request paper space;
+  both LAYOUT-bearing paper drawings resolve exactly one canonical
+  `*PAPER_SPACE` layout, with zero missing or ambiguous modern markers. The
+  remaining R11 drawing has no LAYOUT objects and is recorded as an explicit
+  pre-R13 paper-space boundary instead of selecting a guessed tab;
+- per-layout `PSLTSCALE`: 258 paper layouts use `1` and 3 use `0`; each value is
+  now applied from that layout's group-70 bit rather than one drawing-wide
+  snapshot;
 - deferred partition: 43 unresolved dimensions, 3 underlays, 5 proxy streams,
   18 unsupported 3D entities, 0 invalid supported entities and 39 other
   unsupported entities;
@@ -283,7 +298,9 @@ single-current-space runner does not close those two gates by itself.
 The annotation runner creates one unsupported-scale annotative TEXT, one paper
 layout and one viewport, then captures all four model/layout 0/1 combinations
 without changing either camera. Each saved DWG is reconverted as Scene Cache
-v1.26 and must independently expose both the model and named-layout values:
+v1.26 and must independently expose both the model and named-layout values.
+Schema v3 additionally requires the generated named layout to resolve through
+the canonical current-paper `*PAPER_SPACE` block in every saved state:
 
 ```powershell
 pnpm run qualify:autocad-annotation-matrix `
@@ -334,9 +351,10 @@ on Windows, a non-2D-Wireframe capture mode, a missing section, an invalid suppo
 unpartitioned omission, an omitted referenced linetype or a mislabeled Browser
 image. The Browser gate requires all 11 named model/layout, dark/light,
 1×/2×, CTB/STB and object-family images; a partial list remains pending. The
-aggregate also records model and paper-layout `ANNOALLVISIBLE`
-counts separately, so an independently saved layout value cannot be hidden by
-the drawing-level summary.
+aggregate also records model and paper-layout `ANNOALLVISIBLE` counts,
+model-versus-paper saved current tabs, exact current-paper resolution and
+per-layout `PSLTSCALE` counts separately. An independently saved layout value
+therefore cannot be hidden by a drawing-level summary.
 
 The top-level status remains `pass-with-explicit-external-gates` until the
 complete Browser matrix, AutoCAD variable pairs, annotation matrix, XREF
@@ -362,6 +380,7 @@ the current implementation also remains pending.
 - [ACADVER release mapping](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-793238B6-F8B8-4D20-BB3A-001700AECD75.htm)
 - [Autodesk DXF entities](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-DXF/files/GUID-7D07C886-FD1D-4A0C-A7AB-B4D21F18E484.htm)
 - [Autodesk common entity group codes](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-DXF/files/GUID-3610039E-27D1-4E23-B6D3-7E60B22BB5BD.htm)
+- [TILEMODE](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-LT/files/GUID-02F55DD8-1EB1-493C-929D-A7CFDE55C348.htm), [CTAB](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-20529853-0C88-4417-8D8C-9783E9789BBC.htm), [CLAYOUT](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-Core/files/GUID-0C492884-3B3F-4C35-8BAE-8233342A9203.htm) and [current layout block resolution](https://help.autodesk.com/cloudhelp/2019/ENU/OARX-RefGuide/files/OREF-__MEMBERTYPE_Methods_AcDbLayoutManager.html)
 - [FILLMODE](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-FC385D70-45AA-4B9A-848A-CA3906C36124.htm)
 - [ATTDISP / ATTMODE](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-BCFF32DB-6860-4812-BEF1-3BB658126B26.htm)
 - [ANNOALLVISIBLE](https://help.autodesk.com/cloudhelp/2021/ENU/AutoCAD-Core/files/GUID-D8E50F6F-FB71-4A20-A3B9-7701C0518B81.htm)
@@ -370,10 +389,11 @@ the current implementation also remains pending.
 - [XREFOVERRIDE](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-Core/files/GUID-131E3BBB-A28A-40BC-BDC5-A4486C1E2DBE.htm), [VISRETAIN](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-Core/files/GUID-897B1672-4E09-42E0-B857-A9D1F96ED671.htm), [VISRETAINMODE](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-Core/files/GUID-46480687-6DFF-499E-B7C0-E741AEA11D00.htm) and [xref layer/fade behavior](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-A987D2FF-45BD-474E-99C1-E6316A42F667.htm)
 - [TRANSPARENCYDISPLAY](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-0908F1AC-D122-4B3D-A17C-8705D03A0D0C.htm), [VPLAYEROVERRIDESMODE](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-MAC-Core/files/GUID-C70C14C3-7BF1-4199-BFD4-7AF172E344CB.htm), [OLEHIDE](https://help.autodesk.com/cloudhelp/2026/PTB/AutoCAD-Core/files/GUID-5C49940E-532B-4FDF-8EC4-D75C9779A8B8.htm), [LAYLOCKFADECTL](https://help.autodesk.com/cloudhelp/2016/ENU/AutoCAD-Core/files/GUID-753F2A76-E248-483F-9F55-CCF613B12C31.htm) and [RTDISPLAY](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-BA3CD3F0-A5A3-421A-92EC-C02317F9BE4A.htm)
 - [OBJECTISOLATIONMODE](https://help.autodesk.com/cloudhelp/2019/ENU/AutoCAD-Core/files/GUID-B4ED98BE-62D0-4982-82A2-87B744C56F99.htm), [common entity visibility](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-DXF/files/GUID-3610039E-27D1-4E23-B6D3-7E60B22BB5BD.htm) and [DISPSILHBLOCKS](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-Core/files/GUID-9E293ED4-1C00-4EF1-BD1D-338D2FEEC01B.htm)
-- [DXF header variables](https://help.autodesk.com/cloudhelp/2021/ENU/AutoCAD-DXF/files/GUID-A85E8E67-27CD-4C59-BE61-4DC9FADBE74A.htm)
+- [DXF header variables](https://help.autodesk.com/cloudhelp/2021/ENU/AutoCAD-DXF/files/GUID-A85E8E67-27CD-4C59-BE61-4DC9FADBE74A.htm) and [LAYOUT group codes](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-DXF/files/GUID-433D25BF-655D-4697-834E-C666EDFD956D.htm)
 - [VIEWPORT group codes](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-DXF/files/GUID-2602B0FB-02E4-4B9A-B03C-B1D904753D34.htm)
 - [MSLTSCALE](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-023B046C-56EA-463C-A867-DF713666A69E.htm) and [PSLTSCALE](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-23EA4D64-AE7D-41E5-A8D0-20F060313D62.htm)
 - [LWDISPLAY](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-51D375D8-AA3D-4AA7-ADC4-1DCCC5BF6D12.htm)
+- [TEXTFILL](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-8E1786B0-D31D-4A61-8A84-78E7BE34867B.htm) and [FASTSHADEDMODE](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-81A94EE2-017F-406C-90BB-8E004157DA33.htm)
 - [VIEWRES](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-77B1C617-E4BB-4D1E-823A-8E2B055B258E.htm), [WHIPARC](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-DFB5E247-3ADF-4F73-9DE3-E6EA4D2F4AAA.htm), [LINESMOOTHING](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-A3F27607-8A69-401B-9247-61E00584B7F4.htm) and [LINEFADING](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-7AA085DB-2F0C-43B6-933A-DB8170E20F58.htm)
 - [SORTENTS](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-56B7D915-515B-4A9C-BCB5-EF2D43C05FE5.htm) and [current REGEN sorting behavior](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-4FEBA606-95E0-4DC4-A116-257ED86DCD58.htm)
 - [ACI 7 background behavior](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-Core/files/GUID-2B089E0A-BDC0-4916-885E-543A85FC8CFD.htm)

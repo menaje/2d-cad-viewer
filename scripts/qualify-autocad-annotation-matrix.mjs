@@ -33,7 +33,7 @@ import {
 } from "./qualify-autocad-display-parity.mjs";
 
 const execFile = promisify(execFileCallback);
-const REPORT_SCHEMA = "dwg-autocad-annotation-scale-matrix/2";
+const REPORT_SCHEMA = "dwg-autocad-annotation-scale-matrix/3";
 const CACHE_SCHEMA = "dwg-scene-cache/1.26";
 const MAX_SOURCE_BYTES = 256 * 1024 * 1024;
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024 * 1024;
@@ -321,8 +321,9 @@ async function readAnnotationCache(
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(arrayBuffer),
   );
-  const [drawing, layouts, textEntities] = await Promise.all([
+  const [drawing, blocks, layouts, textEntities] = await Promise.all([
     reader.readDrawing(),
+    reader.readBlocks(),
     reader.readLayouts(),
     reader.readTextEntities(),
   ]);
@@ -354,6 +355,20 @@ async function readAnnotationCache(
   const matchingLayouts = layouts.filter((layout) => layout.name === layoutName);
   assert.equal(matchingLayouts.length, 1, "generated layout is not unique");
   const layout = matchingLayouts[0];
+  const currentPaperLayouts = layouts.filter(
+    (candidate) =>
+      blocks[candidate.blockIndex]?.name.toUpperCase() === "*PAPER_SPACE",
+  );
+  assert.equal(
+    currentPaperLayouts.length,
+    1,
+    "cache does not expose one current paper layout",
+  );
+  assert.equal(
+    currentPaperLayouts[0].index,
+    layout.index,
+    "generated layout is not the saved current paper layout",
+  );
   const matchingViewports = layout.viewports.filter((viewport) =>
     scaleMatches(viewport.annotationScale, activeScale.value),
   );
@@ -365,6 +380,7 @@ async function readAnnotationCache(
   return Object.freeze({
     drawing,
     layout,
+    currentPaperLayout: currentPaperLayouts[0],
     text: Object.freeze({
       handle: text.handle.toString(16).toUpperCase(),
       contextScales: Object.freeze(
@@ -543,6 +559,7 @@ export async function qualifyAutoCadAnnotationMatrix(options) {
           textValue: names.text,
         });
         assert.equal(cache.drawing.modelSpaceActive, space === "model");
+        assert.equal(cache.currentPaperLayout.name, names.layout);
         assert.equal(
           cache.drawing.annotationAllVisible,
           Boolean(expected.model),
@@ -598,6 +615,7 @@ export async function qualifyAutoCadAnnotationMatrix(options) {
               cache.drawing.annotationAllVisible,
             layoutAnnotationAllVisible:
               cache.layout.annotationAllVisible,
+            currentPaperLayout: cache.currentPaperLayout.name,
             modelAnnotationScale: cache.drawing.modelAnnotationScale,
             viewportAnnotationScale: cache.viewport.annotationScale,
             textHandle: cache.text.handle,

@@ -166,6 +166,24 @@ test("normalizes paper-space linetypes by each viewport scale", () => {
   assert.deepEqual([...graph.annotationScalesByVisibilityRow], [1, 50]);
 });
 
+test("uses each layout's saved PSLTSCALE instead of the current header value", () => {
+  const enabled = buildLayoutRootPlan(
+    blocks,
+    [{}, {}],
+    { ...layout, flags: 1 },
+    { paperSpaceLinetypeScale: false },
+  );
+  const disabled = buildLayoutRootPlan(
+    blocks,
+    [{}, {}],
+    { ...layout, flags: 0 },
+    { paperSpaceLinetypeScale: true },
+  );
+
+  assert.deepEqual(enabled.linetypeScalesByVisibilityRow, [1, 5]);
+  assert.deepEqual(disabled.linetypeScalesByVisibilityRow, [1, 1]);
+});
+
 test("maps layout paper units to zoom-sensitive lineweight world units", () => {
   assert.equal(layoutLineWeightWorldScale({ paperUnit: 1 }), 0.01);
   assert.equal(layoutLineWeightWorldScale({ paperUnit: 0 }), 1 / 2_540);

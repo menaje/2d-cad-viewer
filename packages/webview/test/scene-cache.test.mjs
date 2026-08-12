@@ -599,6 +599,7 @@ test("reads current layouts, viewports and frozen layers", async () => {
   assert.equal(metadata.layouts[0].name, "Model");
   assert.equal(metadata.layouts[0].blockIndex, 0);
   assert.equal(metadata.layouts[1].name, "배치1");
+  assert.equal(metadata.layouts[1].flags & 1, 1);
   assert.equal(metadata.layouts[1].styleSheet, "monochrome.ctb");
   assert.deepEqual(
     [metadata.layouts[1].paperWidth, metadata.layouts[1].paperHeight],

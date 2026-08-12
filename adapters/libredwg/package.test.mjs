@@ -644,6 +644,22 @@ test("rejects a silent LibreDWG parse that contains no drawing objects", async (
   );
 });
 
+test("uses the BLOCK entity name for current paper layout identity", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /copy_block_name[\s\S]*?block->block_entity[\s\S]*?DWG_TYPE_BLOCK[\s\S]*?"BLOCK", "name"/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /entry->name = copy_block_name \([\s\S]*?BLOCK_HEADER\);/u,
+  );
+});
+
 test("streams bounded proxy table graphics into lines and UTF-8 text", async () => {
   const [adapterSource, sceneCacheSource, sceneCacheHeader] =
     await Promise.all([
