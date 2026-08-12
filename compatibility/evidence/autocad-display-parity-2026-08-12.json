@@ -1,7 +1,7 @@
 {
   "schema": "dwg-autocad-display-parity-evidence/1",
   "status": "pass-with-explicit-external-gates",
-  "observedAt": "2026-08-12T11:54:54Z",
+  "observedAt": "2026-08-12T12:49:32Z",
   "scope": {
     "repository": "menaje/dwg-viewer",
     "comparisonTarget": "AutoCAD 2026 2D Wireframe model/layout display",
@@ -19,7 +19,7 @@
       "linkage": "static"
     },
     "cache": {
-      "schema": "dwg-scene-cache/1.24"
+      "schema": "dwg-scene-cache/1.25"
     },
     "target": {
       "platform": "darwin",
@@ -809,7 +809,7 @@
       {
         "fixture": "architectural_-_annotation_scaling_and_multileaders.dwg",
         "inputSha256": "0e74f0aa84b1323c922345f067739c42ee26213dea010b407b87a94212271654",
-        "cacheSha256": "0ac19e0fb121b4834bbd0eb6b2b4a6cbf361951dd863f00fa91e103356e757a7",
+        "cacheSha256": "939fa09c8e311563d45c8f42b3840664702f6eac1399ffbfd4cb6095694d8c9c",
         "inputBytes": 188992,
         "cacheBytes": 491968,
         "coverage": {
@@ -909,7 +909,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -942,7 +946,7 @@
       {
         "fixture": "architectural_example-imperial.dwg",
         "inputSha256": "52d14a7bdb946099d3cf16fd276d19bd8924348fd02b2ddd0003cd4f6b34cce7",
-        "cacheSha256": "fde2289fb86bc3aabf5ab1e092a143ec74f10585898b53989221b6f7e79a2108",
+        "cacheSha256": "0822660734a2868ed2a1e048b96f900572e0cf6ad9d70ff4c5aa7e6a5022494e",
         "inputBytes": 148638,
         "cacheBytes": 30160,
         "coverage": {
@@ -1031,7 +1035,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1064,7 +1072,7 @@
       {
         "fixture": "blocks_and_tables_-_imperial.dwg",
         "inputSha256": "3c95e8a82d5c8c251483fabc61efa8ca904f4e4bc8c2fce4786d74e812284d07",
-        "cacheSha256": "07e0e787e6b9ea87ef251837fefd7317a64328db5310e0604531e874621044e7",
+        "cacheSha256": "b585f26134badd15ef83e3c16eb4e112e6ada630f30ac7b7a64f71a4a326535a",
         "inputBytes": 227008,
         "cacheBytes": 826392,
         "coverage": {
@@ -1162,7 +1170,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1195,7 +1207,7 @@
       {
         "fixture": "blocks_and_tables_-_metric.dwg",
         "inputSha256": "7d5507da05fb70ba55875d99e676524ca2caa0ed7a5582ad130c3c06e8d925f1",
-        "cacheSha256": "c0d93e72f7f04acdfa253c7e1dd97dfe7224dde8f2deedcef307b5ba68a04090",
+        "cacheSha256": "dbd00149520cdcb698845a310a4811e1800e5f98365132c964503b460a8759b3",
         "inputBytes": 258848,
         "cacheBytes": 914824,
         "coverage": {
@@ -1293,7 +1305,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1326,7 +1342,7 @@
       {
         "fixture": "civil_example-imperial.dwg",
         "inputSha256": "45b419d0c7382eb271079b80c3237a52183f4fa09e7b495c3d7a65c6baa927dc",
-        "cacheSha256": "f9f35554d6770228d579766a9eac3e66d2b2d147ab2af0da3d2fda5b137832f1",
+        "cacheSha256": "b2dff2fa9fa5405cf72259b2249f79f6d905c917bb519aa47be205471a06133d",
         "inputBytes": 169592,
         "cacheBytes": 239464,
         "coverage": {
@@ -1416,7 +1432,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1449,7 +1469,7 @@
       {
         "fixture": "colorwh.dwg",
         "inputSha256": "7c70a76ce00647770b5026727fd0156a94a11d456db47db97d0bdf5a81acc344",
-        "cacheSha256": "59326d35b9766f50504bdba85ebf087c3464cbce1af73e416bd1ddd71ff8bfc7",
+        "cacheSha256": "588cfa2ec6a86ecac8cf0523bf662329dfbddd706a2f7f6e27d09135963e7d46",
         "inputBytes": 1786976,
         "cacheBytes": 6140944,
         "coverage": {
@@ -1538,7 +1558,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -1571,7 +1595,7 @@
       {
         "fixture": "lineweights.dwg",
         "inputSha256": "ad2656f141675aeda06ede347f8921516700b60a0f5ba17af042419be5397b4d",
-        "cacheSha256": "d6ad6f31bdee503a12066b255aa99ae3b1da1e5ff9e308d0a2e2728080a4c339",
+        "cacheSha256": "fd71c675d129dad4ed0ec65523356c5e1d95e9d0e68090172878f9eff8e3d253",
         "inputBytes": 58496,
         "cacheBytes": 32584,
         "coverage": {
@@ -1657,7 +1681,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -1690,7 +1718,7 @@
       {
         "fixture": "mechanical_example-imperial.dwg",
         "inputSha256": "854c8ebed8726add72ba4a9a2a19ba0d010372f5cadefb40e648cdf881cad858",
-        "cacheSha256": "b824df38ad41e8957b1acf163bd43251231024d94588f08ca81a43c4161c06bb",
+        "cacheSha256": "a4a60380b952b58bc1d24739573751a1b31a40996b8ec8d0c828acc331b786d1",
         "inputBytes": 142267,
         "cacheBytes": 31712,
         "coverage": {
@@ -1778,7 +1806,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1811,7 +1843,7 @@
       {
         "fixture": "plot_screening_and_fill_patterns.dwg",
         "inputSha256": "3eb8c946863ca733a289813589ecee8ea383aa63b4c5fa2a22fe31feacf02f71",
-        "cacheSha256": "7ece8298da0d6e8bc54dc985be8b3eac37b58203d1fb892e3c80790094c8244c",
+        "cacheSha256": "6cacb79de643171bc2ff499e6447e20f8c7d2bec96aee47a2a638477d81bc6d8",
         "inputBytes": 85952,
         "cacheBytes": 70464,
         "coverage": {
@@ -1896,7 +1928,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 7,
         "annotationAllVisible": {
@@ -1929,7 +1965,7 @@
       {
         "fixture": "tablet.dwg",
         "inputSha256": "7f203649dc8434ef7cf7a46f7f6def2a0192a1163ba34ebcf88ebfe69635ccd4",
-        "cacheSha256": "d87088f40aa8a8430a6468416bde212a1b829eb194e2db1c1609f0dc3ce835d1",
+        "cacheSha256": "1f1f91a615c020fc70191e632e0843e7707a68bb84c4dd7b7793b3c0ab9431ce",
         "inputBytes": 438656,
         "cacheBytes": 2585432,
         "coverage": {
@@ -2031,7 +2067,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2064,7 +2104,7 @@
       {
         "fixture": "title_block-ansi.dwg",
         "inputSha256": "907398897552a090182f5446f18ad1ef82b91176764c8ccf08b5c5799546eeba",
-        "cacheSha256": "177969e8508154b710b234c8c323b6dbb07a2c332b4e14c7781d694e38cd28a3",
+        "cacheSha256": "6247f86be412bbf6139192e4fc47f88d91da40a5cb67e1367db7d3d8d9ce38e7",
         "inputBytes": 125896,
         "cacheBytes": 260352,
         "coverage": {
@@ -2153,7 +2193,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -2186,7 +2230,7 @@
       {
         "fixture": "title_block-arch.dwg",
         "inputSha256": "59876d9e1fa9f4d64304d6e7e35cbfafa127e0b5363b3afbe6ed48ef3d2e867d",
-        "cacheSha256": "a9319ba43d65c06fcee518526569e35901568147e8b5dceaae7e991e11aeac4c",
+        "cacheSha256": "07e581601b108b8362552e7598e8aeafc2a0d4b7012e4c42a88970b00af27104",
         "inputBytes": 126985,
         "cacheBytes": 260808,
         "coverage": {
@@ -2275,7 +2319,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -2308,7 +2356,7 @@
       {
         "fixture": "title_block-iso.dwg",
         "inputSha256": "b874d82c5ee04f8a4fa6e907408c4ed770ee8208740fe4e1eb0f96fb2f793bc2",
-        "cacheSha256": "97b8f425e78efcaf278c30f25819a898f28312229261c758257ae13011e6f573",
+        "cacheSha256": "6c3617d724433d78d227621b4e77d07008cbc5d725bc6311e764070599b0bbac",
         "inputBytes": 128233,
         "cacheBytes": 259608,
         "coverage": {
@@ -2396,7 +2444,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -2429,7 +2481,7 @@
       {
         "fixture": "truetype.dwg",
         "inputSha256": "1e105bc884972d3d80cd983965d8dfa17f6f392042ec6c5997d99ae347487a92",
-        "cacheSha256": "c925680416fa524030917e2e34b49495524ef009aa621893b85947c339ba173d",
+        "cacheSha256": "32e3867df0cce527f870cb9227ada2ac169f6ae0d45a3b0fb46e9662e6cf06b2",
         "inputBytes": 70464,
         "cacheBytes": 35912,
         "coverage": {
@@ -2515,7 +2567,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2548,7 +2604,7 @@
       {
         "fixture": "visualization_-_aerial.dwg",
         "inputSha256": "edf22e187337e37d2083b26d6d00ce30ed78d2fd31d6bf0e9869902325ad3ab1",
-        "cacheSha256": "4c83e6f1192a96d1c1409e7f6aa29d73c16f4684bd9560a81224124b855ccb73",
+        "cacheSha256": "98479f45003fa4c1fba5da66078fcd92c782b904db695d09a07dc48c283177ba",
         "inputBytes": 733036,
         "cacheBytes": 7568,
         "coverage": {
@@ -2628,7 +2684,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2661,7 +2721,7 @@
       {
         "fixture": "visualization_-_condominium_with_skylight.dwg",
         "inputSha256": "1a94d2412b7aac3c1c3ab6fdb2b62c4e8b031e5868ad45d2169f571bfc7cf8d4",
-        "cacheSha256": "cdbacf0e24567d92f11b95c5dddb85f3bff762dce5a8e3c9862765b1f595b3b4",
+        "cacheSha256": "53423715586c8b273835843be92b320300c2cf368392a55d5e2a318cf0f01554",
         "inputBytes": 1415699,
         "cacheBytes": 504328,
         "coverage": {
@@ -2751,7 +2811,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2784,7 +2848,7 @@
       {
         "fixture": "visualization_-_conference_room.dwg",
         "inputSha256": "0579e4b5746593ff41d9326e488b1faddc0f7cc10e7db5317fc1d5b86f0132c4",
-        "cacheSha256": "0d80ce359a6b16c3229e4364a9f6faec1fd43a79e42be64322d586172da63d11",
+        "cacheSha256": "e289ad730cb97627b3ae32042568203cd2a708110a6bbf78d073d92eb038b842",
         "inputBytes": 973730,
         "cacheBytes": 158864,
         "coverage": {
@@ -2873,7 +2937,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2906,7 +2974,7 @@
       {
         "fixture": "visualization_-_sun_and_sky_demo.dwg",
         "inputSha256": "fad5a9f95ac72c1ef572b2b69f831ee08492135acd5da5ff76af01b2ec506881",
-        "cacheSha256": "e4a1ca91beb2310ebe28bea56d833d737b11a27bc3c412f167bf28c77cf11216",
+        "cacheSha256": "1d6e7f9aaca5d937f08cc39f65c148e31098970390fe4916a907d8dd802b6840",
         "inputBytes": 553297,
         "cacheBytes": 43352,
         "coverage": {
@@ -2994,7 +3062,11 @@
           "frame": null,
           "pdfFrame": null,
           "dwfFrame": null,
-          "dgnFrame": null
+          "dgnFrame": null,
+          "quickTextMode": false,
+          "splineFrame": false,
+          "displaySilhouettes": false,
+          "externalReferenceOverrides": false
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -3027,7 +3099,7 @@
     ]
   },
   "conversion": {
-    "cacheSchema": "dwg-scene-cache/1.24",
+    "cacheSchema": "dwg-scene-cache/1.25",
     "sectionCount": 51,
     "coverage": {
       "total_entities": 59627,
@@ -3141,6 +3213,18 @@
     },
     "dgnFrame": {
       "unavailable": 141
+    },
+    "quickTextMode": {
+      "false": 141
+    },
+    "splineFrame": {
+      "false": 141
+    },
+    "displaySilhouettes": {
+      "false": 141
+    },
+    "externalReferenceOverrides": {
+      "false": 141
     }
   },
   "layoutState": {
@@ -3298,6 +3382,10 @@
     "missing": [
       "FILLMODE-0-1",
       "ATTMODE-0-1-2",
+      "QTEXTMODE-0-1",
+      "SPLFRAME-0-1",
+      "DISPSILH-0-1",
+      "XREFOVERRIDE-0-1",
       "ANNOALLVISIBLE-model-0-1",
       "ANNOALLVISIBLE-layout-0-1",
       "FRAME-0-1-2",
@@ -3331,7 +3419,7 @@
     {
       "fixture": "2004/HatchG.dwg",
       "inputSha256": "9d03bcf4330ff5940a45e0fded1a4278810a626cc93cafe04b5ea0931a1ccc31",
-      "cacheSha256": "25fc2830b84ce138889bc653f419907d0777983bb4269ac543523ff257920509",
+      "cacheSha256": "0260afb5439893d962515ab7ba829b3ac17c2cd1fa8fabe5f21be603f564efd6",
       "inputBytes": 59489,
       "cacheBytes": 130256,
       "coverage": {
@@ -3421,7 +3509,11 @@
         "frame": null,
         "pdfFrame": null,
         "dwfFrame": null,
-        "dgnFrame": null
+        "dgnFrame": null,
+        "quickTextMode": false,
+        "splineFrame": false,
+        "displaySilhouettes": false,
+        "externalReferenceOverrides": false
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3454,7 +3546,7 @@
     {
       "fixture": "2004/Underlay.dwg",
       "inputSha256": "0f061fe45c2e9a64028b465568e1fcb2b9b57e8ba20d533e53dc0704f4a03268",
-      "cacheSha256": "736f8bd2245b13157dae0a75fcb426ce05cf9b20893fc2e42c2daefc454412b7",
+      "cacheSha256": "1f3a8323b105c86cd6834646eb29a7c7ac6bc2420ce92bcf8854e9dd64dd712b",
       "inputBytes": 70412,
       "cacheBytes": 3992,
       "coverage": {
@@ -3532,7 +3624,11 @@
         "frame": null,
         "pdfFrame": null,
         "dwfFrame": null,
-        "dgnFrame": null
+        "dgnFrame": null,
+        "quickTextMode": false,
+        "splineFrame": false,
+        "displaySilhouettes": false,
+        "externalReferenceOverrides": false
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3565,7 +3661,7 @@
     {
       "fixture": "2013/ConstructionLine.dwg",
       "inputSha256": "7f0349aa01202098e9db748a38224b5bc710f0c88b53c549f4a73c4435a12f12",
-      "cacheSha256": "6189817f21f2cf055f5dc5f8c02812ff5d1363df9496ab1a12b5dfd2013bee26",
+      "cacheSha256": "9cc110e1a6e3a906808f4084f8e2433583d883d05d855abbd5e6ba653bd70b5f",
       "inputBytes": 31899,
       "cacheBytes": 4832,
       "coverage": {
@@ -3648,7 +3744,11 @@
         "frame": null,
         "pdfFrame": null,
         "dwfFrame": null,
-        "dgnFrame": null
+        "dgnFrame": null,
+        "quickTextMode": false,
+        "splineFrame": false,
+        "displaySilhouettes": false,
+        "externalReferenceOverrides": false
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3681,7 +3781,7 @@
     {
       "fixture": "2013/Multiline.dwg",
       "inputSha256": "82d963274ae5d236b3e2206fb47da1c303b6858b6b30460401d42fbcb07920db",
-      "cacheSha256": "03e1901b665e023079b8eeb7b6bd4e9ca62b625161a7cf120a2a40e9a11ae23f",
+      "cacheSha256": "04a7d5e99346e121c952c72b7d3811618daa6429d07df247fbaddfbe4044a4bc",
       "inputBytes": 31614,
       "cacheBytes": 5384,
       "coverage": {
@@ -3762,7 +3862,11 @@
         "frame": null,
         "pdfFrame": null,
         "dwfFrame": null,
-        "dgnFrame": null
+        "dgnFrame": null,
+        "quickTextMode": false,
+        "splineFrame": false,
+        "displaySilhouettes": false,
+        "externalReferenceOverrides": false
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3795,7 +3899,7 @@
     {
       "fixture": "2013/RAY.dwg",
       "inputSha256": "1c189782df5254881d915596ed1d02debcec26985e93a1b5b29e1ddb17c88777",
-      "cacheSha256": "360b8b3f15afdb135b80f351ef96129a68a75dd14e6f035c3f2683f2eaba8453",
+      "cacheSha256": "5601b9b423aba8e0b82b77fec56e03eb787ac717ccfd5230279f6abb002015e1",
       "inputBytes": 37634,
       "cacheBytes": 4832,
       "coverage": {
@@ -3878,7 +3982,11 @@
         "frame": null,
         "pdfFrame": null,
         "dwfFrame": null,
-        "dgnFrame": null
+        "dgnFrame": null,
+        "quickTextMode": false,
+        "splineFrame": false,
+        "displaySilhouettes": false,
+        "externalReferenceOverrides": false
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3911,7 +4019,7 @@
     {
       "fixture": "2013/Text.dwg",
       "inputSha256": "5410979aab86bf912aa7018845e8723ed756d98c01d6008a223b0fd0b2072ebc",
-      "cacheSha256": "81946cd51793b977cf2dc8d0fdf47aca11c5e944f7a21639d6817ef1d1e4c874",
+      "cacheSha256": "3474242643bf85a9b05486d733700f2cec6e1ace4d32e8eb0480fc41a54166ac",
       "inputBytes": 31164,
       "cacheBytes": 4976,
       "coverage": {
@@ -3991,7 +4099,11 @@
         "frame": null,
         "pdfFrame": null,
         "dwfFrame": null,
-        "dgnFrame": null
+        "dgnFrame": null,
+        "quickTextMode": false,
+        "splineFrame": false,
+        "displaySilhouettes": false,
+        "externalReferenceOverrides": false
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -4024,7 +4136,7 @@
     {
       "fixture": "2013/gh109_1.dwg",
       "inputSha256": "97156d13d70e04c4b3f7f379a6c4568ba24d384449d64127e743471b55bdfadf",
-      "cacheSha256": "d5efe8cd6276f87ad9c2241097504d73de3f455dcfc20b2ce4b1e24549a4383f",
+      "cacheSha256": "d94f1bebfa91fe1fda6eab9eff9efcc8e44c356e7d2ee35780af24199d3c222f",
       "inputBytes": 102258,
       "cacheBytes": 86568,
       "coverage": {
@@ -4124,7 +4236,11 @@
         "frame": null,
         "pdfFrame": null,
         "dwfFrame": null,
-        "dgnFrame": null
+        "dgnFrame": null,
+        "quickTextMode": false,
+        "splineFrame": false,
+        "displaySilhouettes": false,
+        "externalReferenceOverrides": false
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -4157,7 +4273,7 @@
     {
       "fixture": "r11/ACEB10.dwg",
       "inputSha256": "cc5808621cfdc597f6e726a4f3591402b92ea627e581ce4380344c5dd02392f1",
-      "cacheSha256": "40f555f07fd2aa064eb58421cafd0b63465a22f1cde9c92320de9d19bc4bd5f8",
+      "cacheSha256": "fd27d41050fbcf798b13c976c179f1659bff2178e1ec0de60b4be8c3f8b7397c",
       "inputBytes": 93538,
       "cacheBytes": 383064,
       "coverage": {
@@ -4247,7 +4363,11 @@
         "frame": null,
         "pdfFrame": null,
         "dwfFrame": null,
-        "dgnFrame": null
+        "dgnFrame": null,
+        "quickTextMode": false,
+        "splineFrame": false,
+        "displaySilhouettes": false,
+        "externalReferenceOverrides": false
       },
       "layouts": 0,
       "annotationAllVisible": {

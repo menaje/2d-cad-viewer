@@ -1,13 +1,13 @@
-import { buildInstanceGraph } from "./instance-graph.mjs?v=1.24.0";
+import { buildInstanceGraph } from "./instance-graph.mjs?v=1.25.0";
 import { layerLinetypeCodes } from "./cad-linetype.mjs";
 import {
   buildLayoutInstanceGraph,
   paperViewportForLayout,
-} from "./layout-scene.mjs?v=1.24.0";
+} from "./layout-scene.mjs?v=1.25.0";
 import { readJsHeapSnapshot } from "./memory-telemetry.mjs";
 import { calculateRasterImageBounds } from "./raster-image-overlay.mjs";
-import { WebGlLineRenderer } from "./renderer.mjs?v=1.24.0";
-import { SceneCacheReader } from "./scene-cache.mjs?v=1.24.0";
+import { WebGlLineRenderer } from "./renderer.mjs?v=1.25.0";
+import { SceneCacheReader } from "./scene-cache.mjs?v=1.25.0";
 
 function now() {
   return globalThis.performance?.now?.() ?? Date.now();

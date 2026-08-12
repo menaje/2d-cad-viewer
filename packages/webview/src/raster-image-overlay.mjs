@@ -5,7 +5,7 @@ import {
   includePoint,
   transformPoint,
 } from "./math.mjs";
-import { effectiveClipBounds } from "./instance-graph.mjs?v=1.24.0";
+import { effectiveClipBounds } from "./instance-graph.mjs?v=1.25.0";
 import {
   decodeCadColor,
   decodeCadOpacity,
@@ -35,6 +35,7 @@ import {
 } from "./viewport-layer-state.mjs";
 
 const NO_LAYER = 0xffffffff;
+const BY_LAYER_ENTITY_COLOR = 1 << 24;
 const DEFAULT_MAXIMUM_SOURCE_IMAGES = 65_536;
 const DEFAULT_MAXIMUM_OCCURRENCES = 4_096;
 const DEFAULT_MAXIMUM_COMPRESSED_BYTES = 64 * 1024 * 1024;
@@ -887,6 +888,7 @@ export class CanvasRasterImageOverlay {
       maximumOccurrences = DEFAULT_MAXIMUM_OCCURRENCES,
       minimumScreenDimension = DEFAULT_MINIMUM_SCREEN_DIMENSION,
       imageFrame = 0,
+      externalReferenceOverrides = false,
     },
   ) {
     const context = canvas.getContext("2d", { alpha: true });
@@ -942,6 +944,10 @@ export class CanvasRasterImageOverlay {
       throw new RangeError("IMAGEFRAME must be 0, 1, or 2");
     }
     this.imageFrame = imageFrame;
+    if (typeof externalReferenceOverrides !== "boolean") {
+      throw new TypeError("XREFOVERRIDE must be a boolean");
+    }
+    this.externalReferenceOverrides = externalReferenceOverrides;
     this.renderDeltaTransforms = Object.freeze([]);
     this.renderDeltaStyles = Object.freeze([]);
     this.renderDeltaTransformIndex =
@@ -1492,7 +1498,10 @@ export class CanvasRasterImageOverlay {
           layerIndex,
           this.layers?.[layerIndex]?.color ?? 0,
         );
-        const frameColor = decodeCadColor(record.color, {
+        const effectiveColor = this.externalReferenceOverrides
+          ? BY_LAYER_ENTITY_COLOR
+          : record.color;
+        const frameColor = decodeCadColor(effectiveColor, {
           layer: { color: layerColor },
           byBlock: decodeCadColor(
             style?.color ??
@@ -1590,7 +1599,7 @@ export class CanvasRasterImageOverlay {
           0,
           Math.min(
             1,
-            decodeCadOpacity(record.color, {
+            decodeCadOpacity(effectiveColor, {
               layer: decodeCadOpacity(
                 viewportLayerColor(
                   this.instanceGraph,

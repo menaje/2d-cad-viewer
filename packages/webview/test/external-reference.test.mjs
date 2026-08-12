@@ -6,6 +6,7 @@ import {
   buildExternalLinetypeMap,
   blockExternalReferenceIsDisplayable,
   composeExternalInstanceGraph,
+  overrideExternalVertexProperties,
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
@@ -158,6 +159,38 @@ test("resolves child root ByBlock and Layer 0 inheritance through an XREF", () =
   assert.ok(Math.abs(nested.opacities[0] - 0.4) < 1e-6);
 });
 
+test("ignores nested XREF instance opacity when XREFOVERRIDE is enabled", () => {
+  const outer = {
+    ...collection(identityMat4()),
+    colors: new Uint32Array([(2 << 30) | 6]),
+    colorInherited: new Uint8Array([0]),
+    opacities: new Float32Array([0.8]),
+    opacityInherited: new Uint8Array([0]),
+  };
+  const inner = {
+    ...collection(identityMat4()),
+    colors: new Uint32Array([(3 << 30) | 0x123456]),
+    colorInherited: new Uint8Array([0]),
+    opacities: new Float32Array([0.25]),
+    opacityInherited: new Uint8Array([0]),
+  };
+
+  const composed = composeExternalInstanceGraph(
+    { instancesByBlock: new Map([[7, outer]]) },
+    7,
+    { instancesByBlock: new Map([[3, inner]]) },
+    [],
+    null,
+    null,
+    1,
+    true,
+  );
+  const nested = composed.instanceGraph.instancesByBlock.get(3);
+
+  assert.equal(nested.colors[0], ((2 << 30) | 6) >>> 0);
+  assert.ok(Math.abs(nested.opacities[0] - 0.8) < 1e-6);
+});
+
 test("composes XREF-local mask bases inside the parent order interval", () => {
   const outer = {
     ...collection(translationMat4(100, 20, 0)),
@@ -247,6 +280,43 @@ test("maps and rewrites XREF linetype codes without changing other style bits", 
   assert.equal(view.getUint32(28, true) & (1 << 16), 1 << 16);
 });
 
+test("forces XREF common display properties to ByLayer without changing other style bits", () => {
+  const buffer = new ArrayBuffer(72);
+  const view = new DataView(buffer);
+  view.setUint32(16, ((3 << 30) | 0x123456) >>> 0, true);
+  view.setUint32(28, (8 << 5) | 10 | (1 << 16) | (7 << 17), true);
+  view.setUint32(52, ((2 << 30) | 4) >>> 0, true);
+  view.setUint32(64, (3 << 5) | 25 | (1 << 21), true);
+
+  overrideExternalVertexProperties(buffer);
+
+  assert.equal(view.getUint32(16, true), 1 << 24);
+  assert.equal(view.getUint32(52, true), 1 << 24);
+  assert.equal(view.getUint32(28, true) & 0x1f, 2);
+  assert.equal((view.getUint32(28, true) >>> 5) & 0x7ff, 0);
+  assert.equal(view.getUint32(28, true) & (1 << 16), 1 << 16);
+  assert.equal((view.getUint32(28, true) >>> 17) & 15, 7);
+  assert.equal(view.getUint32(64, true) & (1 << 21), 1 << 21);
+});
+
+test("forces both XREF fill colors to ByLayer without interpreting fill metadata as line style", () => {
+  const buffer = new ArrayBuffer(32);
+  const view = new DataView(buffer);
+  view.setUint32(16, ((2 << 30) | 1) >>> 0, true);
+  view.setUint32(20, ((2 << 30) | 5) >>> 0, true);
+  view.setUint32(28, 0xdeadbeef, true);
+
+  overrideExternalVertexProperties(buffer, {
+    stride: 32,
+    lineStyle: false,
+    secondaryColor: true,
+  });
+
+  assert.equal(view.getUint32(16, true), 1 << 24);
+  assert.equal(view.getUint32(20, true), 1 << 24);
+  assert.equal(view.getUint32(28, true), 0xdeadbeef);
+});
+
 test("remaps text layers and linetypes without copying the source table", () => {
   let lazyValueReads = 0;
   const source = {
@@ -278,6 +348,51 @@ test("remaps text layers and linetypes without copying the source table", () => 
   assert.equal(remapped.get(0).layerIndex, 9);
   assert.equal(remapped.get(0).linetypeCode, 8);
   assert.equal(remapped.get(0).value, "면적");
+});
+
+test("forces XREF text common properties to ByLayer lazily", () => {
+  const source = {
+    length: 1,
+    readDisplayRecord(_index, target) {
+      Object.assign(target, {
+        layerIndex: 1,
+        color: ((3 << 30) | 0x123456) >>> 0,
+        lineWeight: 35,
+        linetypeCode: 3,
+      });
+      return target;
+    },
+    readValue() {
+      return "참조";
+    },
+    get() {
+      return {
+        layerIndex: 1,
+        color: ((3 << 30) | 0x123456) >>> 0,
+        lineWeight: 35,
+        linetypeCode: 3,
+      };
+    },
+  };
+  const remapped = remapTextEntityLayers(
+    source,
+    new Uint32Array([3, 9]),
+    new Uint16Array([0, 1, 2, 8]),
+    { externalReferenceOverrides: true },
+  );
+
+  assert.deepEqual(remapped.readDisplayRecord(0, {}), {
+    layerIndex: 9,
+    color: 1 << 24,
+    lineWeight: -1,
+    linetypeCode: 0,
+  });
+  assert.deepEqual(remapped.get(0), {
+    layerIndex: 9,
+    color: 1 << 24,
+    lineWeight: -1,
+    linetypeCode: 0,
+  });
 });
 
 test("an absent parent insertion produces no external batches", () => {

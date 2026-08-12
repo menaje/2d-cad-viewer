@@ -266,7 +266,7 @@ exercises intended-versus-reopened-observed receipt validation. The rejected
 WASM MEMFS candidate remains outside settings and the VSIX.
 
 The product and preview writers plus benchmark validator emit Scene Cache
-v1.24. The Webview reader accepts the explicit v1.21–v1.24 backward window;
+v1.25. The Webview reader accepts the explicit v1.21–v1.25 backward window;
 lower version numbers in the milestone evidence below are historical
 development records, not supported runtime formats.
 
@@ -326,6 +326,15 @@ paper-layout ANNOALLVISIBLE values, so selecting a layout does not reuse the
 setting from the DWG's active space. Paper layouts without `AcadAnnoAV`
 application data use AutoCAD's documented initial value 1 rather than an
 invented off state.
+Scene Cache v1.25 preserves QTEXTMODE, SPLFRAME, DISPSILH and XREFOVERRIDE.
+Canvas text substitutes bounded entity boxes for glyphs under QTEXTMODE;
+the deferred primitive worker restores 3DFACE invisible edges under SPLFRAME.
+HELIX control polygons and smoothed/polyface mesh presentation remain in the
+explicit 3D boundary. XREFOVERRIDE forces common external
+entity color, transparency, lineweight and linetype through the resolved root
+layer while preserving the host XREF insertion and layer mapping. DISPSILH is
+retained, but true 3D silhouette generation remains an explicit view-style
+boundary rather than guessed 2D geometry.
 Remaining exact CAD text layout and draw-order work are product-completeness
 gates on this selected engine, not an open parser choice.
 

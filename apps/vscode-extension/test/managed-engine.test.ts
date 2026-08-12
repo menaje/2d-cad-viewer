@@ -33,7 +33,7 @@ function catalog(overrides: Record<string, unknown> = {}): string {
       id: "libredwg",
       version: "0.14",
       protocol: "dwg-engine-adapter/1",
-      cacheSchema: "dwg-scene-cache/1.24",
+      cacheSchema: "dwg-scene-cache/1.25",
       license: "GPL-3.0-or-later",
     },
     targets: {

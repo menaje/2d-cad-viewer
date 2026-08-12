@@ -1,7 +1,7 @@
-# Scene Cache v1.24
+# Scene Cache v1.25
 
-Status: current writer. Product writers emit major 1, minor 24. Product
-readers accept the explicit backward window 1.21–1.24; older and newer minor
+Status: current writer. Product writers emit major 1, minor 25. Product
+readers accept the explicit backward window 1.21–1.25; older and newer minor
 versions fail closed. References to lower minor versions below otherwise
 describe additive format history and do not define supported runtime inputs.
 The current implementation includes source geometry/text writing, resolved
@@ -53,7 +53,7 @@ Header flag bit 0 (`0x00000001`) marks a display-only progressive preview.
 All other bits are reserved and must be zero; the Webview rejects a cache with
 an unknown header flag. A canonical full cache always writes flags as zero.
 
-A flagged preview is still an independently readable v1.24 container with the
+A flagged preview is still an independently readable v1.25 container with the
 complete section directory. It carries drawing, layer, block and INSERT
 metadata, layout/viewport state including viewport layer overrides, INSERT
 clip boundaries, plus only the LOD-0 GPU line batches and vertices needed for
@@ -176,6 +176,9 @@ always emits all 51 sections, including empty pools.
 Version 1.24 uses the previously reserved layout-record word at offset 54 to
 preserve the effective per-layout ANNOALLVISIBLE boolean. It does not add a
 section or change a record size; a v1.24 writer still emits all 51 sections.
+Version 1.25 assigns drawing-presentation bits 21–24 to the saved QTEXTMODE,
+SPLFRAME, DISPSILH and XREFOVERRIDE booleans. It does not add a section or
+change a record size; a v1.25 writer still emits all 51 sections.
 
 ## Shared primitive prefix
 
@@ -200,7 +203,7 @@ coordinates without replacing these source-precision records.
 
 ## Drawing record
 
-In v1.20–v1.24, kind 1 contains one 160-byte record:
+In v1.20–v1.25, kind 1 contains one 160-byte record:
 
 | Offset | Type | Field |
 | ---: | --- | --- |
@@ -242,6 +245,12 @@ Scene Cache v1.23 assigns bits 15–16 to PDFFRAME, 17–18 to DWFFRAME and
 19–20 to DGNFRAME. Values 0–2 preserve the saved setting and 3 means
 unavailable. Bits 21–31 remain reserved and must be zero. A v1.22 reader path
 requires bits 15–31 to remain zero.
+
+Scene Cache v1.25 assigns bit 21 to QTEXTMODE, bit 22 to SPLFRAME, bit 23 to
+DISPSILH and bit 24 to XREFOVERRIDE. A set bit means the saved drawing value
+is 1 and a clear bit means 0. Bits 25–31 remain reserved and must be zero.
+Readers of v1.21–v1.24 expose the documented initial value 0 for all four
+fields.
 
 ## String-table sections
 
@@ -947,14 +956,14 @@ placement remains visible as a crossed placeholder instead of disappearing.
 
 ## Layout, viewport and LOD GPU lines
 
-Scene Cache v1.24 kind 50 retains the fixed 256-byte layout record introduced
+Scene Cache v1.24+ kind 50 retains the fixed 256-byte layout record introduced
 in v1.16. Offset 54 is a `u16` per-layout ANNOALLVISIBLE value: 0 is off and 1
 is on. Values above 1 are invalid and readers fail closed. The Model record
 mirrors the saved model-space value; each paper-layout record is decoded from
 AutoCAD's `AcadAnnoAV` LAYOUT application data. Versions 1.21–1.23 require
 offset 54 to be zero and expose no per-layout override, so the Viewer falls
-back to the drawing-wide value only for those legacy caches. A v1.24 writer
-uses AutoCAD's documented initial value 1 when a paper layout has no
+back to the drawing-wide value only for those legacy caches. A v1.24+
+writer uses AutoCAD's documented initial value 1 when a paper layout has no
 `AcadAnnoAV` data; absence is not serialized as an explicit off state.
 
 The remaining kind-50 fields and every kind-51 viewport field retain their
@@ -1069,7 +1078,7 @@ generated artifacts and must not be committed.
 
 ## LibreDWG qualification writer
 
-The selected LibreDWG adapter writes a valid v1.24 cache
+The selected LibreDWG adapter writes a valid v1.25 cache
 to measure the direct object-to-cache boundary. It preserves layer/block UTF-8
 names and source records for LINE, ARC, CIRCLE, INSERT/MINSERT,
 LWPOLYLINE/2D/3D POLYLINE, ELLIPSE and SPLINE, including the four SPLINE value
@@ -1082,7 +1091,8 @@ evaluation and malformed-input fallback use the 256-segments-per-entity limit.
 It also writes the seven bounded HATCH source/fill/pattern sections and the
 POINT/SOLID/3DFACE/WIPEOUT source sections, including `PDMODE`, `PDSIZE`,
 `FILLMODE`, invisible face edges, exact WIPEOUT clip vertices and saved
-ATTMODE/FRAME-family presentation settings, normalized draw-order tables and
+ATTMODE/FRAME-family plus QTEXTMODE/SPLFRAME/DISPSILH/XREFOVERRIDE
+presentation settings, normalized draw-order tables and
 entries, bounded INSERT/XREF
 `SPATIAL_FILTER` boundaries, and IMAGE/IMAGEDEF paths, placement bases and
 clip vertices, MTEXT annotation contexts and exact viewport annotation scales.
@@ -1112,7 +1122,7 @@ This qualification writer keeps the 4 MiB overview and 512 KiB detail
 limits and uses disk-backed group-local XY Morton ordering for detail batches.
 When the extension requests progressive publication, the writer emits the
 flagged overview-only sidecar before that detail sort, then continues to the
-full v1.24 cache.
+full v1.25 cache.
 LibreDWG is the selected primary engine path. The remaining unsupported source
 families and exact CAD text-layout fidelity must be closed before that path is
 release-ready.

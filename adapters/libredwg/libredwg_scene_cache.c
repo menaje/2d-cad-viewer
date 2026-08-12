@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MPL-2.0
  *
- * A bounded-memory Scene Cache v1.24 writer for GNU LibreDWG. Geometry and
+ * A bounded-memory Scene Cache v1.25 writer for GNU LibreDWG. Geometry and
  * source text are traversed repeatedly and written directly to the
  * destination; the writer never creates a JSON or whole-drawing in-memory
  * representation. Large detail passes use private temporary files for an
@@ -3615,6 +3615,9 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
                                     uint32_t *result)
 {
   uint32_t attribute_mode = (uint32_t)dwg->header_vars.ATTMODE;
+  uint32_t quick_text_mode = (uint32_t)dwg->header_vars.QTEXTMODE;
+  uint32_t spline_frame = (uint32_t)dwg->header_vars.SPLFRAME;
+  uint32_t display_silhouettes = (uint32_t)dwg->header_vars.DISPSILH;
   uint32_t image_frame = UINT32_MAX;
   uint32_t xclip_frame = (uint32_t)dwg->header_vars.XCLIPFRAME;
   uint32_t ole_frame;
@@ -3624,11 +3627,19 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
   uint32_t pdf_frame;
   uint32_t dwf_frame;
   uint32_t dgn_frame;
+  uint32_t xref_override;
   uint32_t packed;
   size_t object_index;
   if (attribute_mode > 2u)
     {
       set_error (writer, "ATTMODE setting is outside the supported range");
+      return 0;
+    }
+  if (quick_text_mode > 1u || spline_frame > 1u
+      || display_silhouettes > 1u)
+    {
+      set_error (writer,
+                 "boolean drawing presentation setting is outside the supported range");
       return 0;
     }
   if (xclip_frame > 2u)
@@ -3677,7 +3688,9 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
       || !read_dictionary_display_setting (
           writer, dwg, "DWFFRAME", 2u, &dwf_frame)
       || !read_dictionary_display_setting (
-          writer, dwg, "DGNFRAME", 2u, &dgn_frame))
+          writer, dwg, "DGNFRAME", 2u, &dgn_frame)
+      || !read_dictionary_display_setting (
+          writer, dwg, "XREFOVERRIDE", 1u, &xref_override))
     return 0;
   packed = attribute_mode
            | ((image_frame == UINT32_MAX ? 3u : image_frame) << 2)
@@ -3696,6 +3709,14 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
   packed |= ((pdf_frame == UINT32_MAX ? 3u : pdf_frame) << 15)
             | ((dwf_frame == UINT32_MAX ? 3u : dwf_frame) << 17)
             | ((dgn_frame == UINT32_MAX ? 3u : dgn_frame) << 19);
+  if (quick_text_mode)
+    packed |= 1u << 21;
+  if (spline_frame)
+    packed |= 1u << 22;
+  if (display_silhouettes)
+    packed |= 1u << 23;
+  if (xref_override != UINT32_MAX && xref_override)
+    packed |= 1u << 24;
   *result = packed;
   return 1;
 }

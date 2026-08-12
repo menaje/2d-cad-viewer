@@ -1,6 +1,6 @@
 import {
   TextEntityKind,
-} from "./scene-cache.mjs?v=1.24.0";
+} from "./scene-cache.mjs?v=1.25.0";
 import {
   decodeCadColor,
   decodeCadOpacity,
@@ -1286,6 +1286,7 @@ export class CanvasTextOverlay {
       sourceId = "root",
       sourceLabel = "현재 도면",
       attributeDisplayMode = 1,
+      quickTextMode = false,
       annotationAllVisible = true,
       xclipFrame = 0,
       xclipFrameStartIndex = 0,
@@ -1354,6 +1355,10 @@ export class CanvasTextOverlay {
       throw new RangeError("ATTMODE must be 0, 1, or 2");
     }
     this.attributeDisplayMode = attributeDisplayMode;
+    if (typeof quickTextMode !== "boolean") {
+      throw new TypeError("QTEXTMODE must be a boolean");
+    }
+    this.quickTextMode = quickTextMode;
     if (typeof annotationAllVisible !== "boolean") {
       throw new TypeError("ANNOALLVISIBLE must be a boolean");
     }
@@ -1423,6 +1428,7 @@ export class CanvasTextOverlay {
       segments: 0,
       backgroundFills: 0,
       textFrames: 0,
+      quickTextBoxes: 0,
       maskOccurrences: 0,
       clippedTextOccurrences: 0,
       maskClipOperations: 0,
@@ -1893,6 +1899,7 @@ export class CanvasTextOverlay {
       segments: 0,
       backgroundFills: 0,
       textFrames: 0,
+      quickTextBoxes: 0,
       maskOccurrences: 0,
       clippedTextOccurrences: 0,
       maskClipOperations: 0,
@@ -3206,7 +3213,7 @@ export class CanvasTextOverlay {
         : horizontalGroup === 2
           ? -blockWidth
           : 0;
-    if (isMText) {
+    if (isMText && !this.quickTextMode) {
       this.#drawMTextBackground(
         record,
         matrix,
@@ -3469,6 +3476,9 @@ export class CanvasTextOverlay {
               }
             : currentBounds;
         }
+        if (this.quickTextMode) {
+          continue;
+        }
         context.beginPath();
         let hasVectorPath = false;
         let activeVectorColor = "";
@@ -3655,6 +3665,7 @@ export class CanvasTextOverlay {
         }
       }
     }
+    let selectionBounds;
     if (textBounds) {
       const centerX = (textBounds.left + textBounds.right) * 0.5;
       const centerY = (textBounds.top + textBounds.bottom) * 0.5;
@@ -3666,25 +3677,90 @@ export class CanvasTextOverlay {
         textBounds.top - textBounds.bottom,
         1,
       );
-      return Object.freeze({
+      selectionBounds = Object.freeze({
         left: centerX - selectionWidth * 0.5,
         right: centerX + selectionWidth * 0.5,
         top: centerY + selectionHeight * 0.5,
         bottom: centerY - selectionHeight * 0.5,
       });
+    } else {
+      const selectionWidth = Math.max(
+        blockWidth,
+        textAlignmentWidth,
+        0.35,
+      );
+      const selectionHeight = Math.max(blockHeight, 1);
+      selectionBounds = Object.freeze({
+        left: blockLeft,
+        right: blockLeft + selectionWidth,
+        top: verticalOffset + 1.15,
+        bottom: verticalOffset + 1 - selectionHeight,
+      });
     }
-    const selectionWidth = Math.max(
-      blockWidth,
-      textAlignmentWidth,
-      0.35,
-    );
-    const selectionHeight = Math.max(blockHeight, 1);
-    return Object.freeze({
-      left: blockLeft,
-      right: blockLeft + selectionWidth,
-      top: verticalOffset + 1.15,
-      bottom: verticalOffset + 1 - selectionHeight,
-    });
+    if (this.quickTextMode) {
+      if (metrics.segments + 4 > this.maximumSegments) {
+        metrics.truncated = true;
+      } else {
+        const points = [
+          pointToScreen(
+            matrix,
+            selectionBounds.left,
+            selectionBounds.top,
+            camera,
+            width,
+            height,
+          ),
+          pointToScreen(
+            matrix,
+            selectionBounds.right,
+            selectionBounds.top,
+            camera,
+            width,
+            height,
+          ),
+          pointToScreen(
+            matrix,
+            selectionBounds.right,
+            selectionBounds.bottom,
+            camera,
+            width,
+            height,
+          ),
+          pointToScreen(
+            matrix,
+            selectionBounds.left,
+            selectionBounds.bottom,
+            camera,
+            width,
+            height,
+          ),
+        ];
+        if (points.flat().every(Number.isFinite)) {
+          const [red, green, blue] =
+            diffColor ??
+            decodeColor(
+              record.color,
+              layerColor,
+              byBlockColor,
+              this.palette,
+            );
+          context.strokeStyle =
+            `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+          context.lineWidth = Math.max(globalThis.devicePixelRatio ?? 1, 1);
+          context.setLineDash([]);
+          context.beginPath();
+          context.moveTo(points[0][0], points[0][1]);
+          for (let index = 1; index < points.length; index += 1) {
+            context.lineTo(points[index][0], points[index][1]);
+          }
+          context.closePath();
+          context.stroke();
+          metrics.segments += 4;
+          metrics.quickTextBoxes += 1;
+        }
+      }
+    }
+    return selectionBounds;
   }
 
   dispose() {
@@ -3997,6 +4073,7 @@ export class CompositeTextOverlay {
       segments: 0,
       backgroundFills: 0,
       textFrames: 0,
+      quickTextBoxes: 0,
       maskOccurrences: 0,
       clippedTextOccurrences: 0,
       maskClipOperations: 0,
@@ -4038,6 +4115,7 @@ export class CompositeTextOverlay {
         "segments",
         "backgroundFills",
         "textFrames",
+        "quickTextBoxes",
         "maskOccurrences",
         "clippedTextOccurrences",
         "maskClipOperations",

@@ -440,6 +440,39 @@ test("draws IMAGE placement with clipping and CAD display adjustments", () => {
   assert.equal(canvas.calls.drawImage.length, 2);
 });
 
+test("uses XREF layer transparency instead of an explicit IMAGE transparency", () => {
+  const bitmap = { width: 4, height: 3 };
+  const makeOverlay = (canvas, externalReferenceOverrides) =>
+    new CanvasRasterImageOverlay(canvas, {
+      imageEntities: imageTable({
+        ...visibleRecord,
+        color: ((2 << 30) | (33 << 24) | 7) >>> 0,
+      }),
+      blocks: [{ index: 0, handle: 100n }],
+      layers: [{ name: "0", color: ((2 << 30) | 7) >>> 0 }],
+      instanceGraph: modelGraph(),
+      cacheId: "xref",
+      externalReferenceOverrides,
+      assetStore: {
+        lookup: () => ({
+          status: "ready",
+          bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+        }),
+        snapshot: () => ({}),
+      },
+    });
+  const nativeCanvas = fakeCanvas();
+  const overrideCanvas = fakeCanvas();
+
+  makeOverlay(nativeCanvas, false).redraw(camera, [true]);
+  makeOverlay(overrideCanvas, true).redraw(camera, [true]);
+
+  assert.ok(nativeCanvas.calls.drawImage[0].alpha < 0.5);
+  assert.equal(overrideCanvas.calls.drawImage[0].alpha, 0.9);
+});
+
 test("draws the clipped IMAGE boundary for IMAGEFRAME values 1 and 2", () => {
   const canvas = fakeCanvas();
   const bitmap = { width: 4, height: 3 };

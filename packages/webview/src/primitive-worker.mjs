@@ -20,6 +20,7 @@ self.addEventListener(
       hostSource,
       wipeoutFrame,
       fillMode,
+      splineFrame,
       maskOrder = null,
     } = event.data;
     if (type === WORKER_RANGE_RESPONSE) {
@@ -51,7 +52,7 @@ self.addEventListener(
         source,
         blocks,
         instanceGraph,
-        { wipeoutFrame, fillMode, maskOrder },
+        { wipeoutFrame, fillMode, splineFrame, maskOrder },
       );
       self.postMessage(
         {

@@ -205,6 +205,21 @@ test("renders visible 3DFACE edges in the shared surface buffer", async () => {
   );
 });
 
+test("restores 3DFACE invisible edges when SPLFRAME is enabled", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const result = buildPrimitiveMeshes(
+    source,
+    metadata.blocks,
+    instanceGraph,
+    { splineFrame: true },
+  );
+
+  assert.equal(result.metrics.renderedFaceEdges, 19);
+  assert.equal(result.metrics.hiddenFaceEdges, 0);
+  assert.equal(result.metrics.restoredFaceEdges, 4);
+  assert.equal(result.metrics.faceOutlineVertices, 38);
+});
+
 test("renders WIPEOUT polygon, rectangular and full-image frames without masks", async () => {
   const { source, metadata, instanceGraph } = await primitiveFixture();
   const result = buildPrimitiveMeshes(

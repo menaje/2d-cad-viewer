@@ -7,7 +7,7 @@ export const EN_MESSAGES = Object.freeze({
   "common.noPath": "(no path)",
   "common.unknownError": "Unknown error",
   "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.24",
+  "page.eyebrow": "DWG Viewer · Scene Cache v1.25",
   "page.heading": "Large drawing first-frame verifier",
   "page.hostHeading": "DWG drawing viewer",
   "toolbar.more.open": "Open drawing tools",

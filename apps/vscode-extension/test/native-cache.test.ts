@@ -109,7 +109,7 @@ test("adapter report requires the expected schema, validation, and size", () => 
       status: "ok",
       cache: {
         format_major: 1,
-        format_minor: 24,
+        format_minor: 25,
         size_bytes: 5,
         validated: true,
       },
@@ -124,7 +124,7 @@ test("adapter report requires the expected schema, validation, and size", () => 
           status: "ok",
           cache: {
             format_major: 1,
-            format_minor: 24,
+            format_minor: 25,
             size_bytes: 4,
             validated: true,
           },
@@ -160,7 +160,7 @@ test("adapter report returns validated conversion performance", () => {
         status: "ok",
         cache: {
           format_major: 1,
-          format_minor: 24,
+          format_minor: 25,
           size_bytes: "5",
           validated: true,
         },
@@ -213,7 +213,7 @@ test("doctor report requires the adapter, cache, engine, and license contract", 
       license: "GPL-3.0-or-later",
       linkage: "static",
     },
-    cache: { schema: "dwg-scene-cache/1.24" },
+    cache: { schema: "dwg-scene-cache/1.25" },
     target: { platform: "darwin", architecture: "arm64" },
   };
   assert.deepEqual(
@@ -284,7 +284,7 @@ if (process.env.DWG_DOCTOR_TEST_MODE === "slow") {
       license: "GPL-3.0-or-later",
       linkage: "static"
     },
-    cache: { schema: "dwg-scene-cache/1.24" },
+    cache: { schema: "dwg-scene-cache/1.25" },
     target: { platform: "test", architecture: "test" }
   }) + "\\n");
 }
@@ -391,7 +391,7 @@ setTimeout(() => {
     status: "ok",
     cache: {
       format_major: 1,
-      format_minor: 24,
+      format_minor: 25,
       size_bytes: 5,
       validated: true,
     },
@@ -472,14 +472,14 @@ const mode = source.slice(6);
 const cache = Buffer.alloc(64);
 Buffer.from("DWGSCN1\\0", "binary").copy(cache, 0);
 cache.writeUInt16LE(1, 8);
-cache.writeUInt16LE(24, 10);
+cache.writeUInt16LE(25, 10);
 fs.writeFileSync(output, cache);
 const report = () => process.stdout.write(JSON.stringify({
   schema: "dwg-scene-cache/1",
   status: "ok",
   cache: {
     format_major: 1,
-    format_minor: 24,
+    format_minor: 25,
     size_bytes: 64,
     validated: true
   }
@@ -516,7 +516,7 @@ else report();
     assert.equal(first.reused, false);
     const firstCache = await readFile(first.cachePath);
     assert.equal(firstCache.readUInt16LE(8), 1);
-    assert.equal(firstCache.readUInt16LE(10), 24);
+    assert.equal(firstCache.readUInt16LE(10), 25);
     assert.deepEqual(firstPhases, [
       "checking",
       "parsing",
@@ -541,7 +541,7 @@ else report();
       signal: new AbortController().signal,
     });
     assert.equal(migrated.reused, false);
-    assert.equal((await readFile(migrated.cachePath)).readUInt16LE(10), 24);
+    assert.equal((await readFile(migrated.cachePath)).readUInt16LE(10), 25);
 
     const rebuilt = await manager.prepare(sourcePath, {
       force: true,

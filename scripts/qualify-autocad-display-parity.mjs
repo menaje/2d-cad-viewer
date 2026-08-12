@@ -37,7 +37,7 @@ const AUTOCAD_PAIR_SCHEMA = "dwg-autocad-system-variable-pair/2";
 const AUTOCAD_XREF_SCHEMA = "dwg-autocad-xref-state-matrix/2";
 const AUTOCAD_ANNOTATION_SCHEMA =
   "dwg-autocad-annotation-scale-matrix/2";
-const CURRENT_CACHE_SCHEMA = "dwg-scene-cache/1.24";
+const CURRENT_CACHE_SCHEMA = "dwg-scene-cache/1.25";
 const WINDOWS_VSCODE_UI_SCHEMA = "dwg-windows-vscode-ui-qualification/1";
 const MAX_EXTERNAL_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_EXTERNAL_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -140,6 +140,10 @@ const PRESENTATION_FIELDS = Object.freeze([
   "pdfFrame",
   "dwfFrame",
   "dgnFrame",
+  "quickTextMode",
+  "splineFrame",
+  "displaySilhouettes",
+  "externalReferenceOverrides",
 ]);
 const AUTOCAD_PAIR_CONTRACTS = Object.freeze({
   FILLMODE: Object.freeze({ field: "fillMode", values: [0, 1] }),
@@ -149,6 +153,16 @@ const AUTOCAD_PAIR_CONTRACTS = Object.freeze({
   }),
   ANNOALLVISIBLE: Object.freeze({
     field: "annotationAllVisible",
+    values: [0, 1],
+  }),
+  QTEXTMODE: Object.freeze({ field: "quickTextMode", values: [0, 1] }),
+  SPLFRAME: Object.freeze({ field: "splineFrame", values: [0, 1] }),
+  DISPSILH: Object.freeze({
+    field: "displaySilhouettes",
+    values: [0, 1],
+  }),
+  XREFOVERRIDE: Object.freeze({
+    field: "externalReferenceOverrides",
     values: [0, 1],
   }),
   FRAME: Object.freeze({ field: "frame", values: [0, 1, 2] }),
@@ -410,7 +424,7 @@ export function validateConversionReport(report) {
   assert.equal(report?.schema, CONVERSION_SCHEMA);
   assert.equal(report?.status, "ok");
   assert.equal(report?.cache?.format_major, 1);
-  assert.equal(report?.cache?.format_minor, 24);
+  assert.equal(report?.cache?.format_minor, 25);
   assert.equal(report?.cache?.validated, true);
   assert.equal(report?.cache?.sections?.length, 51);
   const coverage = report?.coverage;
@@ -854,7 +868,14 @@ export function summarizeAutoCadAdapterEvidence(evidence) {
 }
 
 function normalizedPairValue(variable, value) {
-  return ["FILLMODE", "ANNOALLVISIBLE"].includes(variable)
+  return [
+    "FILLMODE",
+    "ANNOALLVISIBLE",
+    "QTEXTMODE",
+    "SPLFRAME",
+    "DISPSILH",
+    "XREFOVERRIDE",
+  ].includes(variable)
     ? Boolean(value)
     : value;
 }
@@ -876,6 +897,26 @@ function relevantPairSourceCount(variable, state) {
       );
     case "ANNOALLVISIBLE":
       return sections.text_annotation_contexts ?? 0;
+    case "QTEXTMODE":
+      return (
+        (coverage.texts ?? 0) +
+        (coverage.mtexts ?? 0) +
+        (coverage.attribute_definitions ?? 0) +
+        (coverage.attributes ?? 0)
+      );
+    case "SPLFRAME":
+      return (
+        (coverage.faces ?? 0) +
+        (coverage.polyline_meshes ?? 0)
+      );
+    case "DISPSILH":
+      return (
+        (coverage.regions ?? 0) +
+        (coverage.solids_3d ?? 0) +
+        (coverage.bodies ?? 0)
+      );
+    case "XREFOVERRIDE":
+      return sections.blocks ?? 0;
     case "IMAGEFRAME":
       return coverage.images ?? 0;
     case "XCLIPFRAME":
@@ -913,7 +954,16 @@ export function validateAutoCadPairPixelStates(variable, states) {
       `${variable}=${left}/${right} did not change AutoCAD display pixels`,
     );
   };
-  if (["FILLMODE", "ANNOALLVISIBLE"].includes(variable)) {
+  if (
+    [
+      "FILLMODE",
+      "ANNOALLVISIBLE",
+      "QTEXTMODE",
+      "SPLFRAME",
+      "DISPSILH",
+      "XREFOVERRIDE",
+    ].includes(variable)
+  ) {
     differs(0, 1);
   } else if (variable === "ATTMODE") {
     differs(0, 1);
@@ -1107,6 +1157,10 @@ export function summarizeAutoCadPairCoverage(evidence) {
   const requirements = [
     ["FILLMODE-0-1", covers("FILLMODE", [0, 1])],
     ["ATTMODE-0-1-2", covers("ATTMODE", [0, 1, 2])],
+    ["QTEXTMODE-0-1", covers("QTEXTMODE", [0, 1])],
+    ["SPLFRAME-0-1", covers("SPLFRAME", [0, 1])],
+    ["DISPSILH-0-1", covers("DISPSILH", [0, 1])],
+    ["XREFOVERRIDE-0-1", covers("XREFOVERRIDE", [0, 1])],
     [
       "ANNOALLVISIBLE-model-0-1",
       covers("ANNOALLVISIBLE", [0, 1], "model"),
@@ -2320,7 +2374,7 @@ function buildEvidence({
       fixtures: officialRecords.map(fixtureEvidence),
     },
     conversion: {
-      cacheSchema: "dwg-scene-cache/1.24",
+      cacheSchema: "dwg-scene-cache/1.25",
       sectionCount: 51,
       coverage,
       deferredReasonPartitionExact: true,
@@ -2428,7 +2482,7 @@ export async function qualify(options) {
   const doctor = await runAdapter(options.adapterPath, ["doctor"], "adapter doctor");
   assert.equal(doctor?.schema, DOCTOR_SCHEMA);
   assert.equal(doctor?.status, "ok");
-  assert.equal(doctor?.cache?.schema, "dwg-scene-cache/1.24");
+  assert.equal(doctor?.cache?.schema, "dwg-scene-cache/1.25");
   const [
     sourceArchive,
     provenance,

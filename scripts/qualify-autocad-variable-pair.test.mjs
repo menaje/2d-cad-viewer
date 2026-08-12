@@ -135,6 +135,22 @@ test("maps every variable value to its Scene Cache drawing field", () => {
     field: "annotationAllVisible",
     value: true,
   });
+  assert.deepEqual(expectedDrawingVariable("QTEXTMODE", 1), {
+    field: "quickTextMode",
+    value: true,
+  });
+  assert.deepEqual(expectedDrawingVariable("SPLFRAME", 0), {
+    field: "splineFrame",
+    value: false,
+  });
+  assert.deepEqual(expectedDrawingVariable("DISPSILH", 1), {
+    field: "displaySilhouettes",
+    value: true,
+  });
+  assert.deepEqual(expectedDrawingVariable("XREFOVERRIDE", 1), {
+    field: "externalReferenceOverrides",
+    value: true,
+  });
   assert.deepEqual(expectedDrawingVariable("XCLIPFRAME", 1), {
     field: "xclipFrame",
     value: 1,

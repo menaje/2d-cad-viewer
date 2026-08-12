@@ -408,6 +408,7 @@ export function buildPrimitiveMeshes(
     maximumWipeoutMaskGpuBytes = MAX_WIPEOUT_MASK_GPU_BYTES,
     wipeoutFrame = null,
     fillMode = true,
+    splineFrame = false,
     maskOrder = null,
   } = {},
 ) {
@@ -438,6 +439,9 @@ export function buildPrimitiveMeshes(
   }
   if (typeof fillMode !== "boolean") {
     throw new TypeError("drawing FILLMODE must be a boolean");
+  }
+  if (typeof splineFrame !== "boolean") {
+    throw new TypeError("drawing SPLFRAME must be a boolean");
   }
   requireBudget(
     maximumPointGpuBytes,
@@ -555,6 +559,7 @@ export function buildPrimitiveMeshes(
     renderedFaces: 0,
     renderedFaceEdges: 0,
     hiddenFaceEdges: 0,
+    restoredFaceEdges: 0,
     skippedDegenerateFaceEdges: 0,
     sourceWipeouts: source.wipeouts.length,
     deferredWipeoutMasks: 0,
@@ -780,9 +785,12 @@ export function buildPrimitiveMeshes(
     let rendered = false;
     const attributes = solidOutlineAttributes(face, maskOrder);
     for (let edge = 0; edge < QUADRILATERAL_EDGES.length; edge += 1) {
-      if (face.invisibleEdges & (1 << edge)) {
+      if (!splineFrame && (face.invisibleEdges & (1 << edge)) !== 0) {
         metrics.hiddenFaceEdges += 1;
         continue;
+      }
+      if (splineFrame && (face.invisibleEdges & (1 << edge)) !== 0) {
+        metrics.restoredFaceEdges += 1;
       }
       const [start, end] = QUADRILATERAL_EDGES[edge];
       if (pointsNear(face.corners[start], face.corners[end])) {

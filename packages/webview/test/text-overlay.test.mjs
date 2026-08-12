@@ -1177,6 +1177,32 @@ test("falls back to system Korean text within a hard glyph budget", async () => 
   );
 });
 
+test("draws QTEXTMODE bounds instead of text glyphs", async () => {
+  const scene = await textScene();
+  const canvas = fakeCanvas();
+  const overlay = new CanvasTextOverlay(canvas, {
+    textEntities: scene.textEntities,
+    blocks: scene.metadata.blocks,
+    layers: scene.metadata.layers,
+    instanceGraph: scene.instanceGraph,
+    glyphCache: { getGlyph: () => undefined },
+    maximumSourceTexts: 1,
+    minimumPixelHeight: 0.1,
+    quickTextMode: true,
+  });
+
+  const metrics = overlay.redraw(camera, [true]);
+
+  assert.equal(metrics.visibleOccurrences, 1);
+  assert.equal(metrics.quickTextBoxes, 1);
+  assert.equal(metrics.fallbackGlyphs, 0);
+  assert.equal(metrics.vectorGlyphs, 0);
+  assert.equal(metrics.segments, 4);
+  assert.equal(canvas.calls.fillText, 0);
+  assert.equal(canvas.calls.stroke, 1);
+  assert.equal(canvas.calls.lineTo, 3);
+});
+
 test("suppresses block ATTDEF templates and renders constants and actual attributes", () => {
   const canvas = fakeCanvas();
   const baseRecord = {

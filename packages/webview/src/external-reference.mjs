@@ -1,13 +1,17 @@
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.24.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.25.0";
 import {
   multiplyMat4,
   transformPoint,
 } from "./math.mjs";
-import { createClipNode } from "./instance-graph.mjs?v=1.24.0";
+import { createClipNode } from "./instance-graph.mjs?v=1.25.0";
 
 const MATRIX_VALUES = 16;
 const MODEL_BLOCK_INDEX = -1;
 const NO_LAYER_OVERRIDE = 0xffffffff;
+const BY_LAYER_ENTITY_COLOR = 1 << 24;
+const LINE_WEIGHT_MASK = 0x1f;
+const LINETYPE_MASK = 0x7ff << 5;
+const BY_LAYER_LINE_WEIGHT_CODE = 2;
 
 export function blockExternalReferenceIsDisplayable(block) {
   return Boolean(
@@ -72,6 +76,7 @@ function composeCollections(
   layerMap,
   linetypeMap,
   maskBucketScale,
+  externalReferenceOverrides,
 ) {
   const count = outer.count * inner.count;
   const data = new Float64Array(count * MATRIX_VALUES);
@@ -169,9 +174,11 @@ function composeCollections(
         outer.colors?.[outerIndex] ?? ((2 << 30) | 7);
       const outerLayer =
         outer.layerIndices?.[outerIndex] ?? NO_LAYER_OVERRIDE;
-      colors[cursor] = inheritsColor
+      colors[cursor] = externalReferenceOverrides
         ? outerColor
-        : inner.colors?.[innerIndex] ?? outerColor;
+        : inheritsColor
+          ? outerColor
+          : inner.colors?.[innerIndex] ?? outerColor;
       const innerLayer =
         inner.layerIndices?.[innerIndex] ?? NO_LAYER_OVERRIDE;
       layerIndices[cursor] = inheritsLayer
@@ -183,18 +190,24 @@ function composeCollections(
               ? layerMap[innerLayer]
               : layerMap[0]
             : innerLayer;
-      colorInherited[cursor] =
-        inheritsColor && outer.colorInherited?.[outerIndex] === 1 ? 1 : 0;
+      colorInherited[cursor] = externalReferenceOverrides
+        ? outer.colorInherited?.[outerIndex] ?? 0
+        : inheritsColor && outer.colorInherited?.[outerIndex] === 1
+          ? 1
+          : 0;
       layerInherited[cursor] =
         inheritsLayer && outer.layerInherited?.[outerIndex] === 1 ? 1 : 0;
       const inheritsOpacity =
         inner.opacityInherited?.[innerIndex] === 1;
-      opacities[cursor] = inheritsOpacity
+      opacities[cursor] = externalReferenceOverrides
         ? outer.opacities?.[outerIndex] ?? 1
-        : inner.opacities?.[innerIndex] ?? 1;
-      opacityInherited[cursor] =
-        inheritsOpacity &&
-        outer.opacityInherited?.[outerIndex] === 1
+        : inheritsOpacity
+          ? outer.opacities?.[outerIndex] ?? 1
+          : inner.opacities?.[innerIndex] ?? 1;
+      opacityInherited[cursor] = externalReferenceOverrides
+        ? outer.opacityInherited?.[outerIndex] ?? 0
+        : inheritsOpacity &&
+            outer.opacityInherited?.[outerIndex] === 1
           ? 1
           : 0;
       const inheritsLineWeight =
@@ -259,6 +272,7 @@ export function composeExternalInstanceGraph(
   layerMap = null,
   linetypeMap = null,
   maskBucketScale = 1,
+  externalReferenceOverrides = false,
 ) {
   if (
     !Number.isFinite(maskBucketScale) ||
@@ -268,6 +282,9 @@ export function composeExternalInstanceGraph(
     throw new RangeError(
       "external draw-order scale must be greater than zero and at most one",
     );
+  }
+  if (typeof externalReferenceOverrides !== "boolean") {
+    throw new TypeError("XREFOVERRIDE must be a boolean");
   }
   const outer = parentInstanceGraph.instancesByBlock.get(parentBlockIndex);
   if (!outer || outer.count === 0) {
@@ -377,6 +394,7 @@ export function composeExternalInstanceGraph(
       layerMap,
       linetypeMap,
       maskBucketScale,
+      externalReferenceOverrides,
     );
     instancesByBlock.set(blockIndex, composed);
     instanceCount += composed.count;
@@ -576,10 +594,49 @@ export function remapLineVertexLinetypes(
   return buffer;
 }
 
+export function overrideExternalVertexProperties(
+  buffer,
+  {
+    stride = 36,
+    lineStyle = true,
+    secondaryColor = false,
+  } = {},
+) {
+  if (
+    !(buffer instanceof ArrayBuffer) ||
+    !Number.isInteger(stride) ||
+    stride < 32 ||
+    buffer.byteLength % stride !== 0 ||
+    typeof lineStyle !== "boolean" ||
+    typeof secondaryColor !== "boolean"
+  ) {
+    throw new TypeError("external ByLayer override input is inconsistent");
+  }
+  const view = new DataView(buffer);
+  for (let offset = 0; offset < buffer.byteLength; offset += stride) {
+    view.setUint32(offset + 16, BY_LAYER_ENTITY_COLOR, true);
+    if (secondaryColor) {
+      view.setUint32(offset + 20, BY_LAYER_ENTITY_COLOR, true);
+    }
+    if (lineStyle) {
+      const style = view.getUint32(offset + 28, true);
+      view.setUint32(
+        offset + 28,
+        ((style & ~(LINE_WEIGHT_MASK | LINETYPE_MASK)) |
+          BY_LAYER_LINE_WEIGHT_CODE) >>>
+          0,
+        true,
+      );
+    }
+  }
+  return buffer;
+}
+
 export function remapTextEntityLayers(
   textEntities,
   layerMap,
   linetypeMap = null,
+  { externalReferenceOverrides = false } = {},
 ) {
   if (
     !textEntities ||
@@ -605,7 +662,15 @@ export function remapTextEntityLayers(
     readDisplayRecord(index, target) {
       const record = textEntities.readDisplayRecord(index, target);
       record.layerIndex = mapLayer(record.layerIndex);
-      record.linetypeCode = mapLinetype(record.linetypeCode);
+      record.color = externalReferenceOverrides
+        ? BY_LAYER_ENTITY_COLOR
+        : record.color;
+      record.lineWeight = externalReferenceOverrides
+        ? -1
+        : record.lineWeight;
+      record.linetypeCode = externalReferenceOverrides
+        ? 0
+        : mapLinetype(record.linetypeCode);
       return record;
     },
     readValue(index) {
@@ -618,7 +683,15 @@ export function remapTextEntityLayers(
       return Object.freeze({
         ...record,
         layerIndex: mapLayer(record.layerIndex),
-        linetypeCode: mapLinetype(record.linetypeCode),
+        color: externalReferenceOverrides
+          ? BY_LAYER_ENTITY_COLOR
+          : record.color,
+        lineWeight: externalReferenceOverrides
+          ? -1
+          : record.lineWeight,
+        linetypeCode: externalReferenceOverrides
+          ? 0
+          : mapLinetype(record.linetypeCode),
       });
     },
   });

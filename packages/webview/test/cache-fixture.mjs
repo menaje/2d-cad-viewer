@@ -1736,6 +1736,10 @@ export function makeFixtureCache({
   pdfFrame = null,
   dwfFrame = null,
   dgnFrame = null,
+  quickTextMode = false,
+  splineFrame = false,
+  displaySilhouettes = false,
+  externalReferenceOverrides = false,
   xrefLoaded = true,
   xrefResolved = true,
   globalLinetypeScale = 1,
@@ -1769,6 +1773,13 @@ export function makeFixtureCache({
       (encodeTwoBitSetting(pdfFrame) << 15) |
       (encodeTwoBitSetting(dwfFrame) << 17) |
       (encodeTwoBitSetting(dgnFrame) << 19);
+  }
+  if (minorVersion >= 25) {
+    presentationSettings |=
+      (quickTextMode ? 1 << 21 : 0) |
+      (splineFrame ? 1 << 22 : 0) |
+      (displaySilhouettes ? 1 << 23 : 0) |
+      (externalReferenceOverrides ? 1 << 24 : 0);
   }
   const sections = [
     makeDrawingSection(

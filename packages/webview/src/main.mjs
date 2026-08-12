@@ -21,16 +21,17 @@ import {
   buildExternalLinetypeMap,
   blockExternalReferenceIsDisplayable,
   composeExternalInstanceGraph,
+  overrideExternalVertexProperties,
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
-} from "./external-reference.mjs?v=1.24.0";
+} from "./external-reference.mjs?v=1.25.0";
 import {
   createVsCodeRangeSource,
   installWorkerRangeProxy,
   WORKER_RANGE_REQUEST,
 } from "./host-range-source.mjs";
-import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.24.0";
+import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.25.0";
 import {
   buildLayerGroups,
   isolateLayerGroup,
@@ -96,10 +97,10 @@ import {
   CompositeTextOverlay,
   registerLocalOutlineFont,
   unregisterLocalOutlineFont,
-} from "./text-overlay.mjs?v=1.24.0";
+} from "./text-overlay.mjs?v=1.25.0";
 import {
   loadExternalFirstFrame,
-} from "./viewer.mjs?v=1.24.0";
+} from "./viewer.mjs?v=1.25.0";
 import {
   addViewBookmark,
   CameraViewHistory,
@@ -113,8 +114,8 @@ import {
   environmentLocales,
   escapeHtmlText,
 } from "./i18n.mjs?v=1.0.0";
-import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.24.0";
-import { effectiveFrameSetting } from "./frame-setting.mjs?v=1.24.0";
+import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.25.0";
+import { effectiveFrameSetting } from "./frame-setting.mjs?v=1.25.0";
 
 const standaloneQualificationParameters =
   typeof globalThis.acquireVsCodeApi === "function"
@@ -1046,6 +1047,7 @@ function configurePlotStyleForView(scene, view, revision) {
   activePlotStyleName = key;
   activePlotStyleEnabled = resolveScreenPlotStyleEnabled(
     plotStylePreferences.get(key),
+    view.layout,
   );
   const cached = plotStyleTables.get(key);
   if (cached?.status === "loaded") {
@@ -3577,6 +3579,8 @@ async function initializeTextOverlay(
     sourceLabel: t("common.currentDrawing"),
     attributeDisplayMode:
       scene.metadata.drawing.attributeDisplayMode ?? 1,
+    quickTextMode:
+      scene.metadata.drawing.quickTextMode ?? false,
     annotationAllVisible:
       instanceGraph.annotationAllVisible ?? true,
     xclipFrame:
@@ -3834,6 +3838,9 @@ function remapExternalVertices(
   {
     recordSize = 32,
     linetypeMap = null,
+    externalReferenceOverrides = false,
+    lineStyle = Boolean(linetypeMap),
+    secondaryColor = false,
   } = {},
 ) {
   if (!vertices?.buffer || vertices.byteLength === 0) {
@@ -3847,36 +3854,71 @@ function remapExternalVertices(
       recordSize,
     );
   }
+  if (externalReferenceOverrides) {
+    overrideExternalVertexProperties(vertices.buffer, {
+      stride: recordSize,
+      lineStyle,
+      secondaryColor,
+    });
+  }
   return vertices;
 }
 
-function remapExternalPrimitiveResult(result, layerMap, linetypeMap) {
-  remapExternalVertices(result.primitives.points.vertices, layerMap);
-  remapExternalVertices(result.primitives.solidFills.vertices, layerMap);
+function remapExternalPrimitiveResult(
+  result,
+  layerMap,
+  linetypeMap,
+  externalReferenceOverrides,
+) {
+  remapExternalVertices(result.primitives.points.vertices, layerMap, {
+    externalReferenceOverrides,
+    lineStyle: false,
+  });
+  remapExternalVertices(result.primitives.solidFills.vertices, layerMap, {
+    externalReferenceOverrides,
+    lineStyle: false,
+    secondaryColor: true,
+  });
   remapExternalVertices(
     result.primitives.solidOutlines.vertices,
     layerMap,
-    { linetypeMap },
+    { linetypeMap, externalReferenceOverrides },
   );
   remapExternalVertices(result.primitives.wipeoutMasks.vertices, layerMap);
   return result;
 }
 
-function remapExternalHatchResult(result, layerMap, linetypeMap) {
-  remapExternalVertices(result.fill.vertices, layerMap);
+function remapExternalHatchResult(
+  result,
+  layerMap,
+  linetypeMap,
+  externalReferenceOverrides,
+) {
+  remapExternalVertices(result.fill.vertices, layerMap, {
+    externalReferenceOverrides,
+    lineStyle: false,
+    secondaryColor: true,
+  });
   if (result.pattern) {
     remapExternalVertices(result.pattern.vertices, layerMap, {
       linetypeMap,
+      externalReferenceOverrides,
     });
   }
   return result;
 }
 
-function remapExternalCurveResult(result, layerMap, linetypeMap) {
+function remapExternalCurveResult(
+  result,
+  layerMap,
+  linetypeMap,
+  externalReferenceOverrides,
+) {
   for (const entry of result.refinement.entries) {
     remapExternalVertices(entry.vertices, layerMap, {
       recordSize: entry.vertices.recordSize ?? 36,
       linetypeMap,
+      externalReferenceOverrides,
     });
   }
   return result;
@@ -4046,7 +4088,7 @@ async function createPrimitiveWorker(workerSource) {
     workerHandle.terminate();
   };
   return {
-    initialize(wipeoutFrame, fillMode, maskOrder) {
+    initialize(wipeoutFrame, fillMode, splineFrame, maskOrder) {
       if (settled) {
         return Promise.reject(
           new DOMException("후처리 작업 취소됨", "AbortError"),
@@ -4087,6 +4129,7 @@ async function createPrimitiveWorker(workerSource) {
           ...workerSourcePayload(workerSource),
           wipeoutFrame,
           fillMode,
+          splineFrame,
           maskOrder,
         });
       });
@@ -4403,6 +4446,7 @@ async function initializePrimitives(
         scene.metadata.drawing.wipeoutFrame,
       ),
       scene.metadata.drawing.fillMode,
+      scene.metadata.drawing.splineFrame ?? false,
       maskOrder,
     );
   } finally {
@@ -4608,6 +4652,8 @@ function scheduleHatchPatterns(scene, camera, revision) {
         }
         remapExternalVertices(result.pattern.vertices, context.layerMap, {
           linetypeMap: context.linetypeMap,
+          externalReferenceOverrides:
+            context.externalReferenceOverrides,
         });
         scene.renderer.setExternalHatchPatterns(
           sceneId,
@@ -4868,6 +4914,7 @@ async function drainExternalCurveRefinementRequest() {
           result,
           context.layerMap,
           context.linetypeMap,
+          context.externalReferenceOverrides,
         );
         request.scene.renderer.setExternalCurveRefinement(
           sceneId,
@@ -5006,6 +5053,7 @@ async function initializeExternalPrimitives({
   maskOrder,
   rootScene,
   revision,
+  externalReferenceOverrides = false,
 }) {
   const worker = await createPrimitiveWorker(workerSource);
   if (revision !== openRevision || activeScene !== rootScene) {
@@ -5020,12 +5068,18 @@ async function initializeExternalPrimitives({
         childScene.metadata.drawing.wipeoutFrame,
       ),
       childScene.metadata.drawing.fillMode,
+      childScene.metadata.drawing.splineFrame ?? false,
       maskOrder,
     );
     if (revision !== openRevision || activeScene !== rootScene) {
       return;
     }
-    remapExternalPrimitiveResult(result, layerMap, linetypeMap);
+    remapExternalPrimitiveResult(
+      result,
+      layerMap,
+      linetypeMap,
+      externalReferenceOverrides,
+    );
     rootScene.renderer.setExternalPrimitiveMeshes(
       sceneId,
       result.primitives,
@@ -5045,6 +5099,7 @@ async function initializeExternalHatches({
   maskOrder,
   rootScene,
   revision,
+  externalReferenceOverrides = false,
 }) {
   externalHatchContexts.get(sceneId)?.worker.cancel();
   const worker = await createHatchWorker(workerSource);
@@ -5054,6 +5109,7 @@ async function initializeExternalHatches({
     rootScene,
     layerMap,
     linetypeMap,
+    externalReferenceOverrides,
     lastCameraKey: null,
     ready: false,
   };
@@ -5081,7 +5137,12 @@ async function initializeExternalHatches({
       worker.cancel();
       return;
     }
-    remapExternalHatchResult(result, layerMap, linetypeMap);
+    remapExternalHatchResult(
+      result,
+      layerMap,
+      linetypeMap,
+      externalReferenceOverrides,
+    );
     rootScene.renderer.setExternalHatchFills(sceneId, result.fill);
     context.ready = true;
     if (result.pattern) {
@@ -5107,6 +5168,7 @@ function registerExternalCurveContext({
   maskOrder,
   rootScene,
   revision,
+  externalReferenceOverrides = false,
 }) {
   externalCurveContexts.get(sceneId)?.worker?.cancel();
   externalCurveContexts.set(sceneId, {
@@ -5122,6 +5184,7 @@ function registerExternalCurveContext({
     instanceGraph: composedInstanceGraph,
     layerMap,
     linetypeMap,
+    externalReferenceOverrides,
     maskOrder,
     rootScene,
     revision,
@@ -5427,6 +5490,7 @@ async function addExternalText(
   linetypeMap = null,
   maskOrder = null,
   maskBucketScale = 1,
+  externalReferenceOverrides = false,
 ) {
   const revision = openRevision;
   const rootScene = activeScene;
@@ -5453,6 +5517,7 @@ async function addExternalText(
     textEntities,
     layerMap,
     linetypeMap,
+    { externalReferenceOverrides },
   );
   const overlay = new CanvasTextOverlay(textCanvas, {
     textEntities: remapped,
@@ -5470,6 +5535,8 @@ async function addExternalText(
     sourceLabel,
     attributeDisplayMode:
       externalScene.metadata.drawing.attributeDisplayMode ?? 1,
+    quickTextMode:
+      externalScene.metadata.drawing.quickTextMode ?? false,
     annotationAllVisible:
       composedInstanceGraph.annotationAllVisible ?? true,
     xclipFrame:
@@ -5520,6 +5587,7 @@ async function addExternalImages(
   sourceLabel,
   maskOrder = null,
   maskBucketScale = 1,
+  externalReferenceOverrides = false,
 ) {
   const revision = openRevision;
   const rootScene = activeScene;
@@ -5573,6 +5641,7 @@ async function addExternalImages(
           externalScene.metadata.drawing.frame,
           externalScene.metadata.drawing.imageFrame,
         ) ?? 0,
+      externalReferenceOverrides,
       maskBucketScale,
     });
   activeImageComposite.add(overlay);
@@ -5636,6 +5705,8 @@ async function handleExternalCacheReady(message) {
   );
   refreshMaskSourceCount();
   const childContexts = externalAttachmentsByCache.get(message.cacheId) ?? [];
+  const externalReferenceOverrides =
+    activeScene.metadata.drawing.externalReferenceOverrides ?? false;
   let lastFit;
   for (const parentContext of parentContexts) {
     const maskState = externalMaskState(loaded, parentContext);
@@ -5659,6 +5730,7 @@ async function handleExternalCacheReady(message) {
       layerMap,
       linetypeMap,
       maskState.maskBucketScale,
+      externalReferenceOverrides,
     );
     if (composed.instanceGraph.instanceCount === 0) {
       continue;
@@ -5683,6 +5755,11 @@ async function handleExternalCacheReady(message) {
         linetypeMap,
         loaded.scene.overview.recordSize,
       );
+      if (externalReferenceOverrides) {
+        overrideExternalVertexProperties(overviewBuffer, {
+          stride: loaded.scene.overview.recordSize,
+        });
+      }
       lastFit = activeScene.renderer.addExternalOverview({
         id: sceneId,
         batches: composed.batches,
@@ -5710,6 +5787,11 @@ async function handleExternalCacheReady(message) {
             linetypeMap,
             vertices.recordSize,
           );
+          if (externalReferenceOverrides) {
+            overrideExternalVertexProperties(vertices.buffer, {
+              stride: vertices.recordSize,
+            });
+          }
           return vertices;
         },
       };
@@ -5768,6 +5850,7 @@ async function handleExternalCacheReady(message) {
       linetypeMap,
       maskState.maskOrder,
       maskState.maskBucketScale,
+      externalReferenceOverrides,
     );
     const imageFit = await addExternalImages(
       loaded.scene,
@@ -5778,6 +5861,7 @@ async function handleExternalCacheReady(message) {
       prefix,
       maskState.maskOrder,
       maskState.maskBucketScale,
+      externalReferenceOverrides,
     );
     lastFit = imageFit ?? lastFit;
     const externalSource = externalHostSources.get(message.cacheId);
@@ -5792,6 +5876,7 @@ async function handleExternalCacheReady(message) {
         maskOrder: maskState.maskOrder,
         rootScene: activeScene,
         revision,
+        externalReferenceOverrides,
       });
       if (revision !== openRevision || !activeScene) {
         return;

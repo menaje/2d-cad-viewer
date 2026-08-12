@@ -58,6 +58,26 @@ const VARIABLE_CONTRACTS = Object.freeze({
     values: Object.freeze([0, 1]),
     normalize: Boolean,
   }),
+  QTEXTMODE: Object.freeze({
+    field: "quickTextMode",
+    values: Object.freeze([0, 1]),
+    normalize: Boolean,
+  }),
+  SPLFRAME: Object.freeze({
+    field: "splineFrame",
+    values: Object.freeze([0, 1]),
+    normalize: Boolean,
+  }),
+  DISPSILH: Object.freeze({
+    field: "displaySilhouettes",
+    values: Object.freeze([0, 1]),
+    normalize: Boolean,
+  }),
+  XREFOVERRIDE: Object.freeze({
+    field: "externalReferenceOverrides",
+    values: Object.freeze([0, 1]),
+    normalize: Boolean,
+  }),
   FRAME: Object.freeze({
     field: "frame",
     values: Object.freeze([0, 1, 2]),

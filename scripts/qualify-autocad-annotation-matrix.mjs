@@ -34,7 +34,7 @@ import {
 
 const execFile = promisify(execFileCallback);
 const REPORT_SCHEMA = "dwg-autocad-annotation-scale-matrix/2";
-const CACHE_SCHEMA = "dwg-scene-cache/1.24";
+const CACHE_SCHEMA = "dwg-scene-cache/1.25";
 const MAX_SOURCE_BYTES = 256 * 1024 * 1024;
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024 * 1024;
 const PROCESS_TIMEOUT_MS = 15 * 60 * 1000;

@@ -1,7 +1,7 @@
 // Canonical Scene Cache reader shared by DwgSceneCacheSource and legacy Webview imports.
 export const CACHE_MAGIC = new Uint8Array([68, 87, 71, 83, 67, 78, 49, 0]);
 export const CACHE_VERSION_MAJOR = 1;
-export const CACHE_VERSION_MINOR = 24;
+export const CACHE_VERSION_MINOR = 25;
 export const MINIMUM_CACHE_VERSION_MINOR = 21;
 export const HEADER_SIZE = 64;
 export const DIRECTORY_ENTRY_SIZE = 40;
@@ -2183,7 +2183,13 @@ export class SceneCacheReader {
         (this.header.minor < 22 && presentationSettings !== 0) ||
         (this.header.minor >= 22 &&
           ((presentationSettings &
-              ~(this.header.minor >= 23 ? 0x1fffff : 0x7fff)) !==
+              ~(
+                this.header.minor >= 25
+                  ? 0x1ffffff
+                  : this.header.minor >= 23
+                    ? 0x1fffff
+                    : 0x7fff
+              )) !==
               0 ||
             (this.header.minor < 23 &&
               (presentationSettings & ~0x7fff) !== 0) ||
@@ -2279,6 +2285,18 @@ export class SceneCacheReader {
         pdfFrame: twoBitSetting(15, null, this.header.minor >= 23),
         dwfFrame: twoBitSetting(17, null, this.header.minor >= 23),
         dgnFrame: twoBitSetting(19, null, this.header.minor >= 23),
+        quickTextMode:
+          this.header.minor >= 25 &&
+          (presentationSettings & (1 << 21)) !== 0,
+        splineFrame:
+          this.header.minor >= 25 &&
+          (presentationSettings & (1 << 22)) !== 0,
+        displaySilhouettes:
+          this.header.minor >= 25 &&
+          (presentationSettings & (1 << 23)) !== 0,
+        externalReferenceOverrides:
+          this.header.minor >= 25 &&
+          (presentationSettings & (1 << 24)) !== 0,
         modelAnnotationScale,
         savedModelView,
         totalEntities: readSafeU64(view, 16, "drawing entity count"),
