@@ -7,8 +7,8 @@ authority:
 last_reviewed: 2026-08-03
 decision_id: ADR-0001
 tracking:
-  - https://github.com/menaje/dwg-viewer/issues/26
-  - https://github.com/menaje/dwg-viewer/issues/30
+  - https://github.com/menaje/2d-cad-viewer/issues/26
+  - https://github.com/menaje/2d-cad-viewer/issues/30
 ---
 
 # ADR-0001: 독립 Viewer 제품과 공용 Viewer Core 경계
@@ -17,9 +17,9 @@ tracking:
 
 현재 제품은 raw DWG를 여는 VS Code Custom Editor이며, 검증된 renderer,
 camera, interaction, picking과 Scene Cache streaming 구현은
-`packages/webview`에 함께 있다. 이 구현은 독립 DWG Viewer에서 계속
+`packages/webview`에 함께 있다. 이 구현은 독립 2D CAD Viewer에서 계속
 동작해야 하지만, Coni Spatial도 renderer 코드를 복사하거나 설치된
-DWG Viewer extension을 제어하지 않고 같은 Viewer Core를 사용할 수 있어야
+2D CAD Viewer extension을 제어하지 않고 같은 Viewer Core를 사용할 수 있어야
 한다. raw BIM을 read/index/render하는 독립 `bim-explorer`도 세 번째
 consumer로 추가됐으며 source-neutral lifecycle, identity와 selection
 계약을 공유해야 한다.
@@ -34,8 +34,8 @@ Render Snapshot/Delta와 Service integration을 구현할 때 다시 경계를
 
 ## Decision
 
-독립 DWG Viewer, BIM Explorer와 Coni Spatial 제품은 저장소, 설치물과
-release를 분리한다. `dwg-viewer`는 다음 versioned package 경계를
+독립 2D CAD Viewer, BIM Explorer와 Coni Spatial 제품은 저장소, 설치물과
+release를 분리한다. `2d-cad-viewer`는 다음 versioned package 경계를
 소유한다.
 
 | Package | 책임 | 포함하지 않는 것 |
@@ -92,7 +92,7 @@ human capability를 발급하지 않는다.
 
 ## Version과 compatibility
 
-Viewer Core package, render protocol과 DWG Viewer 제품은 각각 semantic
+Viewer Core package, render protocol과 2D CAD Viewer 제품은 각각 semantic
 version을 가진다. BIM Explorer product/source package, Spatial Protocol과
 Viewer package version도 서로 독립적이다.
 
@@ -135,9 +135,9 @@ memory qualification을 유지해야 한다. 파일 이동 자체를 완료 조�
 - 초기에는 adapter code가 얇게 중복 연결될 수 있지만 renderer 구현을
   복사하지 않는다.
 - public contract는 현재 VS Code message보다 작고 source-neutral하다.
-- BIM Explorer는 standalone DWG Viewer 설치 없이 `BimModelSource`와
+- BIM Explorer는 standalone 2D CAD Viewer 설치 없이 `BimModelSource`와
   generic 3D surface를 제공할 수 있다.
-- Coni Spatial은 standalone DWG Viewer 설치 없이 호환 package를 bundle할
+- Coni Spatial은 standalone 2D CAD Viewer 설치 없이 호환 package를 bundle할
   수 있으며 BIM Explorer extension 설치에도 의존하지 않는다.
 - 2D와 3D surface는 같은 lifecycle/identity/selection 계약을 사용하지만
   서로 다른 renderer backend와 제품 package를 가질 수 있다.
@@ -293,7 +293,7 @@ source/service conformance와 외부 제품 없는 standalone runtime lifecycle�
 현재 `viewer-core-v0.1.2`는 prerelease로 유지한다. 새 tag publish는
 producer manifest의 `tagPublicationApproved`를 별도 변경하지 않으면
 workflow가 거부하며 stable 자동 승격은 없다. 이 qualification은
-`dwg-viewer`만 실행하고 BIM Explorer와 Coni Spatial 저장소를 수정하거나
+`2d-cad-viewer`만 실행하고 BIM Explorer와 Coni Spatial 저장소를 수정하거나
 그 consumer-owned 결과를 대신 주장하지 않는다.
 
 `bim-explorer`의 `BimModelSource`와 3D consumer는 아직 구현되지 않았다.

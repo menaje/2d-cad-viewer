@@ -377,7 +377,7 @@ async function verifyCatalogLicense(source, fetchImplementation) {
     headers: {
       Accept: "text/html",
       "User-Agent":
-        "dwg-viewer-public-corpus/1 (+https://github.com/menaje/dwg-viewer)",
+        "2d-cad-viewer-public-corpus/1 (+https://github.com/menaje/2d-cad-viewer)",
     },
     redirect: "error",
     signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
@@ -427,7 +427,7 @@ async function downloadArchive(source, fetchImplementation) {
     headers: {
       Accept: "application/zip, application/octet-stream",
       "User-Agent":
-        "dwg-viewer-public-corpus/1 (+https://github.com/menaje/dwg-viewer)",
+        "2d-cad-viewer-public-corpus/1 (+https://github.com/menaje/2d-cad-viewer)",
     },
     redirect: "error",
     signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),

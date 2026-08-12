@@ -2922,7 +2922,7 @@ export class WebGlLineRenderer {
       powerPreference: "high-performance",
     });
     if (!gl) {
-      throw new Error("WebGL2 is required for the DWG viewer");
+      throw new Error("WebGL2 is required for the 2D CAD viewer");
     }
     this.canvas = canvas;
     this.gl = gl;

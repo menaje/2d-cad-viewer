@@ -1,6 +1,6 @@
 # Scene Engine protocol v1
 
-Issue [#17](https://github.com/menaje/dwg-viewer/issues/17) validates optional
+Issue [#17](https://github.com/menaje/2d-cad-viewer/issues/17) validates optional
 execution backends without replacing the accepted LibreDWG Native path or
 forking the renderer. The extension-side contract is
 `dwg-scene-engine/1`.

@@ -13,7 +13,7 @@ function pullRequestPayload({
   action = "synchronize",
   base,
   head,
-  headRepository = "menaje/dwg-viewer",
+  headRepository = "menaje/2d-cad-viewer",
   merged = false,
 }) {
   return {
@@ -34,7 +34,7 @@ function pullRequestPayload({
 const common = {
   eventName: "pull_request",
   priorVersions: ["0.1.2"],
-  repository: "menaje/dwg-viewer",
+  repository: "menaje/2d-cad-viewer",
 };
 
 test("parses and orders numeric Marketplace versions", () => {
@@ -197,7 +197,7 @@ test("manual authentication verification does not build or publish", () => {
     fallbackSha: "3333333333333333333333333333333333333333",
     manualMode: "verify-auth",
     payload: {},
-    repository: "menaje/dwg-viewer",
+    repository: "menaje/2d-cad-viewer",
     version: "0.1.2",
   });
   assert.equal(result.build, false);

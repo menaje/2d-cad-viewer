@@ -101,7 +101,19 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   const webviewManifest = JSON.parse(webviewManifestText);
   const emfManifest = JSON.parse(emfManifestText);
 
-  assert.equal(manifest.displayName, "DWG Viewer for VS Code");
+  assert.equal(manifest.name, "dwg-viewer-vscode");
+  assert.equal(manifest.displayName, "2D CAD Viewer for VS Code");
+  assert.match(manifest.description, /compatible with the DWG file format/u);
+  assert.ok(
+    manifest.contributes.commands.every((command) =>
+      command.title.startsWith("2D CAD Viewer:"),
+    ),
+  );
+  assert.equal(
+    manifest.contributes.customEditors[0].displayName,
+    "2D CAD Viewer",
+  );
+  assert.equal(manifest.contributes.configuration.title, "2D CAD Viewer");
   assert.equal(manifest.license, "MPL-2.0");
   assert.equal(manifest.icon, "images/icon.png");
   assert.equal(manifest.engines.vscode, "^1.85.0");
@@ -119,12 +131,12 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   assert.equal(marketplaceIcon.readUInt32BE(20), 256);
   assert.equal(
     manifest.repository?.url,
-    "https://github.com/menaje/dwg-viewer.git",
+    "https://github.com/menaje/2d-cad-viewer.git",
   );
   assert.match(ignoreRules, /(?:^|\n)native\/\*\*(?:\n|$)/u);
   assert.match(
     readme,
-    /complete source form[\s\S]*menaje\/dwg-viewer repository/u,
+    /complete source form[\s\S]*menaje\/2d-cad-viewer repository/u,
   );
   assert.match(
     readme,
@@ -142,7 +154,11 @@ test("keeps the MPL VSIX and GPL adapter distribution boundaries explicit", asyn
   assert.equal(packagedNotice, repositoryNotice);
   assert.match(
     repositoryNotice,
-    /Copyright 2026 dwg-viewer contributors/u,
+    /Copyright 2026 2d-cad-viewer contributors/u,
+  );
+  assert.match(
+    repositoryNotice,
+    /not affiliated with,[\s\S]*or sponsored by Autodesk/u,
   );
   assert.equal(packagedNotices, repositoryNotices);
   assert.equal(

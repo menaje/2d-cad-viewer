@@ -575,7 +575,7 @@ try {
     status: "passed-viewer-owned-boundary",
     asOf: manifest.asOf,
     scope: Object.freeze({
-      repository: "menaje/dwg-viewer",
+      repository: "menaje/2d-cad-viewer",
       externalConsumerQualification: "consumer-owned-not-executed",
       deploymentPerformed: false,
     }),

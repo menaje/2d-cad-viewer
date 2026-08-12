@@ -127,7 +127,7 @@ export function validateNativeAdapterCompatibility(value) {
     "Windows qualification",
   );
   if (
-    !/^https:\/\/github\.com\/menaje\/dwg-viewer\/actions\/runs\/\d+$/u.test(
+    !/^https:\/\/github\.com\/menaje\/2d-cad-viewer\/actions\/runs\/\d+$/u.test(
       windowsQualification.workflowRun,
     ) ||
     !/^[0-9a-f]{40}$/u.test(windowsQualification.commit) ||

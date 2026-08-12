@@ -20,7 +20,7 @@ function qualificationHtml(
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src ${webview.cspSource};">
-    <title>DWG Viewer revision comparison qualification</title>
+    <title>2D CAD Viewer revision comparison qualification</title>
     <style nonce="${nonce}">
       html, body { width: 100%; height: 100%; margin: 0; background: #111820; color: #d9e2ec; font: 14px/1.4 system-ui, sans-serif; }
       body { display: grid; grid-template-rows: minmax(0, 1fr) auto; }
@@ -55,7 +55,7 @@ export function activateRevisionComparisonQualification(
   );
   const panel = vscode.window.createWebviewPanel(
     "dwgViewer.revisionComparisonQualification",
-    "DWG Viewer comparison qualification",
+    "2D CAD Viewer comparison qualification",
     { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
     {
       enableScripts: true,

@@ -295,7 +295,7 @@ node adapters/libredwg/package.mjs \
 The packager refuses to overwrite a file, rejects a dynamic LibreDWG
 dependency, local build paths, a wrong source checksum or an incompatible
 doctor report. The archive includes the executable, unmodified GPL and MPL
-license texts, the DWG Viewer project notice, checksums, a machine-readable
+license texts, the 2D CAD Viewer project notice, checksums, a machine-readable
 manifest, all adapter build sources (including the reviewed source patches)
 and the exact LibreDWG 0.14 source archive.
 Fixed metadata and sorted entries make repeated packaging from the same target

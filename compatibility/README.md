@@ -103,6 +103,10 @@ AutoCAD 2026 2D Wireframe 화면 표시 전수조사의 구현/보류 매트릭�
 75개 AutoCAD 참조 JPG–DWG 쌍, AutoCAD XLINE/RAY 속성, Autodesk Support가
 배포하는 공식 샘플 DWG 18개와 11개 Browser pixel hash를 검증한 현재 결과는
 [`evidence/autocad-display-parity-2026-08-12.json`](evidence/autocad-display-parity-2026-08-12.json)에
-있다. 공개 AutoCAD 참조 화면과 대표 Browser 객체 비교는 통과했지만, 실제
-AutoCAD system-variable pair와 현재 변경의 packaged Windows VS Code 실행은
-통과했다고 주장하지 않으며 해당 외부 Gate를 명시적으로 pending으로 기록한다.
+있다. 공개 AutoCAD 참조 화면과 대표 Browser 객체 비교는 관찰 시점에
+통과했지만, 도면 콘텐츠의 재배포 권리를 확인하지 않은 raster 캡처는
+저장소에서 제거했다. 고정 evidence에는 경로 없는 크기·해시 등 과거
+메타데이터만 남으며 이미지가 필요한 재검증은 비공개 외부 입력으로 수행한다.
+실제 AutoCAD system-variable pair와 현재 변경의 packaged Windows VS Code
+실행은 통과했다고 주장하지 않으며 해당 외부 Gate를 명시적으로 pending으로
+기록한다.

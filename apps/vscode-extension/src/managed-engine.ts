@@ -25,7 +25,7 @@ export const ENGINE_ASSET_CATALOG_SCHEMA =
   "dwg-viewer-engine-assets/1";
 export const ENGINE_ASSET_CATALOG_NAME = "engine-assets.json";
 const ENGINE_LICENSE = "GPL-3.0-or-later";
-const RELEASE_REPOSITORY = "menaje/dwg-viewer";
+const RELEASE_REPOSITORY = "menaje/2d-cad-viewer";
 const MAX_CATALOG_BYTES = 128 * 1024;
 const MAX_ENGINE_BYTES = 128 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -146,7 +146,7 @@ export interface ManagedEngineManagerOptions {
 function catalogError(message: string, cause?: unknown): SceneEngineError {
   return new SceneEngineError(
     "ENGINE_CATALOG_INVALID",
-    "이 버전의 DWG Viewer에 맞는 변환기 정보를 확인하지 못했습니다.",
+    "이 버전의 2D CAD Viewer에 맞는 변환기 정보를 확인하지 못했습니다.",
     { cause: cause ?? new Error(message) },
   );
 }
@@ -432,7 +432,7 @@ export class ManagedEngineManager {
     } catch (error) {
       throw new SceneEngineError(
         "ENGINE_CATALOG_MISSING",
-        "이 버전의 DWG Viewer에 맞는 변환기 목록이 없습니다.",
+        "이 버전의 2D CAD Viewer에 맞는 변환기 목록이 없습니다.",
         { cause: error },
       );
     }
@@ -485,7 +485,7 @@ export class ManagedEngineManager {
       const response = await this.fetcher(url, {
         headers: {
           Accept: "application/octet-stream",
-          "User-Agent": "menaje-dwg-viewer-vscode",
+          "User-Agent": "menaje-2d-cad-viewer-vscode",
         },
         redirect: "follow",
         signal: controller.signal,

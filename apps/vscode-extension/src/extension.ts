@@ -126,7 +126,7 @@ async function diagnoseAdapterWithProgress(
   return vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: "DWG Viewer: LibreDWG 변환기 진단",
+      title: "2D CAD Viewer: LibreDWG 변환기 진단",
       cancellable: false,
     },
     () => diagnoseLibreDwgAdapter(adapterPath),
@@ -140,7 +140,7 @@ async function selectLibreDwgAdapter(
     canSelectFiles: true,
     canSelectFolders: false,
     canSelectMany: false,
-    title: "DWG Viewer용 LibreDWG 변환기 선택",
+    title: "2D CAD Viewer용 LibreDWG 변환기 선택",
     openLabel: "선택 후 진단",
   });
   const adapterUri = selected?.find((uri) => uri.scheme === "file");
@@ -169,14 +169,14 @@ async function selectLibreDwgAdapter(
       `[ADAPTER_READY] engine=${report.engineVersion} linkage=${report.linkage} target=${report.platform}-${report.architecture}`,
     );
     void vscode.window.showInformationMessage(
-      `DWG Viewer: LibreDWG ${report.engineVersion} 변환기 진단을 통과했습니다 (${linkage}).`,
+      `2D CAD Viewer: LibreDWG ${report.engineVersion} 변환기 진단을 통과했습니다 (${linkage}).`,
     );
     return true;
   } catch (error) {
     const details = adapterErrorDetails(error);
     output.appendLine(`[${details.code}] adapter selection failed`);
     void vscode.window.showErrorMessage(
-      `DWG Viewer: ${details.message}`,
+      `2D CAD Viewer: ${details.message}`,
     );
     return false;
   }
@@ -195,7 +195,7 @@ async function diagnoseConfiguredLibreDwgAdapter(
       `[MANAGED_ENGINE_READY] engine=${report.engineVersion} linkage=${report.linkage} target=${installation.target} reused=${installation.reused} source=${installation.sourceUrl}`,
     );
     void vscode.window.showInformationMessage(
-      `DWG Viewer: 자동 설치된 LibreDWG ${report.engineVersion} 변환기가 정상입니다 (${report.platform}-${report.architecture}, ${report.linkage}).`,
+      `2D CAD Viewer: 자동 설치된 LibreDWG ${report.engineVersion} 변환기가 정상입니다 (${report.platform}-${report.architecture}, ${report.linkage}).`,
     );
     return true;
   } catch (error) {
@@ -205,14 +205,14 @@ async function diagnoseConfiguredLibreDwgAdapter(
     );
     if (fallback) {
       void vscode.window.showInformationMessage(
-        `DWG Viewer: 호환되는 오프라인 변환기를 사용합니다 (${fallback.report.platform}-${fallback.report.architecture}).`,
+        `2D CAD Viewer: 호환되는 오프라인 변환기를 사용합니다 (${fallback.report.platform}-${fallback.report.architecture}).`,
       );
       return true;
     }
     const details = adapterErrorDetails(error);
     output.appendLine(`[${details.code}] adapter diagnosis failed`);
     void vscode.window.showErrorMessage(
-      `DWG Viewer: ${details.message}`,
+      `2D CAD Viewer: ${details.message}`,
     );
     return false;
   }
@@ -313,7 +313,7 @@ async function addShxFontFolders(): Promise<boolean> {
     canSelectFiles: false,
     canSelectFolders: true,
     canSelectMany: true,
-    title: "DWG Viewer에서 사용할 SHX·BigFont 폴더 선택",
+    title: "2D CAD Viewer에서 사용할 SHX·BigFont 폴더 선택",
     openLabel: "글꼴 폴더 추가",
   });
   const directories = (selected ?? [])
@@ -363,8 +363,8 @@ async function addShxFontFolders(): Promise<boolean> {
   );
   void vscode.window.showInformationMessage(
     added > 0
-      ? `DWG Viewer: SHX 글꼴 폴더 ${added.toLocaleString()}개를 추가했습니다.`
-      : "DWG Viewer: 기존 SHX 글꼴 폴더 설정을 다시 읽습니다.",
+      ? `2D CAD Viewer: SHX 글꼴 폴더 ${added.toLocaleString()}개를 추가했습니다.`
+      : "2D CAD Viewer: 기존 SHX 글꼴 폴더 설정을 다시 읽습니다.",
   );
   return true;
 }
@@ -489,7 +489,7 @@ class DwgEditorProvider
     _token: vscode.CancellationToken,
   ): DwgDocument {
     if (uri.scheme !== "file") {
-      throw new Error("DWG Viewer currently supports local files only.");
+      throw new Error("2D CAD Viewer currently supports local files only.");
     }
     return new DwgDocument(uri);
   }
@@ -958,7 +958,7 @@ class DwgEditorProvider
         const prepared = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: "DWG Viewer",
+            title: "2D CAD Viewer",
             cancellable: true,
           },
           async (progress, cancellationToken) => {
@@ -1321,7 +1321,7 @@ class DwgEditorProvider
                 defaultUri: vscode.Uri.file(
                   path.join(path.dirname(document.uri.fsPath), fileName),
                 ),
-                title: "DWG Viewer 출력 파일 저장",
+                title: "2D CAD Viewer 출력 파일 저장",
                 saveLabel: "저장",
                 filters:
                   format === "pdf"
@@ -1355,7 +1355,7 @@ class DwgEditorProvider
                   bytes: bytes.length,
                 });
                 void vscode.window.showInformationMessage(
-                  `DWG Viewer: ${path.basename(selected.fsPath || selected.path)} 저장 완료`,
+                  `2D CAD Viewer: ${path.basename(selected.fsPath || selected.path)} 저장 완료`,
                 );
               })
               .catch((error: unknown) => {
@@ -1791,7 +1791,7 @@ export function activate(context: vscode.ExtensionContext): void {
       qualificationReporter,
     );
   }
-  const output = vscode.window.createOutputChannel("DWG Viewer");
+  const output = vscode.window.createOutputChannel("2D CAD Viewer");
   const managedEngine = new ManagedEngineManager({
     storageRoot: path.join(
       context.globalStorageUri.fsPath,

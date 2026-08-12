@@ -34,7 +34,7 @@ and GitHub's
 
 ## Automatic installation model
 
-Installing **DWG Viewer for VS Code** activates the extension after VS Code
+Installing **2D CAD Viewer for VS Code** activates the extension after VS Code
 startup. The extension then:
 
 1. selects `linux-x64`, `darwin-arm64`, `darwin-x64`, or `win32-x64` from the
@@ -168,16 +168,16 @@ With GitHub CLI, verify provenance for the files you intend to use:
 
 ```bash
 gh attestation verify dwg-viewer-vscode-0.1.7.vsix \
-  --repo menaje/dwg-viewer
+  --repo menaje/2d-cad-viewer
 gh attestation verify dwg-viewer-native-converter-0.1.7-darwin-arm64 \
-  --repo menaje/dwg-viewer
+  --repo menaje/2d-cad-viewer
 gh attestation verify dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz \
-  --repo menaje/dwg-viewer
+  --repo menaje/2d-cad-viewer
 ```
 
 ## Install
 
-From Marketplace, install only **DWG Viewer for VS Code**. The automatic flow
+From Marketplace, install only **2D CAD Viewer for VS Code**. The automatic flow
 above prepares the correct converter; there is no engine extension to select or
 install.
 
@@ -202,7 +202,7 @@ On Windows, run:
 .\dwg-viewer-native-converter-0.1.7-win32-x64.exe doctor
 ```
 
-Then run **DWG Viewer: LibreDWG 변환기 선택** and choose that verified file.
+Then run **2D CAD Viewer: LibreDWG 변환기 선택** and choose that verified file.
 The command is an offline fallback; it does not replace a healthy automatically
 managed converter.
 

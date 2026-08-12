@@ -27,7 +27,7 @@ function catalog(overrides: Record<string, unknown> = {}): string {
   return `${JSON.stringify({
     schema: ENGINE_ASSET_CATALOG_SCHEMA,
     viewerVersion,
-    repository: "menaje/dwg-viewer",
+    repository: "menaje/2d-cad-viewer",
     releaseTag: `v${viewerVersion}`,
     engine: {
       id: "libredwg",
@@ -107,7 +107,7 @@ test("downloads, validates, installs, and reuses the exact engine", async (conte
       downloads += 1;
       assert.equal(
         url,
-        `https://github.com/menaje/dwg-viewer/releases/download/v0.1.4/dwg-viewer-native-converter-${viewerVersion}-${target}`,
+        `https://github.com/menaje/2d-cad-viewer/releases/download/v0.1.4/dwg-viewer-native-converter-${viewerVersion}-${target}`,
       );
       return {
         ok: true,

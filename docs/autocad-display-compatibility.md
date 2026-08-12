@@ -250,6 +250,12 @@ pnpm run qualify:autocad-display-parity \
   --observed-at 2026-08-12T08:30:00Z
 ```
 
+Browser, AutoCAD, TrueView and Autodesk Viewer raster captures are private
+qualification inputs. They must remain outside Git unless their redistribution
+rights are documented. The aggregate report records only the capture basename,
+dimensions and SHA-256; it never copies the image into the repository. Raster
+files under `compatibility/evidence` are ignored as a second line of defense.
+
 On Windows with AutoCAD installed, generate one same-camera DWG/PNG pair per
 saved value before supplying the external pair gate. The output directory must
 not already exist. The runner starts AutoCAD with its documented `/b` startup
@@ -345,11 +351,13 @@ background, font/resource availability and the profile values above. Login
 state, private drawings, local paths and credentials are never committed.
 
 The output never includes local paths, drawing names outside the public corpus,
-source text or credentials. It refuses a non-pinned source archive, the wrong
+source text, raster bytes or credentials. It refuses a non-pinned source
+archive, the wrong
 Scene Cache version, evidence not produced by AutoCAD 2026 (`ACADVER=25.1s`)
 on Windows, a non-2D-Wireframe capture mode, a missing section, an invalid supported entity, an
 unpartitioned omission, an omitted referenced linetype or a mislabeled Browser
-image. The Browser gate requires all 11 named model/layout, dark/light,
+image. The Browser gate requires private access to all 11 named model/layout,
+dark/light,
 1×/2×, CTB/STB and object-family images; a partial list remains pending. The
 aggregate also records model and paper-layout `ANNOALLVISIBLE` counts,
 model-versus-paper saved current tabs, exact current-paper resolution and

@@ -10,6 +10,7 @@ import { deflateSync } from "node:zlib";
 
 import {
   aggregateCoverage,
+  describeBrowserEvidence,
   describeJpeg,
   describePng,
   displayParityQualificationStatus,
@@ -228,6 +229,29 @@ test("parses bounded qualification inputs and repeated external evidence", () =>
       ]),
     /must be supplied together/u,
   );
+});
+
+test("records private Browser captures without their local path", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "dwg-browser-evidence-"),
+  );
+  try {
+    const filePath = path.join(
+      directory,
+      "issue-40-model-webview.png",
+    );
+    await writeFile(
+      filePath,
+      qualificationPng(2, 2, Buffer.from([12, 34, 56])),
+    );
+    const [evidence] = await describeBrowserEvidence([filePath]);
+    assert.equal(evidence.file, "issue-40-model-webview.png");
+    assert.equal(evidence.width, 2);
+    assert.equal(evidence.height, 2);
+    assert.equal(JSON.stringify(evidence).includes(directory), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("requires the complete Browser display matrix", () => {

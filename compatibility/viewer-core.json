@@ -24,7 +24,7 @@
     "tagPublicationApproved": false,
     "automaticStablePromotion": false,
     "tag": "viewer-core-v0.1.2",
-    "releaseUrl": "https://github.com/menaje/dwg-viewer/releases/tag/viewer-core-v0.1.2",
+    "releaseUrl": "https://github.com/menaje/2d-cad-viewer/releases/tag/viewer-core-v0.1.2",
     "registry": "https://npm.pkg.github.com",
     "artifacts": {
       "viewerCore": {

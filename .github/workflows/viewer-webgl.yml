@@ -191,7 +191,7 @@ jobs:
           release_notes="$RUNNER_TEMP/viewer-webgl-release-notes.md"
           printf '%s\n\n%s\n\n%s\n\n%s\n' \
             "Prerelease: embeddable WebGL2 presentation and DWG Scene Cache source packages for Viewer Core consumers." \
-            "The standalone DWG Viewer now uses the same public mount contract that another host can bundle without installing the DWG Viewer extension." \
+            "The standalone 2D CAD Viewer now uses the same public mount contract that another host can bundle without installing the 2D CAD Viewer extension." \
             "The package manifest is the single version source; the workflow derives and validates this tag instead of requiring repeated manual version input." \
             "Consumers must pin the release artifacts and verify SHA256SUMS and GitHub artifact attestations." \
             > "$release_notes"

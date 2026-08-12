@@ -6,7 +6,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
-repository = "https://github.com/menaje/dwg-viewer"
+repository = "https://github.com/menaje/2d-cad-viewer"
 rust-version = "1.82"
 
 [profile.release]

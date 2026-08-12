@@ -1,7 +1,7 @@
-# DWG Viewer
+# 2D CAD Viewer for VS Code
 
-VS Code 안에서 DWG 도면을 빠르게 확인하고, 찾고, 측정하고, 내보낼 수 있는
-오픈소스 읽기 전용 뷰어입니다.
+VS Code 안에서 DWG 파일 형식의 도면을 빠르게 확인하고, 찾고, 측정하고,
+내보낼 수 있는 오픈소스·로컬 우선 읽기 전용 2D CAD 뷰어입니다.
 
 도면과 글꼴은 사용자의 컴퓨터 안에서만 처리됩니다. 대형 도면, 국내
 SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게 확인하는
@@ -92,14 +92,14 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 
 ### 설치
 
-VS Code Marketplace에서 **DWG Viewer for VS Code**를 설치하면 현재
+VS Code Marketplace에서 **2D CAD Viewer for VS Code**를 설치하면 현재
 운영체제와 확장 버전에 정확히 맞는 네이티브 변환기를 같은 GitHub
 Release에서 백그라운드로 준비합니다. 다운로드 크기와 SHA-256, 실행 전
 자체 진단을 모두 통과한 변환기만 사용합니다. 별도 경로 설정 없이
 Explorer에서 `.dwg` 파일을 열면 됩니다.
 
 수동 또는 오프라인 설치에서는
-[GitHub Releases](https://github.com/menaje/dwg-viewer/releases)의
+[GitHub Releases](https://github.com/menaje/2d-cad-viewer/releases)의
 `dwg-viewer-vscode-<version>.vsix`와 운영체제에 맞는
 `dwg-viewer-native-converter-<version>-<platform>`을 내려받습니다. 변환기
 선택 명령은 자동 설치를 사용할 수 없는 통제된 오프라인 환경을 위한
@@ -112,11 +112,11 @@ Explorer에서 `.dwg` 파일을 열면 됩니다.
 
 - **화면 이동:** 클릭 드래그 또는 트랙패드 두 손가락 스크롤
 - **확대·축소:** 마우스 휠 또는 트랙패드 핀치
-- **확대 감도:** VS Code의 DWG Viewer 설정에서 **Mouse Wheel Zoom
+- **확대 감도:** VS Code의 2D CAD Viewer 설정에서 **Mouse Wheel Zoom
   Sensitivity**와 **Trackpad Pinch Zoom Sensitivity**를 각각 조절
 - **도구 이름 확인:** 도구 모음에 마우스를 올리거나 키보드로 초점을
   옮기면 전체 메뉴명이 함께 펼쳐짐
-- **간략 메뉴 설정:** VS Code의 DWG Viewer 설정에서 **Top Toolbar
+- **간략 메뉴 설정:** VS Code의 2D CAD Viewer 설정에서 **Top Toolbar
   Labels**와 **Left Toolbar Labels**를 각각 `icons` 또는 `hover`로 선택
 - **렌더 해상도:** **Render Resolution**을 `auto`(권장), `quality`,
   `performance` 중에서 선택
@@ -193,3 +193,9 @@ VSIX 빌드와 배포 재현 방법은
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요. 각 플랫폼
 변환기의 정확한 대응 소스와 원문 라이선스는 같은 버전의 GitHub
 Release에 함께 제공됩니다.
+
+## 상표 안내
+
+Autodesk, AutoCAD 및 DWG는 Autodesk, Inc.의 등록 상표 또는 상표입니다.
+이 프로젝트는 Autodesk와 독립적으로 개발되며 Autodesk의 제휴, 승인, 보증
+또는 후원을 받지 않습니다.

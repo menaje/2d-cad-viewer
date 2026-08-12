@@ -1,14 +1,14 @@
 {
   "name": "dwg-viewer-vscode",
-  "displayName": "DWG Viewer for VS Code",
-  "description": "Open-source, local-first DWG viewing with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
+  "displayName": "2D CAD Viewer for VS Code",
+  "description": "Open-source, local-first 2D CAD viewer compatible with the DWG file format, with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
   "version": "0.1.7",
   "publisher": "menaje",
   "license": "MPL-2.0",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/menaje/dwg-viewer.git",
+    "url": "https://github.com/menaje/2d-cad-viewer.git",
     "directory": "apps/vscode-extension"
   },
   "engines": {
@@ -47,29 +47,29 @@
     "commands": [
       {
         "command": "dwgViewer.addShxFontFolders",
-        "title": "DWG Viewer: SHX 글꼴 폴더 추가"
+        "title": "2D CAD Viewer: SHX 글꼴 폴더 추가"
       },
       {
         "command": "dwgViewer.selectLibreDwgAdapter",
-        "title": "DWG Viewer: LibreDWG 변환기 선택"
+        "title": "2D CAD Viewer: LibreDWG 변환기 선택"
       },
       {
         "command": "dwgViewer.diagnoseLibreDwgAdapter",
-        "title": "DWG Viewer: LibreDWG 변환기 진단"
+        "title": "2D CAD Viewer: LibreDWG 변환기 진단"
       },
       {
         "command": "dwgViewer.searchWorkspaceText",
-        "title": "DWG Viewer: 워크스페이스 도면 문자 검색",
+        "title": "2D CAD Viewer: 워크스페이스 도면 문자 검색",
         "icon": "$(search)"
       },
       {
         "command": "dwgViewer.refreshWorkspaceTextSearch",
-        "title": "DWG Viewer: 도면 문자 검색 다시 실행",
+        "title": "2D CAD Viewer: 도면 문자 검색 다시 실행",
         "icon": "$(refresh)"
       },
       {
         "command": "dwgViewer.toggleTextSearchRegularExpression",
-        "title": "DWG Viewer: 도면 문자 검색 정규식 사용",
+        "title": "2D CAD Viewer: 도면 문자 검색 정규식 사용",
         "icon": "$(regex)"
       }
     ],
@@ -105,7 +105,7 @@
     "customEditors": [
       {
         "viewType": "dwgViewer.dwg",
-        "displayName": "DWG Viewer",
+        "displayName": "2D CAD Viewer",
         "selector": [
           {
             "filenamePattern": "*.dwg"
@@ -118,7 +118,7 @@
       }
     ],
     "configuration": {
-      "title": "DWG Viewer",
+      "title": "2D CAD Viewer",
       "properties": {
         "dwgViewer.libredwgAdapterPath": {
           "type": "string",

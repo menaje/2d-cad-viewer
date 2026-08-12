@@ -35,7 +35,7 @@ test("pins the unmodified official MPL text and separate project notice", async 
     createHash("sha256").update(license).digest("hex"),
     MPL_2_0_SHA256,
   );
-  assert.match(notice, /Copyright 2026 dwg-viewer contributors/u);
+  assert.match(notice, /Copyright 2026 2d-cad-viewer contributors/u);
 });
 
 test("pins the unmodified GPLv3 text conveyed with LibreDWG", async () => {

@@ -6,7 +6,7 @@ renderer입니다. 공개 entrypoint는 DOM을 자동 탐색하거나
 제품이 주입한 scene loader를, `mountDwgWebGlPresentation()`은
 `@menaje/dwg-scene-source` range layer를 사용합니다.
 
-`src/main.mjs`, `index.html`과 `styles.css`는 독립 DWG Viewer 제품 shell과
+`src/main.mjs`, `index.html`과 `styles.css`는 독립 2D CAD Viewer 제품 shell과
 개발·검증 harness입니다. 이 bootstrap과 `dwg-*` Host message는 공개
 embedding 계약이 아니며 package export map에 노출되지 않습니다.
 
@@ -22,7 +22,7 @@ const runtime = await openViewerRuntime(source, {
 });
 ```
 
-## DWG Viewer product shell
+## 2D CAD Viewer product shell
 
 Scene Cache v1.26 range reader, WebGL2 line/fill/point renderer, bounded CAD
 text overlay and lazy raster IMAGE overlay for the VS Code Webview.

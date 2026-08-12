@@ -3,10 +3,17 @@
   "status": "pass-with-explicit-external-gates",
   "observedAt": "2026-08-12T13:56:50Z",
   "scope": {
-    "repository": "menaje/dwg-viewer",
+    "repository": "menaje/2d-cad-viewer",
     "comparisonTarget": "AutoCAD 2026 2D Wireframe model/layout display",
     "loadingPerformanceExcluded": true,
     "deploymentPerformed": false
+  },
+  "browserEvidenceRetention": {
+    "mode": "metadata-only",
+    "imagesIncluded": false,
+    "repositoryImagesRemoved": true,
+    "reason": "drawing-content redistribution rights were not established",
+    "redistributionRightsRequiredForPublication": true
   },
   "adapter": {
     "schema": "dwg-engine-doctor/1",
@@ -3379,7 +3386,7 @@
     {
       "drawing": "2013/ConstructionLine.dwg",
       "browserEvidence": {
-        "file": "compatibility/evidence/issue-40-construction-line-webview.png",
+        "file": "issue-40-construction-line-webview.png",
         "bytes": 175660,
         "sha256": "d9584e6696a8f620cd7bae4de2c55e16b77dfc0fba0eca874fc12551ab37120b",
         "width": 1280,
@@ -3394,12 +3401,12 @@
         "drawing": "2013/ConstructionLine.dwg"
       },
       "comparison": "manual object-content and placement review; AutoCAD grid, UCS and cursor pixels are excluded",
-      "status": "pass"
+      "status": "historical-pass-artifact-not-retained"
     },
     {
       "drawing": "2013/Multiline.dwg",
       "browserEvidence": {
-        "file": "compatibility/evidence/issue-40-multiline-webview.png",
+        "file": "issue-40-multiline-webview.png",
         "bytes": 204380,
         "sha256": "77525d41fae3cc044306c2105cecf542a8eb029e662fd8018597ec621ff9c141",
         "width": 1280,
@@ -3414,12 +3421,12 @@
         "drawing": "2013/Multiline.dwg"
       },
       "comparison": "manual object-content and placement review; AutoCAD grid, UCS and cursor pixels are excluded",
-      "status": "pass"
+      "status": "historical-pass-artifact-not-retained"
     },
     {
       "drawing": "2013/RAY.dwg",
       "browserEvidence": {
-        "file": "compatibility/evidence/issue-40-ray-webview.png",
+        "file": "issue-40-ray-webview.png",
         "bytes": 173918,
         "sha256": "a6c0348cea83cdb07ec37e31025fa5fa479ee81698cd44c141068307b4f76ce1",
         "width": 1280,
@@ -3434,12 +3441,12 @@
         "drawing": "2013/RAY.dwg"
       },
       "comparison": "manual object-content and placement review; AutoCAD grid, UCS and cursor pixels are excluded",
-      "status": "pass"
+      "status": "historical-pass-artifact-not-retained"
     },
     {
       "drawing": "2013/Text.dwg",
       "browserEvidence": {
-        "file": "compatibility/evidence/issue-40-text-webview.png",
+        "file": "issue-40-text-webview.png",
         "bytes": 175227,
         "sha256": "3840abb9376e4eb720f019f509f99e04b98fed27e45afd2f09fe7193ceccb9e4",
         "width": 1280,
@@ -3454,7 +3461,7 @@
         "drawing": "2013/Text.dwg"
       },
       "comparison": "manual object-content and placement review; AutoCAD grid, UCS and cursor pixels are excluded",
-      "status": "pass"
+      "status": "historical-pass-artifact-not-retained"
     }
   ],
   "autoCadAdapter": null,
@@ -4509,77 +4516,77 @@
   ],
   "browserEvidence": [
     {
-      "file": "compatibility/evidence/issue-40-construction-line-webview.png",
+      "file": "issue-40-construction-line-webview.png",
       "bytes": 175660,
       "sha256": "d9584e6696a8f620cd7bae4de2c55e16b77dfc0fba0eca874fc12551ab37120b",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-dark-background-webview.png",
+      "file": "issue-40-dark-background-webview.png",
       "bytes": 211390,
       "sha256": "43e8e80d9d59bb737f295bc60bedbf9df9b02b4d2d312d627f24d321d4d9ab63",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-hatchg-webview.png",
+      "file": "issue-40-hatchg-webview.png",
       "bytes": 211333,
       "sha256": "cf762a76e0658c42fb445657cf22916581181fca517c0f2f59db651aa8ced53c",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-layout-ctb-webview.png",
+      "file": "issue-40-layout-ctb-webview.png",
       "bytes": 256415,
       "sha256": "205aa95f6033c639327ed9c7d5b9693d2c1e74a49bb1195e6e5cff8d6c35115f",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-light-background-webview.png",
+      "file": "issue-40-light-background-webview.png",
       "bytes": 215166,
       "sha256": "8275fe56ffac9bccb181af08785d55a01fd47b22d3edd23ad9f19a2414524838",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-model-webview.png",
+      "file": "issue-40-model-webview.png",
       "bytes": 335686,
       "sha256": "0398d5c60920b04c89a91ebceb9e0f224f6b3464490aba78c38fbe88fcb8a84d",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-multiline-webview.png",
+      "file": "issue-40-multiline-webview.png",
       "bytes": 204380,
       "sha256": "77525d41fae3cc044306c2105cecf542a8eb029e662fd8018597ec621ff9c141",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-ray-webview.png",
+      "file": "issue-40-ray-webview.png",
       "bytes": 173918,
       "sha256": "a6c0348cea83cdb07ec37e31025fa5fa479ee81698cd44c141068307b4f76ce1",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-stb-diagnostic-webview.png",
+      "file": "issue-40-stb-diagnostic-webview.png",
       "bytes": 206199,
       "sha256": "b853fc396696946a10135b2c4dd0c0cb84e462e16ed093e2bd7f6c2760dddac6",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-text-webview.png",
+      "file": "issue-40-text-webview.png",
       "bytes": 175227,
       "sha256": "3840abb9376e4eb720f019f509f99e04b98fed27e45afd2f09fe7193ceccb9e4",
       "width": 1280,
       "height": 720
     },
     {
-      "file": "compatibility/evidence/issue-40-zoom-2x-webview.png",
+      "file": "issue-40-zoom-2x-webview.png",
       "bytes": 189181,
       "sha256": "28c4cc3145eb8512853b4a19517cf063f9d3902ba8311058e0d33de1562035e1",
       "width": 1280,
@@ -4614,18 +4621,19 @@
       "issue-40-zoom-2x-webview.png"
     ],
     "missing": [],
-    "complete": true
+    "complete": true,
+    "artifactsRetained": false
   },
   "gates": {
     "publicCorpusConversion": "pass",
     "officialAutodeskSamples": "pass",
     "sourceSerializedDeferredPartition": "pass",
     "invalidSupportedEntities": "pass-zero",
-    "browserRepresentativePixels": "pass-required-matrix",
+    "browserRepresentativePixels": "historical-pass-artifacts-not-retained",
     "autoCadSystemVariablePairs": "pending-external-fixtures",
     "autoCadAnnotationScaleMatrix": "pending-external-fixtures",
     "autoCadXrefStateMatrix": "pending-external-fixtures",
-    "autoCadReferencePixels": "pass-public-autocad-reference-set-and-browser-review",
+    "autoCadReferencePixels": "historical-pass-artifacts-not-retained",
     "packagedWindowsVsCodeCurrentRevision": "pending-windows-execution"
   },
   "explicitBoundaries": {

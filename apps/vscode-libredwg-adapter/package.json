@@ -1,6 +1,6 @@
 {
   "name": "dwg-viewer-libredwg",
-  "displayName": "DWG Viewer — Legacy Engine Test Package",
+  "displayName": "2D CAD Viewer — Legacy Engine Test Package",
   "description": "Legacy GPL package retained for offline and extension-host qualification",
   "version": "0.1.7",
   "publisher": "menaje",
@@ -8,7 +8,7 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/menaje/dwg-viewer.git",
+    "url": "https://github.com/menaje/2d-cad-viewer.git",
     "directory": "apps/vscode-libredwg-adapter"
   },
   "engines": {

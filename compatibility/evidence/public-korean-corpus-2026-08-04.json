@@ -22,7 +22,7 @@
   },
   "execution": {
     "target": "github-actions-ubuntu-24.04-x64",
-    "workflowRun": "https://github.com/menaje/dwg-viewer/actions/runs/30863132622",
+    "workflowRun": "https://github.com/menaje/2d-cad-viewer/actions/runs/30863132622",
     "evidenceArtifact": {
       "name": "dwg-viewer-public-korean-corpus-evidence",
       "sizeBytes": 5092,

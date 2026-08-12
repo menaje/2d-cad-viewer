@@ -16,7 +16,7 @@ DWG
 
 ## Viewer product and package boundary
 
-The raw DWG Viewer remains an independently installed product. The independent
+The raw 2D CAD Viewer remains an independently installed product. The independent
 `bim-explorer` is the second, 3D consumer, while Coni Spatial owns
 revision/change authority and embeds only compatible packages. Renderer reuse
 is through versioned Viewer Core packages rather than an installed extension,

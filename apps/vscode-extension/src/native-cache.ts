@@ -96,7 +96,7 @@ export async function resolveLibreDwgAdapter(
   } catch (error) {
     throw new SceneEngineError(
       "ADAPTER_NOT_FOUND",
-      "LibreDWG 변환기를 찾을 수 없습니다. 자동 설치를 다시 시도하거나 DWG Viewer 설정에서 검증된 오프라인 변환기 경로를 지정해 주세요.",
+      "LibreDWG 변환기를 찾을 수 없습니다. 자동 설치를 다시 시도하거나 2D CAD Viewer 설정에서 검증된 오프라인 변환기 경로를 지정해 주세요.",
       { cause: error },
     );
   }
@@ -395,7 +395,7 @@ export function parseLibreDwgDoctorReport(
   ) {
     throw new SceneEngineError(
       "ADAPTER_DOCTOR_REPORT_REJECTED",
-      "선택한 LibreDWG 변환기는 이 버전의 DWG Viewer와 호환되지 않습니다.",
+      "선택한 LibreDWG 변환기는 이 버전의 2D CAD Viewer와 호환되지 않습니다.",
     );
   }
 

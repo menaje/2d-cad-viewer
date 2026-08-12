@@ -2071,11 +2071,12 @@ export function parseAutoCadVectorProperty(text, property) {
   return values;
 }
 
-async function describeBrowserEvidence(paths) {
+export async function describeBrowserEvidence(paths) {
   const result = [];
   for (const filePath of paths) {
-    const relative = safeRelative(REPOSITORY_ROOT, filePath);
-    result.push(describePng(await readFile(filePath), relative));
+    result.push(
+      describePng(await readFile(filePath), path.basename(filePath)),
+    );
   }
   result.sort((left, right) => left.file.localeCompare(right.file, "en"));
   return result;
@@ -2440,7 +2441,7 @@ function buildEvidence({
     }),
     observedAt,
     scope: {
-      repository: "menaje/dwg-viewer",
+      repository: "menaje/2d-cad-viewer",
       comparisonTarget: "AutoCAD 2026 2D Wireframe model/layout display",
       loadingPerformanceExcluded: true,
       deploymentPerformed: false,
@@ -2501,6 +2502,11 @@ function buildEvidence({
     packagedWindowsVsCode: windowsVsCodeEvidence,
     selectedFixtures,
     browserEvidence,
+    browserEvidenceRetention: {
+      mode: "metadata-only",
+      imagesIncluded: false,
+      redistributionRightsRequiredForPublication: true,
+    },
     browserEvidenceCoverage,
     gates: {
       publicCorpusConversion: "pass",

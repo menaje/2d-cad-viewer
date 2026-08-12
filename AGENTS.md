@@ -1,4 +1,4 @@
-# DWG Viewer 저장소 에이전트 지침
+# 2D CAD Viewer 저장소 에이전트 지침
 
 ## 시작 전
 
