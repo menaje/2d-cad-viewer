@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   buildLayoutInstanceGraph,
   buildLayoutRootPlan,
+  layoutLineWeightWorldScale,
   paperViewportForLayout,
   paperViewportIdentityError,
+  unsupportedViewportDisplayReasons,
   viewportModelToPaperMatrix,
 } from "../src/layout-scene.mjs";
 import { transformPoint } from "../src/math.mjs";
@@ -68,6 +70,7 @@ const layout = {
       viewTarget: [0, 0, 0],
       viewHeight: 297,
       viewCenter: [210, 148.5],
+      annotationScale: 1,
       frozenLayerIndices: [],
     },
     viewport,
@@ -137,7 +140,7 @@ test("builds paper and clipped model roots with frozen layer rows", () => {
   assert.equal(graph.modelInstances.coordinateSpaceIds[0], 1);
   assert.deepEqual([...graph.paperToModelScalesByVisibilityRow], [1, 5]);
   assert.deepEqual([...graph.linetypeScalesByVisibilityRow], [1, 1]);
-  assert.deepEqual([...graph.annotationScalesByVisibilityRow], [0, 50]);
+  assert.deepEqual([...graph.annotationScalesByVisibilityRow], [1, 50]);
   assert.equal(graph.instancesByBlock.get(1).count, 1);
   assert.equal(graph.instancesByBlock.get(1).coordinateSpaceIds[0], 0);
 });
@@ -148,7 +151,7 @@ test("normalizes paper-space linetypes by each viewport scale", () => {
   });
   assert.deepEqual(plan.paperToModelScalesByVisibilityRow, [1, 5]);
   assert.deepEqual(plan.linetypeScalesByVisibilityRow, [1, 5]);
-  assert.deepEqual(plan.annotationScalesByVisibilityRow, [0, 50]);
+  assert.deepEqual(plan.annotationScalesByVisibilityRow, [1, 50]);
 
   const graph = buildLayoutInstanceGraph(
     blocks,
@@ -160,7 +163,23 @@ test("normalizes paper-space linetypes by each viewport scale", () => {
   assert.equal(graph.modelInstances.visibilityRows[0], 1);
   assert.deepEqual([...graph.paperToModelScalesByVisibilityRow], [1, 5]);
   assert.deepEqual([...graph.linetypeScalesByVisibilityRow], [1, 5]);
-  assert.deepEqual([...graph.annotationScalesByVisibilityRow], [0, 50]);
+  assert.deepEqual([...graph.annotationScalesByVisibilityRow], [1, 50]);
+});
+
+test("maps layout paper units to zoom-sensitive lineweight world units", () => {
+  assert.equal(layoutLineWeightWorldScale({ paperUnit: 1 }), 0.01);
+  assert.equal(layoutLineWeightWorldScale({ paperUnit: 0 }), 1 / 2_540);
+  assert.equal(layoutLineWeightWorldScale({ paperUnit: 2 }), 0);
+  assert.equal(buildLayoutRootPlan(blocks, [{}, {}], layout).lineWeightWorldScale, 0.01);
+  assert.equal(
+    buildLayoutInstanceGraph(
+      blocks,
+      [],
+      [{ name: "0" }, { name: "VP-FROZEN" }],
+      layout,
+    ).lineWeightWorldScale,
+    0.01,
+  );
 });
 
 test("builds viewport-specific layer color, opacity, linetype and weight rows", () => {
@@ -232,7 +251,34 @@ test("keeps a 1:1 model viewport distinct from the paper-space row", () => {
 
   assert.equal(plan.rootContexts[1].visibilityRow, 1);
   assert.deepEqual(plan.paperToModelScalesByVisibilityRow, [1, 1]);
-  assert.deepEqual(plan.annotationScalesByVisibilityRow, [0, 1]);
+  assert.deepEqual(plan.annotationScalesByVisibilityRow, [1, 1]);
+});
+
+test("uses the paper viewport annotation scale for paper-space text", () => {
+  const paperScaleLayout = {
+    ...layout,
+    viewports: [
+      { ...layout.viewports[0], annotationScale: 20 },
+      viewport,
+    ],
+  };
+
+  const plan = buildLayoutRootPlan(
+    blocks,
+    [{}, {}],
+    paperScaleLayout,
+  );
+
+  assert.deepEqual(plan.annotationScalesByVisibilityRow, [20, 50]);
+});
+
+test("defaults paper-space annotation scale to 1:1 without a viewport", () => {
+  const plan = buildLayoutRootPlan(blocks, [{}, {}], {
+    ...layout,
+    viewports: [],
+  });
+
+  assert.deepEqual(plan.annotationScalesByVisibilityRow, [1]);
 });
 
 test("excludes off and invisible model viewports from an active layout", () => {
@@ -249,6 +295,14 @@ test("excludes off and invisible model viewports from an active layout", () => {
         on: 1,
         center: [610, 148.5, 0],
       },
+      { ...viewport, handle: 404n, id: 5, on: -1 },
+      {
+        ...viewport,
+        handle: 405n,
+        id: 6,
+        on: 1,
+        status: 0x20000,
+      },
     ],
   };
 
@@ -260,7 +314,25 @@ test("excludes off and invisible model viewports from an active layout", () => {
   assert.equal(plan.rootContexts.length, 2);
 });
 
-test("treats an inactive layout's active id-zero viewport as paper space", () => {
+test("orders active model viewports so stacking order one is composed last", () => {
+  const activeLayout = {
+    ...layout,
+    viewports: [
+      layout.viewports[0],
+      { ...viewport, handle: 411n, id: 2, on: 1 },
+      { ...viewport, handle: 412n, id: 3, on: 3 },
+      { ...viewport, handle: 413n, id: 4, on: 2 },
+    ],
+  };
+
+  const plan = buildLayoutRootPlan(blocks, [{}, {}], activeLayout);
+  assert.deepEqual(
+    plan.modelViewports.map(({ handle }) => handle),
+    [412n, 413n, 411n],
+  );
+});
+
+test("fails closed when inactive layout viewport status is explicitly off", () => {
   const inactiveLayout = {
     ...layout,
     name: "저장된 비활성 배치",
@@ -290,13 +362,8 @@ test("treats an inactive layout's active id-zero viewport as paper space", () =>
 
   const plan = buildLayoutRootPlan(blocks, [{}, {}], inactiveLayout);
   assert.equal(plan.paperViewport.handle, 301n);
-  assert.deepEqual(
-    plan.modelViewports.map(({ handle }) => handle),
-    [302n, 303n],
-  );
-  assert.equal(plan.rootContexts.length, 3);
-  assert.equal(plan.rootContexts[1].modelSpace, true);
-  assert.equal(plan.rootContexts[2].modelSpace, true);
+  assert.deepEqual(plan.modelViewports, []);
+  assert.equal(plan.rootContexts.length, 1);
 });
 
 test("infers an id-zero paper viewport instead of the active model viewport", () => {
@@ -334,11 +401,48 @@ test("infers an id-zero paper viewport instead of the active model viewport", ()
   );
   const plan = buildLayoutRootPlan(blocks, [{}, {}], missingIdsLayout);
   assert.equal(plan.paperViewport.handle, 501n);
+  assert.deepEqual(plan.modelViewports, []);
+  assert.equal(plan.rootContexts.length, 1);
+});
+
+test("fails closed with explicit diagnostics for unsupported 3D viewport modes", () => {
+  const perspective = { ...viewport, status: 0x1 | 0x2 | 0x4 };
+  assert.deepEqual(unsupportedViewportDisplayReasons(perspective), [
+    "perspective",
+    "front-clipping",
+    "back-clipping",
+  ]);
+
+  const unsupportedLayout = {
+    ...layout,
+    viewports: [
+      layout.viewports[0],
+      { ...viewport, handle: 601n, on: 1, status: 1 },
+      { ...viewport, handle: 602n, id: 3, on: 2, renderMode: 2 },
+      { ...viewport, handle: 603n, id: 4, on: 3, renderMode: 1 },
+    ],
+  };
+  const plan = buildLayoutRootPlan(blocks, [{}, {}], unsupportedLayout);
   assert.deepEqual(
     plan.modelViewports.map(({ handle }) => handle),
-    [502n],
+    [603n],
   );
-  assert.equal(plan.rootContexts.length, 2);
+  assert.deepEqual(plan.unsupportedViewports, [
+    { handle: 601n, id: 2, reasons: ["perspective"] },
+    {
+      handle: 602n,
+      id: 3,
+      reasons: ["hidden-or-shaded-render-mode"],
+    },
+  ]);
+
+  const graph = buildLayoutInstanceGraph(
+    blocks,
+    [],
+    [{ name: "0" }, { name: "VP-FROZEN" }],
+    unsupportedLayout,
+  );
+  assert.equal(graph.unsupportedViewports.length, 2);
 });
 
 test("keeps the explicit paper viewport ahead of identity inference", () => {

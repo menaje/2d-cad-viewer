@@ -243,7 +243,7 @@ test("uses native Windows isolation and a path-safe piped input contract", async
   assert.match(hostSource, /createReadStream\(inputPath\)/u);
 });
 
-test("serializes sparse viewport layer overrides in Scene Cache v1.21", async () => {
+test("serializes sparse viewport layer overrides in Scene Cache v1.24", async () => {
   const [sceneCacheSource, sceneCacheHeader] = await Promise.all([
     readFile(
       path.join(import.meta.dirname, "libredwg_scene_cache.c"),
@@ -257,11 +257,11 @@ test("serializes sparse viewport layer overrides in Scene Cache v1.21", async ()
 
   assert.match(
     sceneCacheHeader,
-    /LIBREDWG_SCENE_CACHE_VERSION_MINOR 21u/u,
+    /LIBREDWG_SCENE_CACHE_VERSION_MINOR 24u/u,
   );
   assert.match(
     sceneCacheHeader,
-    /LIBREDWG_SCENE_SECTION_COUNT 49/u,
+    /LIBREDWG_SCENE_SECTION_COUNT 51/u,
   );
   assert.match(
     sceneCacheSource,
@@ -280,6 +280,55 @@ test("serializes sparse viewport layer overrides in Scene Cache v1.21", async ()
   assert.match(
     sceneCacheSource,
     /write_viewport_layer_override_section \(\s*&writer, dwg, tables, &sections\[46\]\)/u,
+  );
+});
+
+test("preserves saved presentation controls and XREF load state", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  for (const setting of [
+    "ATTMODE",
+    "IMAGEFRAME",
+    "XCLIPFRAME",
+    "OLEFRAME",
+    "ANNOALLVISIBLE",
+    "MSLTSCALE",
+    "CANNOSCALE",
+    "PDFFRAME",
+    "DWFFRAME",
+    "DGNFRAME",
+  ]) {
+    assert.match(sceneCacheSource, new RegExp(setting, "u"));
+  }
+  assert.match(
+    sceneCacheSource,
+    /copy_variable_dictionary_value[\s\S]*?copy_versioned_text/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /model_annotation_scale[\s\S]*?copy_variable_dictionary_value \(dwg, "CANNOSCALE"\)/u,
+  );
+  assert.match(sceneCacheSource, /block->xref_loaded/u);
+  assert.match(sceneCacheSource, /block->is_xref_resolved/u);
+  assert.match(
+    sceneCacheSource,
+    /tables->presentation_settings >> 6/u,
+  );
+  assert.match(sceneCacheSource, /AcadAnnoAV/u);
+  assert.match(
+    sceneCacheSource,
+    /eed->data->code != 70u[\s\S]*?eed->data->u\.eed_70\.rs/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /write_u16 \(writer, annotation_all_visible\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /has_layout_annotation_all_visible\s*\? layout_annotation_all_visible\s*:\s*1u/u,
   );
 });
 
@@ -631,11 +680,95 @@ test("streams bounded proxy table graphics into lines and UTF-8 text", async () 
   assert.match(sceneCacheSource, /proxy_read_utf16_string/u);
   assert.match(sceneCacheSource, /iterate_proxy_graphic_segments/u);
   assert.match(sceneCacheSource, /for_each_scene_text_source/u);
+  assert.match(
+    sceneCacheSource,
+    /iterate_proxy_graphic_segments[\s\S]*?!proxy_graphic_has_supported_display \(object\)[\s\S]*?return 1;/u,
+  );
   assert.doesNotMatch(sceneCacheSource, /TextSourceList/u);
   assert.match(sceneCacheHeader, /uint64_t proxy_graphics;/u);
   assert.match(adapterSource, /proxy_graphics/u);
+  assert.match(sceneCacheHeader, /uint64_t unsupported_underlays;/u);
+  assert.match(sceneCacheHeader, /uint64_t unsupported_proxy_graphics;/u);
+  assert.match(sceneCacheHeader, /uint64_t unsupported_3d_entities;/u);
+  assert.ok(adapterSource.includes('\\"deferred_reasons\\"'));
+  assert.ok(adapterSource.includes('\\"proxyshow\\":1'));
+  assert.match(
+    adapterSource,
+    /\[6,7,14,18,22,23,29,30,31,32,38\]/u,
+  );
   assert.match(
     adapterSource,
     /object->klass && object->klass->dxfname/u,
   );
+});
+
+test("serializes pre-R13 simple linetype dashes without dereferencing modern records", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /serialized_linetype_dash_count[\s\S]*?header\.version < R_13b1[\s\S]*?count > 12u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /linetype->dashes_r11\[dash_index\]/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /dwg->header\.version < R_13b1[\s\S]*?texts\[cursor\] = strdup \(""\)/u,
+  );
+});
+
+test("preserves qualified MLINE fills and fails closed on fill cuts", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /write_mline_fill_records[\s\S]*?style->flag & 1u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /write_mline_fill_segment[\s\S]*?parameter_count != 0u/u,
+  );
+  assert.doesNotMatch(
+    sceneCacheSource,
+    /write_mline_fill_segment[\s\S]*?areafillparms\[/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /write_solid_surface_record[\s\S]*?&style->fill_color/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /write_mline_round_fill_cap[\s\S]*?const size_t chords = 12u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /SOLID\/MLINE fill source exceeds its record limit/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /MLINE area-fill boundary is unsupported or incomplete/u,
+  );
+});
+
+test("preserves HATCH background TrueColor from its named application data", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(sceneCacheSource, /HATCHBACKGROUNDCOLOR/u);
+  assert.match(
+    sceneCacheSource,
+    /eed->data->code != 71u[\s\S]*?0x00ffffffu/u,
+  );
+  assert.match(sceneCacheSource, /HATCH_FLAG_BACKGROUND_COLOR/u);
+  assert.match(sceneCacheSource, /write_u32 \(writer, background_color\)/u);
 });

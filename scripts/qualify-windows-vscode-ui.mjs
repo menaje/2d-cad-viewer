@@ -1137,7 +1137,7 @@ export async function qualifyWindowsVsCodeUi(options) {
       target: {
         platform: process.platform,
         architecture: process.arch,
-        os: "windows-2025-runner",
+        os: `${os.type()} ${os.release()}`,
         vscodeChannel: "stable",
         vscodeVersion,
         packagedVsixInstalled: true,
@@ -1155,6 +1155,12 @@ export async function qualifyWindowsVsCodeUi(options) {
         pathDisclosure: "none",
       },
       cases,
+      cleanup: {
+        perScaleProcessTreeTermination: "enforced",
+        perScaleProfileRemoval: "enforced",
+        privateRootRemoval: "enforced-before-success-return",
+      },
+      pathsIncluded: false,
     };
     await writeJsonExclusive(
       path.join(options.outputDirectory, "report.json"),

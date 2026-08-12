@@ -289,6 +289,144 @@ function visibleOwnerInstances(owner, bounds, instanceGraph, camera) {
   };
 }
 
+function clippedConstructionParameters(
+  point,
+  direction,
+  bounds,
+  isRay,
+) {
+  let minimum = isRay ? 0 : Number.NEGATIVE_INFINITY;
+  let maximum = Number.POSITIVE_INFINITY;
+  for (let axis = 0; axis < 2; axis += 1) {
+    if (Math.abs(direction[axis]) <= CURVE_EPSILON) {
+      if (point[axis] < bounds.min[axis] || point[axis] > bounds.max[axis]) {
+        return null;
+      }
+      continue;
+    }
+    const first = (bounds.min[axis] - point[axis]) / direction[axis];
+    const last = (bounds.max[axis] - point[axis]) / direction[axis];
+    minimum = Math.max(minimum, Math.min(first, last));
+    maximum = Math.min(maximum, Math.max(first, last));
+    if (minimum > maximum) {
+      return null;
+    }
+  }
+  return Number.isFinite(minimum) && Number.isFinite(maximum)
+    ? [minimum, maximum]
+    : null;
+}
+
+function visibleConstructionLine(
+  entity,
+  owner,
+  instanceGraph,
+  camera,
+) {
+  const instances = instancesForOwner(owner, instanceGraph);
+  if (!instances || instances.count === 0) {
+    return null;
+  }
+  const viewport = {
+    min: [
+      camera.origin[0] - camera.worldWidth * 0.5,
+      camera.origin[1] - camera.worldHeight * 0.5,
+    ],
+    max: [
+      camera.origin[0] + camera.worldWidth * 0.5,
+      camera.origin[1] + camera.worldHeight * 0.5,
+    ],
+  };
+  const indices = [];
+  const clipBounds = new Map();
+  let minimumParameter = Number.POSITIVE_INFINITY;
+  let maximumParameter = Number.NEGATIVE_INFINITY;
+  let maximumPixelsPerLocalUnit = 0;
+  for (let index = 0; index < instances.count; index += 1) {
+    const matrixOffset = index * 16;
+    const clipId = instances.clipIds?.[index] ?? 0;
+    let bounds = viewport;
+    if (clipId > 0) {
+      let clip = clipBounds.get(clipId);
+      if (clip === undefined) {
+        clip = effectiveClipBounds(instanceGraph.clipNodes, clipId);
+        clipBounds.set(clipId, clip);
+      }
+      if (!clip) {
+        continue;
+      }
+      bounds = {
+        min: [
+          Math.max(viewport.min[0], clip.min[0]),
+          Math.max(viewport.min[1], clip.min[1]),
+        ],
+        max: [
+          Math.min(viewport.max[0], clip.max[0]),
+          Math.min(viewport.max[1], clip.max[1]),
+        ],
+      };
+      if (bounds.min[0] > bounds.max[0] || bounds.min[1] > bounds.max[1]) {
+        continue;
+      }
+    }
+    const point = transformPoint(
+      instances.data,
+      entity.point,
+      matrixOffset,
+    );
+    const direction = [
+      instances.data[matrixOffset] * entity.direction[0] +
+        instances.data[matrixOffset + 4] * entity.direction[1] +
+        instances.data[matrixOffset + 8] * entity.direction[2],
+      instances.data[matrixOffset + 1] * entity.direction[0] +
+        instances.data[matrixOffset + 5] * entity.direction[1] +
+        instances.data[matrixOffset + 9] * entity.direction[2],
+      instances.data[matrixOffset + 2] * entity.direction[0] +
+        instances.data[matrixOffset + 6] * entity.direction[1] +
+        instances.data[matrixOffset + 10] * entity.direction[2],
+    ];
+    const clipped = clippedConstructionParameters(
+      point,
+      direction,
+      bounds,
+      entity.kind === "ray",
+    );
+    if (!clipped) {
+      continue;
+    }
+    const scale = matrixPixelsPerLocalUnit(
+      instances.data,
+      matrixOffset,
+      camera,
+    );
+    if (!Number.isFinite(scale) || scale <= CURVE_EPSILON) {
+      continue;
+    }
+    minimumParameter = Math.min(minimumParameter, clipped[0]);
+    maximumParameter = Math.max(maximumParameter, clipped[1]);
+    maximumPixelsPerLocalUnit = Math.max(
+      maximumPixelsPerLocalUnit,
+      scale,
+    );
+    indices.push(index);
+  }
+  if (
+    indices.length === 0 ||
+    !Number.isFinite(minimumParameter) ||
+    !Number.isFinite(maximumParameter) ||
+    minimumParameter > maximumParameter
+  ) {
+    return null;
+  }
+  return {
+    instanceIndices:
+      indices.length === instances.count ? null : Uint32Array.from(indices),
+    maximumPixelsPerLocalUnit,
+    minimumParameter,
+    maximumParameter,
+  };
+}
+
 function unionInstanceIndices(current, next) {
   if (current === null || next === null) {
     return null;
@@ -319,6 +457,26 @@ function curveAttributes(entity, sourceKind, maskOrder) {
     handle: entity.handle,
     style: style >>> 0,
   };
+}
+
+export function scaleCurvePatternDistances(segments, linetypeScale = 1) {
+  if (
+    !(segments instanceof Float64Array) ||
+    segments.length % 8 !== 0 ||
+    !Number.isFinite(linetypeScale) ||
+    linetypeScale <= 0
+  ) {
+    throw new TypeError("curve linetype scale input is invalid");
+  }
+  if (linetypeScale === 1) {
+    return segments;
+  }
+  const scaled = new Float64Array(segments);
+  for (let offset = 0; offset < scaled.length; offset += 8) {
+    scaled[offset + 6] /= linetypeScale;
+    scaled[offset + 7] /= linetypeScale;
+  }
+  return scaled;
 }
 
 class CurveBatchBuilder {
@@ -1625,6 +1783,7 @@ export function buildCurveRefinementMesh(
   const builder = new CurveMeshBuilder(maximumGpuBytes);
   const refinedHandles = new Set();
   const metrics = {
+    sourceConstructionLines: source.constructionLines?.length ?? 0,
     sourceArcs: source.arcs.length,
     sourceCircles: source.circles.length,
     sourceEllipses: source.ellipses.length,
@@ -1633,6 +1792,7 @@ export function buildCurveRefinementMesh(
     considered: 0,
     visible: 0,
     refined: 0,
+    scaledLinetypes: 0,
     skippedOffscreen: 0,
     skippedInvalid: 0,
     skippedLinear: 0,
@@ -1654,11 +1814,21 @@ export function buildCurveRefinementMesh(
       metrics.skippedInvalid += 1;
       return false;
     }
+    const linetypeScale =
+      source.curveLinetypeScales?.get(entity.handle) ?? 1;
+    if (!Number.isFinite(linetypeScale) || linetypeScale <= 0) {
+      metrics.skippedInvalid += 1;
+      return false;
+    }
+    const displaySegments = scaleCurvePatternDistances(
+      segments,
+      linetypeScale,
+    );
     if (
       !builder.write(
         owner,
         visibility.instanceIndices,
-        segments,
+        displaySegments,
         curveAttributes(entity, sourceKind, maskOrder),
         visibility.maximumPixelsPerLocalUnit,
       )
@@ -1671,6 +1841,9 @@ export function buildCurveRefinementMesh(
       return false;
     }
     refinedHandles.add(entity.handle);
+    if (linetypeScale !== 1) {
+      metrics.scaledLinetypes += 1;
+    }
     metrics.refined += 1;
     return true;
   };
@@ -1679,6 +1852,93 @@ export function buildCurveRefinementMesh(
     center: [0, 0, 0],
     normal: [0, 0, 1],
   };
+  const constructionTarget = {
+    point: [0, 0, 0],
+    direction: [0, 0, 0],
+  };
+  for (
+    let index = 0;
+    index < (source.constructionLines?.length ?? 0);
+    index += 1
+  ) {
+    metrics.considered += 1;
+    source.constructionLines.readEntity(index, constructionTarget);
+    const owner = ownerFor(
+      constructionTarget,
+      blocks,
+      instanceGraph,
+      blockIndexByHandle,
+    );
+    if (!owner) {
+      metrics.skippedOwner += 1;
+      continue;
+    }
+    const visibility = visibleConstructionLine(
+      constructionTarget,
+      owner,
+      instanceGraph,
+      camera,
+    );
+    if (!visibility) {
+      metrics.skippedOffscreen += 1;
+      continue;
+    }
+    const directionLength = Math.hypot(...constructionTarget.direction);
+    if (!Number.isFinite(directionLength) || directionLength <= CURVE_EPSILON) {
+      metrics.skippedInvalid += 1;
+      continue;
+    }
+    const start = constructionTarget.point.map(
+      (value, axis) =>
+        value +
+        constructionTarget.direction[axis] * visibility.minimumParameter,
+    );
+    const end = constructionTarget.point.map(
+      (value, axis) =>
+        value +
+        constructionTarget.direction[axis] * visibility.maximumParameter,
+    );
+    if (!finitePoint(start) || !finitePoint(end)) {
+      metrics.skippedInvalid += 1;
+      continue;
+    }
+    const minimumDistance =
+      Math.abs(visibility.minimumParameter) * directionLength;
+    const maximumDistance =
+      Math.abs(visibility.maximumParameter) * directionLength;
+    let segments;
+    if (
+      constructionTarget.kind === "xline" &&
+      visibility.minimumParameter < 0 &&
+      visibility.maximumParameter > 0
+    ) {
+      segments = new Float64Array([
+        ...start,
+        ...constructionTarget.point,
+        minimumDistance,
+        0,
+        ...constructionTarget.point,
+        ...end,
+        0,
+        maximumDistance,
+      ]);
+    } else {
+      segments = new Float64Array([
+        ...start,
+        ...end,
+        minimumDistance,
+        maximumDistance,
+      ]);
+    }
+    metrics.visible += 1;
+    commit(
+      constructionTarget,
+      9,
+      owner,
+      visibility,
+      segments,
+    );
+  }
   for (const [table, sourceKind] of [
     [source.arcs, 4],
     [source.circles, 5],

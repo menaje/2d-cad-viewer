@@ -95,3 +95,14 @@ Gate는
 있다. 선택된 물리 전략은 하나의 renderer와 두 bounded raster surface이며,
 두 번째 full WebGL context/cache 전략은 현재 600 MB target 여유가 부족하므로
 별도 Gate 전에는 지원으로 표시하지 않는다.
+
+AutoCAD 2026 2D Wireframe 화면 표시 전수조사의 구현/보류 매트릭스와 공식
+근거는 [`docs/autocad-display-compatibility.md`](../docs/autocad-display-compatibility.md)에
+있다. 고정된 LibreDWG 0.14 공개 코퍼스 141개 전체를 Scene Cache v1.24로
+변환하고 source/serialized/deferred partition, 표시 변수 분포, 대표 fixture와
+75개 AutoCAD 참조 JPG–DWG 쌍, AutoCAD XLINE/RAY 속성, Autodesk Support가
+배포하는 공식 샘플 DWG 18개와 11개 Browser pixel hash를 검증한 현재 결과는
+[`evidence/autocad-display-parity-2026-08-12.json`](evidence/autocad-display-parity-2026-08-12.json)에
+있다. 공개 AutoCAD 참조 화면과 대표 Browser 객체 비교는 통과했지만, 실제
+AutoCAD system-variable pair와 현재 변경의 packaged Windows VS Code 실행은
+통과했다고 주장하지 않으며 해당 외부 Gate를 명시적으로 pending으로 기록한다.

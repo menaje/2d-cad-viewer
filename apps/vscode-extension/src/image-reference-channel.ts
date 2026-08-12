@@ -14,7 +14,14 @@ export const MAX_IMAGE_REFERENCE_TRANSFER_BYTES = 64 * 1024 * 1024;
 export const MAX_IMAGE_REFERENCES = 256;
 
 const IMAGE_MAPPING_STATE_KEY = "dwgViewer.imageMappings.v1";
-const SUPPORTED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
+const SUPPORTED_IMAGE_EXTENSIONS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".bmp",
+  ".dib",
+  ".gif",
+]);
 
 type PostMessage = (message: unknown) => PromiseLike<boolean>;
 
@@ -321,7 +328,7 @@ export class ImageReferenceChannel {
       await this.postFailure(
         reference,
         "unsupported",
-        "현재는 JPG와 PNG 이미지만 표시할 수 있습니다.",
+        "현재는 JPG, PNG, BMP와 GIF 이미지만 표시할 수 있습니다.",
         true,
       );
       return;
@@ -385,7 +392,7 @@ export class ImageReferenceChannel {
       canSelectFolders: false,
       canSelectMany: false,
       defaultUri: vscode.Uri.file(path.dirname(reference.sourcePath)),
-      filters: { "도면 이미지": ["jpg", "jpeg", "png"] },
+      filters: { "도면 이미지": ["jpg", "jpeg", "png", "bmp", "dib", "gif"] },
       title: "도면 이미지 선택",
       openLabel: "이 이미지 연결",
     });

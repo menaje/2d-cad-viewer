@@ -440,6 +440,32 @@ test("draws IMAGE placement with clipping and CAD display adjustments", () => {
   assert.equal(canvas.calls.drawImage.length, 2);
 });
 
+test("draws the clipped IMAGE boundary for IMAGEFRAME values 1 and 2", () => {
+  const canvas = fakeCanvas();
+  const bitmap = { width: 4, height: 3 };
+  const overlay = new CanvasRasterImageOverlay(canvas, {
+    imageEntities: imageTable(visibleRecord),
+    blocks: [{ index: 0, handle: 100n }],
+    layers: [{ name: "0", color: (2 << 30) | 7 }],
+    instanceGraph: modelGraph(),
+    cacheId: "root",
+    imageFrame: 2,
+    assetStore: {
+      lookup: () => ({
+        status: "ready",
+        bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+      }),
+      snapshot: () => ({}),
+    },
+  });
+
+  const metrics = overlay.redraw(camera, [true]);
+  assert.equal(metrics.imageFrames, 1);
+  assert.equal(canvas.calls.strokes, 1);
+});
+
 test("draws embedded OLE presentations over an opaque paper background", () => {
   const canvas = fakeCanvas();
   const bitmap = { width: 4, height: 3 };

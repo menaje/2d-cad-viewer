@@ -182,6 +182,24 @@ test("clips continuous HATCH pattern lines around a nested hole", () => {
   );
 });
 
+test("omits HATCH patterns when drawing FILLMODE is disabled", () => {
+  const source = makePatternSource({ withHole: true });
+  const args = modelArguments(source);
+  const result = buildHatchPatternMesh(
+    args[0],
+    args[1],
+    args[2],
+    args[3],
+    { fillMode: false },
+  );
+
+  assert.equal(result.metrics.sourceHatches, 1);
+  assert.equal(result.metrics.renderedHatches, 0);
+  assert.equal(result.metrics.segments, 0);
+  assert.equal(result.vertices.byteLength, 0);
+  assert.equal(result.batches.length, 0);
+});
+
 test("packs a HATCH pattern local mask bucket into line vertices", () => {
   const source = makePatternSource();
   const maskOrder = {

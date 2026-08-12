@@ -62,8 +62,8 @@ test("qualifies all four viewport layer override properties", async () => {
   );
 
   assert.deepEqual(result, {
-    cacheVersion: "1.21",
-    sectionCount: 49,
+    cacheVersion: "1.24",
+    sectionCount: 51,
     overrideRecordCount: 4,
     lineWeightDisplay: true,
     layoutName: "배치1",

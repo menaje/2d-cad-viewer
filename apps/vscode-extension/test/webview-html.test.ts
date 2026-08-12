@@ -268,6 +268,8 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   assert.match(template, /id="export-plot-style"/u);
   assert.match(template, /data-review-tool="distance"/u);
   assert.match(template, /data-review-action="settings"/u);
+  assert.match(mainModule, /qualification-theme/u);
+  assert.match(mainModule, /--vscode-editor-background/u);
   assert.match(template, /data-i18n="review\.settings"/u);
   assert.match(template, /class="viewer-tool-icon"/u);
   assert.match(template, /class="viewer-tool-label"/u);
@@ -282,7 +284,7 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   );
   assert.match(
     template,
-    /"@menaje\/dwg-scene-source":\s*"\.\.\/dwg-scene-source\/src\/index\.mjs\?v=1\.21\.0"/u,
+    /"@menaje\/dwg-scene-source":\s*"\.\.\/dwg-scene-source\/src\/index\.mjs\?v=1\.24\.0"/u,
   );
   assert.match(
     template,
@@ -295,6 +297,8 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   assert.doesNotMatch(template, /캐시 다시 만들기/u);
   assert.match(mainModule, /setViewerToolsOpen/u);
   assert.match(mainModule, /applyMenuDisplaySettings/u);
+  assert.match(mainModule, /NamedPlotStyleName/u);
+  assert.match(mainModule, /\.endsWith\("\.stb"\)/u);
   assert.match(mainModule, /dwg-menu-display-settings\/1/u);
   assert.match(mainModule, /dwg-zoom-sensitivity\/1/u);
   assert.match(

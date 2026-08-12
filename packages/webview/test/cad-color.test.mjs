@@ -8,6 +8,7 @@ import {
   decodeCadColor,
   decodeCadOpacity,
   DEFAULT_ACI_PALETTE,
+  makeBackgroundAwareAciPalette,
 } from "../src/cad-color.mjs";
 
 test("builds the full canonical ACI palette", () => {
@@ -46,6 +47,25 @@ test("copies a mutable palette without sharing its backing bytes", () => {
   copy[4] = 7;
   assert.equal(DEFAULT_ACI_PALETTE[4], 255);
   assert.equal(copy[7], 255);
+});
+
+test("switches only ACI 7 between dark and light display backgrounds", () => {
+  const dark = makeBackgroundAwareAciPalette("rgb(14 16 19)");
+  const light = makeBackgroundAwareAciPalette("#fff");
+  assert.deepEqual([...dark.slice(7 * 4, 7 * 4 + 4)], [255, 255, 255, 255]);
+  assert.deepEqual([...light.slice(7 * 4, 7 * 4 + 4)], [0, 0, 0, 255]);
+  assert.deepEqual([...light.slice(6 * 4, 6 * 4 + 4)], [255, 0, 255, 255]);
+  assert.deepEqual(
+    [...DEFAULT_ACI_PALETTE.slice(7 * 4, 7 * 4 + 4)],
+    [255, 255, 255, 255],
+  );
+});
+
+test("rejects an unresolved display background", () => {
+  assert.throws(
+    () => makeBackgroundAwareAciPalette("transparent"),
+    /background color is invalid/u,
+  );
 });
 
 test("decodes legacy, ByLayer, ByBlock and explicit CAD opacity", () => {

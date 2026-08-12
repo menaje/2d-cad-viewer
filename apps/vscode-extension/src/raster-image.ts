@@ -1,9 +1,53 @@
 export const MAX_IMAGE_REFERENCE_PIXELS = 100_000_000;
 
 export interface RasterImageMetadata {
-  mimeType: "image/jpeg" | "image/png";
+  mimeType: "image/jpeg" | "image/png" | "image/bmp" | "image/gif";
   width: number;
   height: number;
+}
+
+function bmpMetadata(bytes: Uint8Array): RasterImageMetadata | undefined {
+  if (
+    bytes.byteLength < 26 ||
+    bytes[0] !== 0x42 ||
+    bytes[1] !== 0x4d
+  ) {
+    return undefined;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const declaredSize = view.getUint32(2, true);
+  const dibSize = view.getUint32(14, true);
+  if (
+    (declaredSize !== 0 && declaredSize > bytes.byteLength) ||
+    (dibSize !== 12 && dibSize < 40) ||
+    14 + dibSize > bytes.byteLength
+  ) {
+    return undefined;
+  }
+  const width =
+    dibSize === 12 ? view.getUint16(18, true) : view.getInt32(18, true);
+  const rawHeight =
+    dibSize === 12 ? view.getUint16(20, true) : view.getInt32(22, true);
+  const height = Math.abs(rawHeight);
+  return width > 0 && height > 0
+    ? { mimeType: "image/bmp", width, height }
+    : undefined;
+}
+
+function gifMetadata(bytes: Uint8Array): RasterImageMetadata | undefined {
+  if (bytes.byteLength < 10) {
+    return undefined;
+  }
+  const header = String.fromCharCode(...bytes.subarray(0, 6));
+  if (header !== "GIF87a" && header !== "GIF89a") {
+    return undefined;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = view.getUint16(6, true);
+  const height = view.getUint16(8, true);
+  return width > 0 && height > 0
+    ? { mimeType: "image/gif", width, height }
+    : undefined;
 }
 
 function pngMetadata(bytes: Uint8Array): RasterImageMetadata | undefined {
@@ -104,9 +148,13 @@ function jpegMetadata(bytes: Uint8Array): RasterImageMetadata | undefined {
 export function inspectRasterImage(
   bytes: Uint8Array,
 ): RasterImageMetadata {
-  const metadata = pngMetadata(bytes) ?? jpegMetadata(bytes);
+  const metadata =
+    pngMetadata(bytes) ??
+    jpegMetadata(bytes) ??
+    bmpMetadata(bytes) ??
+    gifMetadata(bytes);
   if (!metadata) {
-    throw new Error("지원하는 JPG 또는 PNG 이미지가 아닙니다.");
+    throw new Error("지원하는 JPG, PNG, BMP 또는 GIF 이미지가 아닙니다.");
   }
   const pixels = metadata.width * metadata.height;
   if (

@@ -7,7 +7,7 @@ export const KO_MESSAGES = Object.freeze({
   "common.noPath": "(경로 없음)",
   "common.unknownError": "알 수 없는 오류",
   "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.21",
+  "page.eyebrow": "DWG Viewer · Scene Cache v1.24",
   "page.heading": "대형 도면 첫 화면 검증기",
   "page.hostHeading": "DWG 도면 뷰어",
   "toolbar.more.open": "도면 도구 펼치기",
@@ -28,6 +28,7 @@ export const KO_MESSAGES = Object.freeze({
   "toolbar.plotStyle": "출력 스타일",
   "toolbar.plotStyle.select": "출력 선택",
   "toolbar.plotStyle.none": "출력 없음",
+  "toolbar.plotStyle.named": "STB 미지원",
   "toolbar.plotStyle.on": "출력 켬",
   "toolbar.plotStyle.off": "출력 끔",
   "toolbar.plotStyle.searching": "출력 찾는 중",
@@ -43,6 +44,8 @@ export const KO_MESSAGES = Object.freeze({
     "같은 이름의 CTB 파일을 찾지 못했습니다.",
   "toolbar.plotStyle.unavailable.unavailable":
     "VS Code에서 DWG를 열면 CTB를 자동으로 찾습니다.",
+  "toolbar.plotStyle.unavailable.named":
+    "명명된 STB 출력 스타일은 식별하지만 현재 2D 뷰어에서는 렌더링하지 않습니다.",
   "toolbar.plotStyle.unavailable.fallback":
     "CTB 출력 스타일을 사용할 수 없습니다.",
   "toolbar.plotStyle.selectHint":

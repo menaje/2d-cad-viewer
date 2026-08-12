@@ -2,7 +2,8 @@ import { open } from "node:fs/promises";
 
 const CACHE_MAGIC = Buffer.from([68, 87, 71, 83, 67, 78, 49, 0]);
 const CACHE_VERSION_MAJOR = 1;
-const CACHE_VERSION_MINOR = 21;
+const CACHE_VERSION_MINOR = 24;
+const MINIMUM_CACHE_VERSION_MINOR = 21;
 const CACHE_HEADER_SIZE = 64;
 const CACHE_HEADER_FLAG_PREVIEW = 1;
 const DIRECTORY_ENTRY_SIZE = 40;
@@ -263,9 +264,11 @@ export async function readSceneCacheTextIndex(
     if (!header.subarray(0, CACHE_MAGIC.length).equals(CACHE_MAGIC)) {
       throw new Error("scene cache magic is invalid");
     }
+    const versionMinor = header.readUInt16LE(10);
     if (
       header.readUInt16LE(8) !== CACHE_VERSION_MAJOR ||
-      header.readUInt16LE(10) !== CACHE_VERSION_MINOR ||
+      versionMinor < MINIMUM_CACHE_VERSION_MINOR ||
+      versionMinor > CACHE_VERSION_MINOR ||
       header.readUInt32LE(12) !== CACHE_HEADER_SIZE
     ) {
       throw new Error("scene cache version is unsupported");

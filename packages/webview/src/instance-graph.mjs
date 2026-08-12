@@ -3,7 +3,7 @@ import {
   insertCellMatrix,
   multiplyMat4Into,
   transformPoint,
-} from "./math.mjs?v=1.21.3";
+} from "./math.mjs?v=1.24.0";
 import {
   MAX_GLOBAL_MASK_BUCKET,
   maskBucketBefore,
@@ -384,6 +384,11 @@ export function createClipNode(
   parentId,
   points,
   inverted = false,
+  {
+    frame = false,
+    color = DEFAULT_BYBLOCK_COLOR,
+    layerIndex = NO_LAYER_OVERRIDE,
+  } = {},
 ) {
   const minimum = [Infinity, Infinity];
   const maximum = [-Infinity, -Infinity];
@@ -397,6 +402,14 @@ export function createClipNode(
     id,
     parentId,
     inverted: Boolean(inverted),
+    frame: Boolean(frame),
+    color: Number.isInteger(color)
+      ? color >>> 0
+      : DEFAULT_BYBLOCK_COLOR,
+    layerIndex:
+      Number.isInteger(layerIndex) && layerIndex >= 0
+        ? layerIndex
+        : NO_LAYER_OVERRIDE,
     points: Object.freeze(
       points.map((point) => Object.freeze([...point])),
     ),
@@ -1020,6 +1033,11 @@ export function buildInstanceGraph(
                 parentClipId,
                 worldPoints,
                 clip.inverted,
+                {
+                  frame: true,
+                  color,
+                  layerIndex,
+                },
               ),
             );
           }

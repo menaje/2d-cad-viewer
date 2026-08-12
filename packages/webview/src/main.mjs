@@ -19,17 +19,18 @@ import {
 import {
   buildExternalLayerMap,
   buildExternalLinetypeMap,
+  blockExternalReferenceIsDisplayable,
   composeExternalInstanceGraph,
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
-} from "./external-reference.mjs?v=1.21.0";
+} from "./external-reference.mjs?v=1.24.0";
 import {
   createVsCodeRangeSource,
   installWorkerRangeProxy,
   WORKER_RANGE_REQUEST,
 } from "./host-range-source.mjs";
-import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.21.3";
+import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.24.0";
 import {
   buildLayerGroups,
   isolateLayerGroup,
@@ -61,6 +62,10 @@ import {
   resolveScreenPlotStyleEnabled,
 } from "./cad-plot-style.mjs";
 import {
+  DEFAULT_ACI_PALETTE,
+  makeBackgroundAwareAciPalette,
+} from "./cad-color.mjs";
+import {
   bytesToBase64,
   fitCameraView,
   makeLayoutPngZipEntries,
@@ -91,10 +96,10 @@ import {
   CompositeTextOverlay,
   registerLocalOutlineFont,
   unregisterLocalOutlineFont,
-} from "./text-overlay.mjs?v=1.21.0";
+} from "./text-overlay.mjs?v=1.24.0";
 import {
   loadExternalFirstFrame,
-} from "./viewer.mjs?v=1.21.3";
+} from "./viewer.mjs?v=1.24.0";
 import {
   addViewBookmark,
   CameraViewHistory,
@@ -108,7 +113,8 @@ import {
   environmentLocales,
   escapeHtmlText,
 } from "./i18n.mjs?v=1.0.0";
-import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.21.0";
+import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.24.0";
+import { effectiveFrameSetting } from "./frame-setting.mjs?v=1.24.0";
 
 const standaloneQualificationParameters =
   typeof globalThis.acquireVsCodeApi === "function"
@@ -119,12 +125,26 @@ const standaloneQualificationVscodeShell =
   "vscode";
 const standaloneQualificationLocale =
   standaloneQualificationParameters?.get("qualification-locale");
+const standaloneQualificationTheme =
+  standaloneQualificationParameters?.get("qualification-theme");
 
 if (
   typeof standaloneQualificationLocale === "string" &&
   /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/iu.test(standaloneQualificationLocale)
 ) {
   document.documentElement.dataset.locale = standaloneQualificationLocale;
+}
+
+if (
+  standaloneQualificationTheme === "dark" ||
+  standaloneQualificationTheme === "light"
+) {
+  document.documentElement.dataset.qualificationTheme =
+    standaloneQualificationTheme;
+  document.documentElement.style.setProperty(
+    "--vscode-editor-background",
+    standaloneQualificationTheme === "light" ? "#ffffff" : "#0e1013",
+  );
 }
 
 if (standaloneQualificationVscodeShell) {
@@ -879,6 +899,19 @@ function normalizePlotStyleName(value) {
     : "";
 }
 
+function isNamedPlotStyleName(value) {
+  return (
+    typeof value === "string" &&
+    value
+      .trim()
+      .replace(/^['"]|['"]$/gu, "")
+      .split(/[\\/]/u)
+      .at(-1)
+      ?.toLocaleLowerCase("en-US")
+      .endsWith(".stb") === true
+  );
+}
+
 function resetPlotStyleSession() {
   activePlotStyleName = "";
   activePlotStyleEnabled = false;
@@ -906,6 +939,7 @@ function setPlotStyleUnavailable(name, state) {
       invalid: "toolbar.plotStyle.unavailable.invalid",
       missing: "toolbar.plotStyle.unavailable.missing",
       unavailable: "toolbar.plotStyle.unavailable.unavailable",
+      named: "toolbar.plotStyle.unavailable.named",
     }[state] ?? "toolbar.plotStyle.unavailable.fallback";
   const label = t(messageKey);
   const canSelect =
@@ -916,7 +950,11 @@ function setPlotStyleUnavailable(name, state) {
   plotStyleToggle.disabled = !canSelect;
   setViewerToolMessage(
     plotStyleToggle,
-    canSelect ? "toolbar.plotStyle.select" : "toolbar.plotStyle.none",
+    canSelect
+      ? "toolbar.plotStyle.select"
+      : state === "named"
+        ? "toolbar.plotStyle.named"
+        : "toolbar.plotStyle.none",
   );
   plotStyleToggle.setAttribute("aria-pressed", "false");
   plotStyleToggle.title = `${name} · ${label}${
@@ -924,8 +962,21 @@ function setPlotStyleUnavailable(name, state) {
   }`;
 }
 
+function currentViewportBackground({ plotPreview = false } = {}) {
+  return plotPreview
+    ? "#ffffff"
+    : getComputedStyle(dropZone).backgroundColor || "#0e1013";
+}
+
+function displayAciPalette({ plotPreview = false } = {}) {
+  return makeBackgroundAwareAciPalette(
+    currentViewportBackground({ plotPreview }),
+    DEFAULT_ACI_PALETTE,
+  );
+}
+
 function clearPlotStyleForView(scene) {
-  scene.renderer.clearPlotStyle();
+  scene.renderer.clearPlotStyle(displayAciPalette());
   activeTextComposite?.setPalette(scene.renderer.aciPalette);
   dropZone.classList.remove("plot-style-preview");
 }
@@ -936,7 +987,10 @@ function applyPlotStyleEntry(scene, key, entry, enabled) {
   }
   try {
     if (enabled) {
-      const palette = makePlotStylePalette(entry.table);
+      const palette = makePlotStylePalette(
+        entry.table,
+        displayAciPalette({ plotPreview: true }),
+      );
       scene.renderer.setPlotStyle(
         palette,
         makePlotStyleLineWeights(entry.table),
@@ -980,6 +1034,10 @@ function configurePlotStyleForView(scene, view, revision) {
     return;
   }
   const requestedName = view.layout?.styleSheet ?? "";
+  if (isNamedPlotStyleName(requestedName)) {
+    setPlotStyleUnavailable(requestedName, "named");
+    return;
+  }
   const key = normalizePlotStyleName(requestedName);
   if (!key) {
     setPlotStyleUnavailable(t("toolbar.plotStyle.currentLayout"), "missing");
@@ -1383,20 +1441,26 @@ async function captureExportPage(
   const plotStylesEnabled = renderer.plotStylesEnabled;
   const lineWeightsVisible = renderer.lineWeightsVisible;
   let plotStyleEntry = null;
-  let appliedPlotStyle = false;
   if (settings.plotStyle && view.kind === "layout") {
     plotStyleEntry = await waitForPlotStyleEntry(view, signal);
   }
   throwIfExportCancelled(signal);
   try {
+    const background =
+      settings.target === "screen" && !settings.plotStyle
+        ? currentViewportBackground()
+        : "#ffffff";
+    const exportBasePalette = makeBackgroundAwareAciPalette(
+      background,
+      DEFAULT_ACI_PALETTE,
+    );
     if (settings.plotStyle && plotStyleEntry?.status === "loaded") {
       renderer.setPlotStyle(
-        makePlotStylePalette(plotStyleEntry.table),
+        makePlotStylePalette(plotStyleEntry.table, exportBasePalette),
         makePlotStyleLineWeights(plotStyleEntry.table),
       );
       activeTextComposite?.setPalette(renderer.aciPalette);
       renderer.setLineWeightsVisible(true);
-      appliedPlotStyle = true;
     } else if (settings.plotStyle && view.kind === "layout") {
       const requested = view.layout?.styleSheet?.trim();
       if (requested) {
@@ -1407,17 +1471,13 @@ async function captureExportPage(
           }),
         );
       }
-      renderer.clearPlotStyle();
+      renderer.clearPlotStyle(exportBasePalette);
       activeTextComposite?.setPalette(renderer.aciPalette);
     } else if (!settings.plotStyle) {
-      renderer.clearPlotStyle();
+      renderer.clearPlotStyle(exportBasePalette);
       activeTextComposite?.setPalette(renderer.aciPalette);
     }
     const camera = exportCameraForView(view, page, pixels, settings);
-    const background =
-      settings.target === "screen" && !appliedPlotStyle
-        ? getComputedStyle(dropZone).backgroundColor || "#0e1013"
-        : "#ffffff";
     return renderer.captureRaster(camera, {
       width: pixels.width,
       height: pixels.height,
@@ -1428,7 +1488,7 @@ async function captureExportPage(
     if (plotStylesEnabled) {
       renderer.setPlotStyle(palette, lineWeights);
     } else {
-      renderer.clearPlotStyle();
+      renderer.clearPlotStyle(palette);
     }
     activeTextComposite?.setPalette(renderer.aciPalette);
     renderer.redraw(returnCamera);
@@ -3473,6 +3533,11 @@ async function initializeImageOverlay(
       maskOrder: activeMaskOrder,
       sourceId: "root",
       sourceLabel: t("common.currentDrawing"),
+      imageFrame:
+        effectiveFrameSetting(
+          scene.metadata.drawing.frame,
+          scene.metadata.drawing.imageFrame,
+        ) ?? 0,
     });
   activeImageComposite.add(
     overlay,
@@ -3510,6 +3575,15 @@ async function initializeTextOverlay(
     maskOrder,
     sourceId: "root",
     sourceLabel: t("common.currentDrawing"),
+    attributeDisplayMode:
+      scene.metadata.drawing.attributeDisplayMode ?? 1,
+    annotationAllVisible:
+      instanceGraph.annotationAllVisible ?? true,
+    xclipFrame:
+      effectiveFrameSetting(
+        scene.metadata.drawing.frame,
+        scene.metadata.drawing.xclipFrame,
+      ) ?? 0,
     onInlineFonts: (names) =>
       requestInlineTextFonts(names, revision),
   });
@@ -4324,7 +4398,10 @@ async function initializePrimitives(
   let result;
   try {
     result = await worker.initialize(
-      scene.metadata.drawing.wipeoutFrame,
+      effectiveFrameSetting(
+        scene.metadata.drawing.frame,
+        scene.metadata.drawing.wipeoutFrame,
+      ),
       scene.metadata.drawing.fillMode,
       maskOrder,
     );
@@ -4394,6 +4471,7 @@ async function initializeHatchFills(
     ...workerSourcePayload(workerSource),
     camera: workerCamera(scene.render.camera),
     maskOrder,
+    fillMode: scene.metadata.drawing.fillMode,
     view: hatchWorkerView(scene),
   });
   if (revision !== openRevision || activeScene !== scene) {
@@ -4937,7 +5015,10 @@ async function initializeExternalPrimitives({
   externalPrimitiveWorkers.add(worker);
   try {
     const result = await worker.initialize(
-      childScene.metadata.drawing.wipeoutFrame,
+      effectiveFrameSetting(
+        childScene.metadata.drawing.frame,
+        childScene.metadata.drawing.wipeoutFrame,
+      ),
       childScene.metadata.drawing.fillMode,
       maskOrder,
     );
@@ -4988,6 +5069,7 @@ async function initializeExternalHatches({
       ...workerSourcePayload(workerSource),
       camera: workerCamera(camera),
       maskOrder,
+      fillMode: childScene.metadata.drawing.fillMode,
       view: Object.freeze({ kind: "model" }),
       externalInstanceGraph: composedInstanceGraph,
     });
@@ -5129,7 +5211,7 @@ function discoverExternalReferences(scene, cacheId, depth = 0) {
   const references = scene.metadata.blocks
     .filter(
       (block) =>
-        (block.flags & (1 << 2)) !== 0 &&
+        blockExternalReferenceIsDisplayable(block) &&
         typeof block.xrefPath === "string" &&
         block.xrefPath.length > 0,
     )
@@ -5386,6 +5468,17 @@ async function addExternalText(
     maskBucketScale,
     sourceId,
     sourceLabel,
+    attributeDisplayMode:
+      externalScene.metadata.drawing.attributeDisplayMode ?? 1,
+    annotationAllVisible:
+      composedInstanceGraph.annotationAllVisible ?? true,
+    xclipFrame:
+      effectiveFrameSetting(
+        externalScene.metadata.drawing.frame,
+        externalScene.metadata.drawing.xclipFrame,
+      ) ?? 0,
+    xclipFrameStartIndex:
+      composedInstanceGraph.localClipNodeStartIndex ?? 0,
     onInlineFonts: (names) =>
       requestInlineTextFonts(names, revision),
   });
@@ -5475,6 +5568,11 @@ async function addExternalImages(
       ),
       sourceId: sceneId,
       sourceLabel,
+      imageFrame:
+        effectiveFrameSetting(
+          externalScene.metadata.drawing.frame,
+          externalScene.metadata.drawing.imageFrame,
+        ) ?? 0,
       maskBucketScale,
     });
   activeImageComposite.add(overlay);
@@ -6301,6 +6399,7 @@ async function openCache(source, workerSource, cacheSha256) {
     interactionRenderingMode,
     interactionCanvas,
   });
+  renderer.setAciPalette(displayAciPalette());
   renderer.setWipeoutMasksVisible(activeWipeoutMasksVisible);
   let runtime;
   try {

@@ -7,7 +7,7 @@ export const EN_MESSAGES = Object.freeze({
   "common.noPath": "(no path)",
   "common.unknownError": "Unknown error",
   "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.21",
+  "page.eyebrow": "DWG Viewer · Scene Cache v1.24",
   "page.heading": "Large drawing first-frame verifier",
   "page.hostHeading": "DWG drawing viewer",
   "toolbar.more.open": "Open drawing tools",
@@ -28,6 +28,7 @@ export const EN_MESSAGES = Object.freeze({
   "toolbar.plotStyle": "Plot style",
   "toolbar.plotStyle.select": "Choose plot style",
   "toolbar.plotStyle.none": "No plot style",
+  "toolbar.plotStyle.named": "STB unsupported",
   "toolbar.plotStyle.on": "Plot style on",
   "toolbar.plotStyle.off": "Plot style off",
   "toolbar.plotStyle.searching": "Finding plot style",
@@ -47,6 +48,8 @@ export const EN_MESSAGES = Object.freeze({
     "A CTB file with the same name could not be found.",
   "toolbar.plotStyle.unavailable.unavailable":
     "Open the DWG in VS Code to find its CTB automatically.",
+  "toolbar.plotStyle.unavailable.named":
+    "Named STB plot styles are identified but are not rendered by this 2D viewer.",
   "toolbar.plotStyle.unavailable.fallback":
     "The CTB plot style is unavailable.",
   "toolbar.plotStyle.selectHint":

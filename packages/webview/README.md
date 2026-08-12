@@ -24,7 +24,7 @@ const runtime = await openViewerRuntime(source, {
 
 ## DWG Viewer product shell
 
-Scene Cache v1.21 range reader, WebGL2 line/fill/point renderer, bounded CAD
+Scene Cache v1.24 range reader, WebGL2 line/fill/point renderer, bounded CAD
 text overlay and lazy raster IMAGE overlay for the VS Code Webview.
 
 Standalone Browser의 `File`과 VS Code의 cache channel은 모두
@@ -204,11 +204,16 @@ built-in languages, template keys, or runtime shell keys diverge.
   keeping block geometry shared.
 - Reads current original XREF paths, composes each child model/block instance
   under its parent INSERT and preserves shared geometry across repeated inserts.
+  Saved unloaded or unresolved XREF blocks are retained for diagnostics but are
+  not requested or mounted for display.
 - Reads current INSERT/XREF spatial clips, propagates nested clip chains through
   shared instances and applies one boundary to WebGL geometry and Canvas text.
-- Reads the v1.21 linetype, saved-view, layout, VIEWPORT and raster IMAGE
+- Reads the v1.24 linetype, saved-view, layout, VIEWPORT and raster IMAGE
   sections and
   allows every paper-space tab to be selected without duplicating model data.
+- Applies VIEWPORT group-68 activity/stacking and the group-90 off bit before
+  building model roots, including inactive-layout fallback without reviving an
+  explicitly off-screen viewport.
 - Applies each viewport's layer color, transparency, linetype and lineweight
   overrides consistently to WebGL geometry, Canvas text/complex linetypes and
   raster images while preserving shared block geometry.
@@ -221,7 +226,8 @@ built-in languages, template keys, or runtime shell keys diverge.
   in fitted bounds even for image-only drawings, while decoding follows the
   current on-screen size and upgrades only after a meaningful zoom. IMAGE clip
   pixels are converted from their saved top-origin Y convention before
-  placement so cropped rasters stay aligned with CAD geometry.
+  placement so cropped rasters stay aligned with CAD geometry. IMAGEFRAME and
+  XCLIPFRAME values 1/2 draw their clipped screen boundary; value 0 omits it.
 - Range-reads bounded embedded OLE BMP/EMF previews only when visible. Excel
   EMF presentations are replayed in a 4,096-pixel, 200,000-record local Canvas
   sandbox and enter the same deduplicated raster cache; unavailable previews
@@ -334,10 +340,10 @@ built-in languages, template keys, or runtime shell keys diverge.
 - Caps one pattern result at 250,000 segments (16 MiB of line vertices),
   65,536 segments per HATCH and eight million boundary intersection tests.
 - Terminates the previous HATCH worker when another cache is selected.
-- Range-reads the current v1.21 POINT/SOLID/3DFACE/WIPEOUT source sections only
+- Range-reads the current v1.24 POINT/SOLID/3DFACE/WIPEOUT source sections only
   after the first line frame, preserving shared block instances without
   expanding geometry per INSERT.
-- Range-reads the current v1.21 normalized `SORTENTSTABLE` tables and entries on
+- Range-reads the current v1.24 normalized `SORTENTSTABLE` tables and entries on
   demand. The first frame reads neither draw-order section.
 - Collapses the preserved sort keys to WIPEOUT-only order events, recursively
   includes nested/DIMENSION/MINSERT mask spans and attaches one compact order
@@ -388,6 +394,12 @@ built-in languages, template keys, or runtime shell keys diverge.
   vertical justification use the alignment point plus resolved SHX or
   fallback-font glyph metrics. Align/Fit retain their two-point span and
   direction, while multiline attributes use their embedded MTEXT basis.
+- Applies ATTMODE 0/1/2 to attributes, preserves the current model annotation
+  scale, and hides an annotative MTEXT representation that has no current-scale
+  context when ANNOALLVISIBLE is disabled.
+- Applies drawing FILLMODE to solid, gradient and patterned HATCH results as
+  well as the existing SOLID and wide-polyline paths. OLEFRAME=0 suppresses
+  generated OLE boundaries while preserving the bounded presentation image.
 - Separates strict EUC-KR from CP949/UHC, encodes all 11,172 modern Hangul
   syllables plus the KS X 1001 symbol and Hanja rows as Johab/CP1361, and
   probes actual glyph presence instead of guessing from BigFont filenames.
@@ -446,7 +458,9 @@ Append `qualification-shell=vscode` to exercise the immersive extension shell.
 The optional `qualification-top-toolbar-labels` and
 `qualification-left-toolbar-labels` parameters accept `hover` or `icons`, and
 `qualification-locale` accepts a BCP 47 language tag. These parameters are also
-ignored by the VS Code host.
+ignored by the VS Code host. `qualification-theme=dark|light` fixes the drawing
+surface to the corresponding VS Code editor background for reproducible ACI 7
+and plot-preview qualification; it does not emulate an entire VS Code theme.
 
 ## Test
 
@@ -465,7 +479,7 @@ bounded root/XREF filled-object selection with layer and clip filtering, and
 LRU eviction/request coalescing.
 They also cover delayed Korean text reads, strict EUC-KR, CP949 and Johab
 mapping, per-BigFont overrides, SHX/BigFont cache limits and the
-current v1.21 HATCH range, triangulation, dashed-pattern, block-clipping,
+current v1.24 HATCH range, triangulation, dashed-pattern, block-clipping,
 large-coordinate and render-order contracts, plus POINT/SOLID/3DFACE/WIPEOUT
 range, WCS/OCS, clip-boundary, frame-setting, instance-sharing and GPU-budget
 behavior, plus draw-order normalization,

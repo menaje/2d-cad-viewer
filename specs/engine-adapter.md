@@ -129,6 +129,20 @@ every omitted logical entity in `coverage.deferred_entities`, and must not be
 selected as the primary engine until the required geometry and text coverage
 gates pass.
 
+The LibreDWG adapter additionally emits `coverage.deferred_reasons`. Its six
+non-negative counters (`unresolved_dimensions`, `unsupported_underlays`,
+`unsupported_proxy_graphics`, `unsupported_3d_entities`,
+`invalid_supported_entities`, and `unsupported_other_entities`) form an exact
+partition of `coverage.deferred_entities`. This prevents a newly encountered
+object family from being hidden behind an aggregate coverage percentage.
+
+`proxy_graphics_policy` records the deterministic proxy display contract. The
+current writer uses AutoCAD's default `PROXYSHOW=1` behavior, lists every
+accepted graphics opcode, and reports unsupported or malformed proxy displays
+as deferred instead of inventing a `PROXYSHOW=2` bounding box. `PROXYSHOW` is a
+registry preference rather than a drawing property, so it is not inferred
+from DWG bytes.
+
 ## Measurement and decisions
 
 The default run consists of one warmup and three measured processes for both

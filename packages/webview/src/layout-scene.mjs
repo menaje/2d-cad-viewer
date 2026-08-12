@@ -2,7 +2,7 @@ import {
   buildInstanceGraph,
   CoordinateSpaceKind,
 } from "./instance-graph.mjs";
-import { ViewportLayerOverrideFlags } from "./scene-cache.mjs?v=1.21.0";
+import { ViewportLayerOverrideFlags } from "./scene-cache.mjs?v=1.24.0";
 import {
   arbitraryAxisMat4,
   identityMat4,
@@ -13,6 +13,44 @@ import {
 } from "./math.mjs";
 
 const MAX_VISIBILITY_ROWS = 256;
+const VIEWPORT_PERSPECTIVE = 0x1;
+const VIEWPORT_FRONT_CLIP = 0x2;
+const VIEWPORT_BACK_CLIP = 0x4;
+const VIEWPORT_OFF = 0x20000;
+
+export function layoutLineWeightWorldScale(layout) {
+  const paperUnit = Number.isInteger(layout?.paperUnit)
+    ? layout.paperUnit
+    : 1;
+  if (paperUnit === 0) {
+    return 1 / 2_540;
+  }
+  if (paperUnit === 1) {
+    return 0.01;
+  }
+  return 0;
+}
+
+export function unsupportedViewportDisplayReasons(viewport) {
+  const status = Number.isInteger(viewport?.status) ? viewport.status : 0;
+  const renderMode = Number.isInteger(viewport?.renderMode)
+    ? viewport.renderMode
+    : 0;
+  const reasons = [];
+  if ((status & VIEWPORT_PERSPECTIVE) !== 0) {
+    reasons.push("perspective");
+  }
+  if ((status & VIEWPORT_FRONT_CLIP) !== 0) {
+    reasons.push("front-clipping");
+  }
+  if ((status & VIEWPORT_BACK_CLIP) !== 0) {
+    reasons.push("back-clipping");
+  }
+  if (renderMode > 1) {
+    reasons.push("hidden-or-shaded-render-mode");
+  }
+  return Object.freeze(reasons);
+}
 
 function transposeRotation(matrix) {
   const output = identityMat4();
@@ -263,7 +301,7 @@ function viewportPaperToModelScale(viewport) {
 }
 
 function viewportAnnotationScale(viewport, paperToModelScale) {
-  return Number.isFinite(viewport.annotationScale) &&
+  return Number.isFinite(viewport?.annotationScale) &&
     viewport.annotationScale > 0
     ? viewport.annotationScale
     : paperToModelScale;
@@ -288,11 +326,13 @@ export function buildLayoutRootPlan(
   const modelBlockIndices = blocks
     .filter((block) => block.name.toUpperCase() === "*MODEL_SPACE")
     .map((block) => block.index);
+  const paperViewport = paperViewportForLayout(layout);
+  const paperAnnotationScale = viewportAnnotationScale(paperViewport, 1);
   const allVisible = new Uint8Array(layers.length).fill(1);
   const layerVisibilityRows = [allVisible];
   const paperToModelScalesByVisibilityRow = [1];
   const linetypeScalesByVisibilityRow = [1];
-  const annotationScalesByVisibilityRow = [0];
+  const annotationScalesByVisibilityRow = [paperAnnotationScale];
   const baseStyles = baseLayerStyleRows(layers, layerLinetypeCodes);
   const layerColorsByVisibilityRow = [baseStyles.colors];
   const layerLineWeightsByVisibilityRow = [baseStyles.lineWeights];
@@ -309,19 +349,44 @@ export function buildLayoutRootPlan(
       visibilityRow: 0,
     }),
   ];
-  const paperViewport = paperViewportForLayout(layout);
-  const hasActiveViewportState = layout.viewports.some(
-    (viewport) => viewport !== paperViewport && viewport.id > 0,
-  );
-  const modelViewports = layout.viewports.filter(
-    (viewport) =>
-      viewport !== paperViewport &&
-      (viewport.flags & 1) === 0 &&
-      (!hasActiveViewportState || viewport.on !== 0) &&
-      viewport.width > 0 &&
-      viewport.height > 0 &&
-      viewport.viewHeight > 0,
-  );
+  const eligibleModelViewports = layout.viewports
+    .filter((viewport) => {
+      const on = Number.isInteger(viewport.on) ? viewport.on : 1;
+      const status = Number.isInteger(viewport.status)
+        ? viewport.status
+        : 0;
+      return (
+        viewport !== paperViewport &&
+        (viewport.flags & 1) === 0 &&
+        on > 0 &&
+        (status & VIEWPORT_OFF) === 0 &&
+        viewport.width > 0 &&
+        viewport.height > 0 &&
+        viewport.viewHeight > 0
+      );
+    });
+  const unsupportedViewports = eligibleModelViewports
+    .map((viewport) => ({
+      viewport,
+      reasons: unsupportedViewportDisplayReasons(viewport),
+    }))
+    .filter(({ reasons }) => reasons.length > 0)
+    .map(({ viewport, reasons }) =>
+      Object.freeze({
+        handle: viewport.handle,
+        id: viewport.id,
+        reasons,
+      }),
+    );
+  const modelViewports = eligibleModelViewports
+    .filter(
+      (viewport) => unsupportedViewportDisplayReasons(viewport).length === 0,
+    )
+    .sort((left, right) => {
+      const leftOrder = Number.isInteger(left.on) ? left.on : 1;
+      const rightOrder = Number.isInteger(right.on) ? right.on : 1;
+      return rightOrder - leftOrder;
+    });
   for (const viewport of modelViewports) {
     const paperToModelScale = viewportPaperToModelScale(viewport);
     const linetypeScale = paperSpaceLinetypeScale
@@ -413,6 +478,8 @@ export function buildLayoutRootPlan(
     ),
     paperViewport,
     modelViewports: Object.freeze(modelViewports),
+    unsupportedViewports: Object.freeze(unsupportedViewports),
+    lineWeightWorldScale: layoutLineWeightWorldScale(layout),
   });
 }
 
@@ -424,7 +491,7 @@ export function buildLayoutInstanceGraph(
   options = {},
 ) {
   const plan = buildLayoutRootPlan(blocks, layers, layout, options);
-  return buildInstanceGraph(blocks, inserts, {
+  const graph = buildInstanceGraph(blocks, inserts, {
     ...options,
     layers,
     rootContexts: plan.rootContexts,
@@ -440,5 +507,10 @@ export function buildLayoutInstanceGraph(
       plan.layerLineWeightsByVisibilityRow,
     layerLinetypesByVisibilityRow:
       plan.layerLinetypesByVisibilityRow,
+  });
+  return Object.freeze({
+    ...graph,
+    unsupportedViewports: plan.unsupportedViewports,
+    lineWeightWorldScale: plan.lineWeightWorldScale,
   });
 }

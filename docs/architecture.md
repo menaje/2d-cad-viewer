@@ -265,9 +265,10 @@ reopen capability remain pre-write `blocked`, while the reference writer
 exercises intended-versus-reopened-observed receipt validation. The rejected
 WASM MEMFS candidate remains outside settings and the VSIX.
 
-The product writer, preview writer, benchmark validator and Webview reader now
-accept only Scene Cache v1.21. Lower version numbers in the milestone evidence
-below are historical development records, not supported runtime formats.
+The product and preview writers plus benchmark validator emit Scene Cache
+v1.24. The Webview reader accepts the explicit v1.21–v1.24 backward window;
+lower version numbers in the milestone evidence below are historical
+development records, not supported runtime formats.
 
 LibreDWG passes the conversion time and memory targets and matches the
 normalized geometry and Korean text fingerprint. It renders LINE and
@@ -314,6 +315,17 @@ geometric viewport ratio. Scene Cache v1.20 adds viewport-specific layer color,
 transparency, linetype and lineweight across WebGL and Canvas overlays. Scene
 Cache v1.21 adds bounded embedded OLE bitmap and EMF presentation previews,
 including recovered four-corner placement and an explicit unavailable marker.
+Scene Cache v1.22 preserves drawing presentation controls and XREF
+loaded/resolved state so the viewer can apply FILLMODE, ATTMODE,
+ANNOALLVISIBLE, FRAME-family settings and saved viewport activity rather than
+inferring visibility from geometry alone.
+Scene Cache v1.23 extends exact annotation representations to TEXT, ATTDEF and
+ATTRIB and retains per-entity linetype scale for high-zoom curve refinement.
+Scene Cache v1.24 preserves AutoCAD's independently saved model-space and
+paper-layout ANNOALLVISIBLE values, so selecting a layout does not reuse the
+setting from the DWG's active space. Paper layouts without `AcadAnnoAV`
+application data use AutoCAD's documented initial value 1 rather than an
+invented off state.
 Remaining exact CAD text layout and draw-order work are product-completeness
 gates on this selected engine, not an open parser choice.
 

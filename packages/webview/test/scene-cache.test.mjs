@@ -8,6 +8,8 @@ import {
 import {
   ARC_RECORD_SIZE,
   CACHE_VERSION_MINOR,
+  CONSTRUCTION_LINE_RECORD_SIZE,
+  CURVE_LINETYPE_SCALE_RECORD_SIZE,
   DIRECTORY_ENTRY_SIZE,
   ELLIPSE_RECORD_SIZE,
   GPU_LINE_VERTEX_RECORD_SIZE,
@@ -104,10 +106,88 @@ test("reads bounded exact ARC, CIRCLE, and ELLIPSE review geometry", async () =>
   assert.equal(bounded.truncated, true);
 });
 
+test("reads exact XLINE and RAY sources with one-to-one linetype scales", async () => {
+  const reader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        constructionLines: [
+          {
+            handle: 0x901,
+            kind: "xline",
+            point: [10, 20, 0],
+            direction: [2, -3, 0],
+            scale: 2.5,
+          },
+          {
+            handle: 0x902,
+            kind: "ray",
+            point: [-4, 5, 1],
+            direction: [0, 4, 2],
+            scale: 0.75,
+          },
+        ],
+      }),
+    ),
+  );
+  const source = await reader.readCurveRefinementSource();
+  const xline = source.constructionLines.readEntity(0, {
+    point: [0, 0, 0],
+    direction: [0, 0, 0],
+  });
+  const ray = source.constructionLines.readEntity(1, {
+    point: [0, 0, 0],
+    direction: [0, 0, 0],
+  });
+
+  assert.equal(xline.handle, 0x901n);
+  assert.equal(xline.kind, "xline");
+  assert.deepEqual(xline.point, [10, 20, 0]);
+  assert.deepEqual(xline.direction, [2, -3, 0]);
+  assert.equal(ray.handle, 0x902n);
+  assert.equal(ray.kind, "ray");
+  assert.deepEqual(ray.point, [-4, 5, 1]);
+  assert.deepEqual(ray.direction, [0, 4, 2]);
+  assert.equal(source.curveLinetypeScales.get(0x901n), 2.5);
+  assert.equal(source.curveLinetypeScales.get(0x902n), 0.75);
+});
+
+test("fails closed on invalid construction-line records and scale coverage", async () => {
+  for (const [constructionLines, curveLinetypeScales, pattern] of [
+    [
+      [{ handle: 0x911, direction: [0, 0, 1] }],
+      null,
+      /construction line 0 is invalid/u,
+    ],
+    [
+      [{ handle: 0x912, extraFlags: 1 << 2 }],
+      null,
+      /construction line 0 is invalid/u,
+    ],
+    [
+      [{ handle: 0x913 }, { handle: 0x913, kind: "ray" }],
+      [[0x913, 1], [0x914, 1]],
+      /do not cover the construction-line source/u,
+    ],
+    [
+      [{ handle: 0x915 }],
+      [],
+      /do not cover the construction-line source/u,
+    ],
+  ]) {
+    const reader = await SceneCacheReader.open(
+      new MemoryRangeSource(
+        makeFixtureCache({ constructionLines, curveLinetypeScales }),
+      ),
+    );
+    await assert.rejects(reader.readCurveRefinementSource(), pattern);
+  }
+});
+
 test("reads deferred curve source only in record-aligned 512 KiB chunks", async () => {
   const arcCount = 5_000;
   const arcBytes = arcCount * ARC_RECORD_SIZE;
-  const buffer = new ArrayBuffer(arcBytes);
+  const scaleBytes = arcCount * CURVE_LINETYPE_SCALE_RECORD_SIZE;
+  const buffer = new ArrayBuffer(arcBytes + scaleBytes);
   const source = new TrackedRangeSource(new MemoryRangeSource(buffer));
   let offset = 0;
   const sections = new Map();
@@ -153,6 +233,24 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
     SPLINE_POINT_RECORD_SIZE,
     0,
   );
+  addSection(
+    SectionKind.CurveLinetypeScales,
+    CURVE_LINETYPE_SCALE_RECORD_SIZE,
+    arcCount,
+  );
+  addSection(
+    SectionKind.ConstructionLines,
+    CONSTRUCTION_LINE_RECORD_SIZE,
+    0,
+  );
+  const view = new DataView(buffer);
+  for (let index = 0; index < arcCount; index += 1) {
+    const handle = BigInt(index + 1);
+    view.setBigUint64(index * ARC_RECORD_SIZE, handle, true);
+    const scaleOffset = arcBytes + index * CURVE_LINETYPE_SCALE_RECORD_SIZE;
+    view.setBigUint64(scaleOffset, handle, true);
+    view.setFloat64(scaleOffset + 8, 1, true);
+  }
   const reader = new SceneCacheReader(
     source,
     { minor: CACHE_VERSION_MINOR },
@@ -162,10 +260,12 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
 
   assert.equal(curves.arcs.length, arcCount);
   assert.equal(curves.splineFitPoints.length, 0);
-  assert.equal(curves.requestCount, 2);
+  assert.equal(curves.curveLinetypeScales.size, arcCount);
+  assert.equal(curves.curveLinetypeScales.get(1n), 1);
+  assert.equal(curves.requestCount, 3);
   assert.ok(curves.maximumReadBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
   assert.ok(source.maximumRequestBytes <= MAX_CURVE_SOURCE_RANGE_BYTES);
-  assert.equal(source.bytesRead, arcBytes);
+  assert.equal(source.bytesRead, arcBytes + scaleBytes);
   await assert.rejects(
     reader.readCurveRefinementSource({
       maximumSourceBytes: MAX_CURVE_SOURCE_BYTES + 1,
@@ -263,7 +363,49 @@ test("rejects a newer unsupported Scene Cache minor version", async () => {
         makeFixtureCache({ minorVersion: CACHE_VERSION_MINOR + 1 }),
       ),
     ),
-    /unsupported scene-cache version 1\.22/,
+    /unsupported scene-cache version 1\.25/,
+  );
+});
+
+test("accepts the previous Scene Cache minor with legacy display defaults", async () => {
+  const reader = await SceneCacheReader.open(
+    new MemoryRangeSource(makeFixtureCache({ minorVersion: 21 })),
+  );
+  const [drawing, blocks] = await Promise.all([
+    reader.readDrawing(),
+    reader.readBlocks(),
+  ]);
+
+  assert.equal(reader.header.minor, 21);
+  assert.equal(drawing.attributeDisplayMode, 1);
+  assert.equal(drawing.annotationAllVisible, true);
+  assert.equal(drawing.imageFrame, null);
+  assert.equal(drawing.xclipFrame, null);
+  assert.equal(drawing.oleFrame, null);
+  assert.equal(drawing.frame, null);
+  assert.equal(drawing.pdfFrame, null);
+  assert.equal(drawing.dwfFrame, null);
+  assert.equal(drawing.dgnFrame, null);
+  assert.equal(blocks[2].xrefLoaded, true);
+  assert.equal(blocks[2].xrefResolved, true);
+});
+
+test("keeps per-layout annotation visibility unavailable in Scene Cache v1.23", async () => {
+  const reader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({
+        minorVersion: 23,
+        annotationAllVisible: false,
+        layoutAnnotationAllVisible: true,
+      }),
+    ),
+  );
+  const layouts = await reader.readLayouts();
+
+  assert.equal(reader.header.minor, 23);
+  assert.deepEqual(
+    layouts.map(({ annotationAllVisible }) => annotationAllVisible),
+    [null, null],
   );
 });
 
@@ -276,6 +418,17 @@ test("reads current drawing display settings", async () => {
         lineWeightDisplay: true,
         fillMode: false,
         modelSpaceActive: false,
+        attributeDisplayMode: 2,
+        imageFrame: 0,
+        xclipFrame: 1,
+        oleFrame: 2,
+        annotationAllVisible: false,
+        layoutAnnotationAllVisible: true,
+        modelSpaceLinetypeScale: true,
+        frame: 3,
+        pdfFrame: 0,
+        dwfFrame: 1,
+        dgnFrame: 2,
       }),
     ),
   );
@@ -285,6 +438,27 @@ test("reads current drawing display settings", async () => {
   assert.equal(metadata.drawing.lineWeightDisplay, true);
   assert.equal(metadata.drawing.fillMode, false);
   assert.equal(metadata.drawing.modelSpaceActive, false);
+  assert.equal(metadata.drawing.attributeDisplayMode, 2);
+  assert.equal(metadata.drawing.imageFrame, 0);
+  assert.equal(metadata.drawing.xclipFrame, 1);
+  assert.equal(metadata.drawing.oleFrame, 2);
+  assert.equal(metadata.drawing.annotationAllVisible, false);
+  assert.deepEqual(
+    metadata.layouts.map(({ name, annotationAllVisible }) => [
+      name,
+      annotationAllVisible,
+    ]),
+    [
+      ["Model", false],
+      ["배치1", true],
+    ],
+  );
+  assert.equal(metadata.drawing.modelSpaceLinetypeScale, true);
+  assert.equal(metadata.drawing.frame, 3);
+  assert.equal(metadata.drawing.pdfFrame, 0);
+  assert.equal(metadata.drawing.dwfFrame, 1);
+  assert.equal(metadata.drawing.dgnFrame, 2);
+  assert.equal(metadata.drawing.modelAnnotationScale, 1);
 
   const missingWipeoutReader = await SceneCacheReader.open(
     new MemoryRangeSource(
@@ -301,6 +475,75 @@ test("reads current drawing display settings", async () => {
   assert.equal(missingWipeoutDrawing.lineWeightDisplay, true);
   assert.equal(missingWipeoutDrawing.fillMode, false);
   assert.equal(missingWipeoutDrawing.modelSpaceActive, false);
+});
+
+test("rejects reserved Scene Cache v1.24 presentation bits", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let drawingOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.Drawing) {
+      drawingOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(drawingOffset, undefined);
+  view.setUint32(drawingOffset + 100, 1 << 21, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(
+    reader.readDrawing(),
+    /invalid presentation settings/u,
+  );
+});
+
+test("rejects an invalid Scene Cache v1.24 layout annotation value", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let layoutOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.Layouts) {
+      layoutOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(layoutOffset, undefined);
+  view.setUint16(layoutOffset + 16 + 54, 2, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(
+    reader.readLayouts(),
+    /layout 0 contains invalid metadata/u,
+  );
+});
+
+test("rejects an invalid model annotation scale", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let drawingOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.Drawing) {
+      drawingOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(drawingOffset, undefined);
+  view.setFloat32(drawingOffset + 156, -1, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(
+    reader.readDrawing(),
+    /invalid saved model-view flags/u,
+  );
 });
 
 test("reads current linetype definitions and scale", async () => {
@@ -335,6 +578,7 @@ test("reads current layouts, viewports and frozen layers", async () => {
   assert.equal(metadata.layouts[0].name, "Model");
   assert.equal(metadata.layouts[0].blockIndex, 0);
   assert.equal(metadata.layouts[1].name, "배치1");
+  assert.equal(metadata.layouts[1].styleSheet, "monochrome.ctb");
   assert.deepEqual(
     [metadata.layouts[1].paperWidth, metadata.layouts[1].paperHeight],
     [420, 297],
@@ -355,6 +599,17 @@ test("reads current layouts, viewports and frozen layers", async () => {
       [60, 277, 0],
     ],
   );
+});
+
+test("retains a named STB layout assignment for explicit UI diagnosis", async () => {
+  const reader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({ layoutPlotStyle: "namedstyle.stb" }),
+    ),
+  );
+  const layouts = await reader.readLayouts();
+
+  assert.equal(layouts[1].styleSheet, "namedstyle.stb");
 });
 
 test("reads sparse viewport layer property overrides", async () => {
@@ -494,7 +749,7 @@ test("reads the current saved model view", async () => {
   assert.deepEqual(metadata.drawing.savedModelView, savedModelView);
 });
 
-test("reads bounded Scene Cache v1.21 raster image references", async () => {
+test("reads bounded Scene Cache v1.24 raster image references", async () => {
   const source = new TrackedRangeSource(
     new MemoryRangeSource(makeFixtureCache()),
   );
@@ -611,6 +866,40 @@ test("reads the original XREF path", async () => {
 
   assert.equal(blocks[0].xrefPath, "");
   assert.equal(blocks[2].xrefPath, String.raw`.\xref\외부도면.dwg`);
+  assert.equal(blocks[2].xrefLoaded, true);
+  assert.equal(blocks[2].xrefResolved, true);
+});
+
+test("preserves an unloaded unresolved XREF state", async () => {
+  const reader = await SceneCacheReader.open(
+    new MemoryRangeSource(
+      makeFixtureCache({ xrefLoaded: false, xrefResolved: false }),
+    ),
+  );
+  const blocks = await reader.readBlocks();
+
+  assert.equal(blocks[2].xrefLoaded, false);
+  assert.equal(blocks[2].xrefResolved, false);
+});
+
+test("rejects XREF state bits on a non-XREF block", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let blocksOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.Blocks) {
+      blocksOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(blocksOffset, undefined);
+  view.setUint32(blocksOffset + 16 + 24, 1 << 7, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  await assert.rejects(reader.readBlocks(), /invalid XREF state/u);
 });
 
 test("reads bounded INSERT XCLIP metadata", async () => {
@@ -655,6 +944,7 @@ test("reads bounded HATCH source pools lazily", async () => {
   assert.equal(hatches.get(0).patternName, "SOLID");
   assert.equal(hatches.get(0).gradientName, "LINEAR");
   assert.equal(hatches.get(0).loopCount, 2);
+  assert.equal(hatches.get(0).backgroundColor, 0);
 
   const loop = hatches.readLoop(1, {});
   assert.equal(loop.firstVertex, 4);
@@ -664,6 +954,43 @@ test("reads bounded HATCH source pools lazily", async () => {
   assert.deepEqual(hatches.readSeedPoint(0, [0, 0]), [1, 1]);
   assert.equal(hatches.readGradientColor(1, {}).value, 1);
   assert.equal(source.requests.length - requestsAfterOpen, 7);
+});
+
+test("accepts and validates a HATCH background TrueColor", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  const directoryOffset = Number(view.getBigUint64(32, true));
+  let hatchOffset;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(offset, true) === SectionKind.HatchEntities) {
+      hatchOffset = Number(view.getBigUint64(offset + 8, true));
+      break;
+    }
+  }
+  assert.notEqual(hatchOffset, undefined);
+  const recordOffset = hatchOffset + 16;
+  const backgroundColor = ((3 << 30) | 0x12_34_56) >>> 0;
+  view.setUint32(
+    recordOffset + 48,
+    view.getUint32(recordOffset + 48, true) | (1 << 6),
+    true,
+  );
+  view.setUint32(recordOffset + 184, backgroundColor, true);
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  const hatches = await reader.readHatchSource();
+  assert.equal(hatches.get(0).backgroundColor, backgroundColor);
+
+  view.setUint32(recordOffset + 184, 7, true);
+  const invalidReader = await SceneCacheReader.open(
+    new MemoryRangeSource(buffer),
+  );
+  await assert.rejects(
+    invalidReader.readHatchSource(),
+    /invalid background color/u,
+  );
 });
 
 test("reads bounded HATCH pattern definitions lazily", async () => {
@@ -891,6 +1218,7 @@ test("reads only bounded entity prefixes for the shared display-order index", as
     SectionKind.SolidEntities,
     SectionKind.FaceEntities,
     SectionKind.ImageEntities,
+    SectionKind.ConstructionLines,
   ];
   const expectedRecords = kinds.reduce(
     (total, kind) => total + reader.getSection(kind).recordCount,

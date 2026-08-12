@@ -696,6 +696,7 @@ export function buildHatchFillMesh(
     maximumGpuBytes = MAX_HATCH_FILL_GPU_BYTES,
     maximumTrianglesPerEntity = MAX_HATCH_FILL_TRIANGLES_PER_ENTITY,
     maskOrder = null,
+    fillMode = true,
   } = {},
 ) {
   if (!source || typeof source.readEntity !== "function") {
@@ -706,6 +707,9 @@ export function buildHatchFillMesh(
     maximumGpuBytes < HATCH_FILL_VERTEX_STRIDE * 3
   ) {
     throw new RangeError("HATCH GPU byte limit is too small");
+  }
+  if (typeof fillMode !== "boolean") {
+    throw new TypeError("drawing FILLMODE must be a boolean");
   }
   const blockIndexByHandle = new Map(
     blocks.map((block) => [block.handle, block.index]),
@@ -725,6 +729,7 @@ export function buildHatchFillMesh(
     solidHatches: 0,
     gradientHatches: 0,
     patternHatches: 0,
+    backgroundHatches: 0,
     renderedHatches: 0,
     sourceTruncatedHatches: 0,
     truncatedHatches: 0,
@@ -742,6 +747,14 @@ export function buildHatchFillMesh(
     gpuLimitReached: false,
   };
 
+  if (!fillMode) {
+    const result = mesh.finish();
+    return Object.freeze({
+      ...result,
+      metrics: Object.freeze(metrics),
+    });
+  }
+
   for (let entityIndex = 0; entityIndex < source.length; entityIndex += 1) {
     source.readEntity(entityIndex, entity);
     if (entity.flags & HatchFlags.Truncated) {
@@ -749,13 +762,19 @@ export function buildHatchFillMesh(
     }
     const isGradient = Boolean(entity.flags & HatchFlags.Gradient);
     const isSolid = Boolean(entity.flags & HatchFlags.Solid);
+    const hasBackground = Boolean(
+      entity.flags & HatchFlags.BackgroundColor,
+    );
     if (isGradient) {
       metrics.gradientHatches += 1;
     } else if (isSolid) {
       metrics.solidHatches += 1;
     } else {
       metrics.patternHatches += 1;
-      continue;
+      if (!hasBackground) {
+        continue;
+      }
+      metrics.backgroundHatches += 1;
     }
     const owner = classifyOwner(
       entity,
@@ -797,7 +816,13 @@ export function buildHatchFillMesh(
     }
     classifyRingNesting(rings);
     const groups = fillGroups(rings, entity.style);
-    const colors = hatchColors(source, entity, colorTarget);
+    const colors = hasBackground && !isGradient && !isSolid
+      ? {
+          first: entity.backgroundColor,
+          last: entity.backgroundColor,
+          gradient: false,
+        }
+      : hatchColors(source, entity, colorTarget);
     const gradient = colors.gradient
       ? gradientFrame(
           rings,

@@ -1204,6 +1204,18 @@ json_conversion_coverage (const LibreDwgPrimitiveCounts *counts)
   printf (",\"viewports\":%" PRIu64, counts->viewports);
   printf (",\"proxy_graphics\":%" PRIu64,
           counts->proxy_graphics);
+  fputs (",\"deferred_reasons\":{\"unresolved_dimensions\":", stdout);
+  printf ("%" PRIu64, counts->unresolved_dimensions);
+  printf (",\"unsupported_underlays\":%" PRIu64,
+          counts->unsupported_underlays);
+  printf (",\"unsupported_proxy_graphics\":%" PRIu64,
+          counts->unsupported_proxy_graphics);
+  printf (",\"unsupported_3d_entities\":%" PRIu64,
+          counts->unsupported_3d_entities);
+  printf (",\"invalid_supported_entities\":%" PRIu64,
+          counts->invalid_supported_entities);
+  printf (",\"unsupported_other_entities\":%" PRIu64 "}",
+          counts->unsupported_other_entities);
   putchar ('}');
 }
 
@@ -1245,6 +1257,15 @@ json_gpu_lines (const LibreDwgGpuLineSummary *summary)
   printf (",\"maximum_position_error\":%.17g",
           summary->maximum_position_error);
   putchar ('}');
+}
+
+static void
+json_proxy_graphics_policy (void)
+{
+  fputs ("{\"proxyshow\":1,\"supported_opcodes\":"
+         "[6,7,14,18,22,23,29,30,31,32,38],"
+         "\"unsupported\":\"deferred\"}",
+         stdout);
 }
 
 static void
@@ -1449,6 +1470,8 @@ convert_dwg (const char *path, const char *output_path)
     }
   fputs ("]},\"coverage\":", stdout);
   json_conversion_coverage (&report.coverage);
+  fputs (",\"proxy_graphics_policy\":", stdout);
+  json_proxy_graphics_policy ();
   printf (",\"tables\":{\"source_linetypes\":%" PRIu64
           ",\"serialized_linetypes\":%" PRIu64
           ",\"referenced_linetypes\":%" PRIu64

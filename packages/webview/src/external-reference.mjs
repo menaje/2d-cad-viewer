@@ -1,13 +1,22 @@
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.21.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.24.0";
 import {
   multiplyMat4,
   transformPoint,
 } from "./math.mjs";
-import { createClipNode } from "./instance-graph.mjs?v=1.21.0";
+import { createClipNode } from "./instance-graph.mjs?v=1.24.0";
 
 const MATRIX_VALUES = 16;
 const MODEL_BLOCK_INDEX = -1;
 const NO_LAYER_OVERRIDE = 0xffffffff;
+
+export function blockExternalReferenceIsDisplayable(block) {
+  return Boolean(
+    block &&
+      (block.flags & (1 << 2)) !== 0 &&
+      block.xrefLoaded !== false &&
+      block.xrefResolved !== false,
+  );
+}
 
 function layerKey(value) {
   return String(value ?? "")
@@ -137,6 +146,15 @@ function composeCollections(
                   transformPoint(outerMatrix, point),
                 ),
                 node.inverted,
+                {
+                  frame: node.frame,
+                  color: node.color,
+                  layerIndex:
+                    layerMap instanceof Uint32Array &&
+                    node.layerIndex < layerMap.length
+                      ? layerMap[node.layerIndex]
+                      : node.layerIndex,
+                },
               ),
             );
             composedClipId = id;
@@ -287,6 +305,10 @@ export function composeExternalInstanceGraph(
           parentInstanceGraph.linetypeScalesByVisibilityRow,
         annotationScalesByVisibilityRow:
           parentInstanceGraph.annotationScalesByVisibilityRow,
+        lineWeightWorldScale:
+          parentInstanceGraph.lineWeightWorldScale ?? 0,
+        annotationAllVisible:
+          childInstanceGraph.annotationAllVisible ?? true,
         layerColorsByVisibilityRow:
           parentInstanceGraph.layerColorsByVisibilityRow,
         layerLineWeightsByVisibilityRow:
@@ -294,12 +316,14 @@ export function composeExternalInstanceGraph(
         layerLinetypesByVisibilityRow:
           parentInstanceGraph.layerLinetypesByVisibilityRow,
         instanceCount: 0,
+        localClipNodeStartIndex: 0,
         maskBucketScale,
       }),
     });
   }
   const instancesByBlock = new Map();
   const clipNodes = [...(parentInstanceGraph.clipNodes ?? [])];
+  const localClipNodeStartIndex = clipNodes.length;
   const modelInstances = Object.freeze({
     data: outer.data,
     measurementData: outer.measurementData ?? outer.data,
@@ -432,6 +456,7 @@ export function composeExternalInstanceGraph(
       ),
       rootInstances: modelInstances,
       clipNodes: Object.freeze(clipNodes),
+      localClipNodeStartIndex,
       layerVisibilityRows:
         parentInstanceGraph.layerVisibilityRows,
       paperToModelScalesByVisibilityRow:
@@ -440,6 +465,10 @@ export function composeExternalInstanceGraph(
         parentInstanceGraph.linetypeScalesByVisibilityRow,
       annotationScalesByVisibilityRow:
         parentInstanceGraph.annotationScalesByVisibilityRow,
+      lineWeightWorldScale:
+        parentInstanceGraph.lineWeightWorldScale ?? 0,
+      annotationAllVisible:
+        childInstanceGraph.annotationAllVisible ?? true,
       layerColorsByVisibilityRow:
         parentInstanceGraph.layerColorsByVisibilityRow,
       layerLineWeightsByVisibilityRow:

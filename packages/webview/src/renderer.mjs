@@ -124,6 +124,7 @@ const RENDER_DELTA_PICK_ASPECTS = new Set([
   "dependency",
 ]);
 const INTERACTIVE_MINIMUM_PIXEL_SPAN = 0.75;
+const MAX_DISPLAYED_LINE_WEIGHT_PIXELS = 8.5;
 const EMPTY_INSTANCE_INDICES = new Uint32Array(0);
 const MODEL_INSTANCES = Object.freeze({
   data: identityMat4(),
@@ -163,6 +164,25 @@ const EMPTY_PACKED_SCENE = Object.freeze({
     count: 0,
   }),
 });
+
+const LINE_WEIGHT_PASSES = Object.freeze((() => {
+  const passes = [[0, 0, 0]];
+  for (
+    let radius = 0.75;
+    radius * 2 <= MAX_DISPLAYED_LINE_WEIGHT_PIXELS;
+    radius += 0.75
+  ) {
+    for (let step = 0; step < 8; step += 1) {
+      const angle = (step * Math.PI) / 4;
+      passes.push([
+        radius * Math.cos(angle),
+        radius * Math.sin(angle),
+        radius * 2,
+      ]);
+    }
+  }
+  return passes.map((pass) => Object.freeze(pass));
+})());
 
 const CLIP_FRAGMENT_SOURCE = `
 uniform sampler2D u_clipData;
@@ -336,6 +356,7 @@ uniform int u_layerZeroIndex;
 uniform bool u_plotStylesEnabled;
 uniform bool u_curveReplacementEnabled;
 uniform float u_lineWeightThreshold;
+uniform float u_lineWeightWorldScale;
 uniform float u_globalLinetypeScale;
 uniform float u_viewportLinetypeScale;
 uniform float u_worldPerPixel;
@@ -476,11 +497,15 @@ bool linetypeVisible() {
 }
 
 float displayedLineWidth() {
-  return clamp(
-    max(1.0, float(resolvedLineWeight()) / 25.0),
-    1.0,
-    4.0
-  );
+  int lineWeight = resolvedLineWeight();
+  float width =
+    lineWeight <= 0
+      ? 1.0
+      : u_lineWeightWorldScale > 0.0
+        ? float(lineWeight) * u_lineWeightWorldScale /
+          max(u_worldPerPixel, 1.0e-12)
+        : float(lineWeight) / 25.0;
+  return clamp(max(1.0, width), 1.0, ${MAX_DISPLAYED_LINE_WEIGHT_PIXELS});
 }
 
 vec4 resolveColor() {
@@ -1158,6 +1183,29 @@ function makeCameraFromView(origin, worldHeight, width, height) {
   });
 }
 
+function boundsForNormalizedView(view, width, height) {
+  const camera = makeCameraFromView(
+    view.origin,
+    view.worldHeight,
+    width,
+    height,
+  );
+  const halfWidth = camera.worldWidth * 0.5;
+  const halfHeight = camera.worldHeight * 0.5;
+  return {
+    min: [
+      camera.origin[0] - halfWidth,
+      camera.origin[1] - halfHeight,
+      camera.origin[2],
+    ],
+    max: [
+      camera.origin[0] + halfWidth,
+      camera.origin[1] + halfHeight,
+      camera.origin[2],
+    ],
+  };
+}
+
 function makeCamera(bounds, width, height, padding = 1.08) {
   const origin = [
     bounds.min[0] * 0.5 + bounds.max[0] * 0.5,
@@ -1220,10 +1268,17 @@ export function validatedPreferredView(view, bounds, width, height) {
   const drawableWidth = Math.max(bounds.max[0] - bounds.min[0], 0);
   const drawableHeight = Math.max(bounds.max[1] - bounds.min[1], 0);
   const drawableScale = Math.max(drawableWidth, drawableHeight, 1e-6);
-  const drawableArea = Math.max(
-    drawableWidth * drawableHeight,
-    drawableScale * drawableScale * 1e-6,
-  );
+  /*
+   * XLINE, RAY and ordinary line-only drawings have zero area. Give a
+   * degenerate axis a conservative visual footprint so a valid saved zoom is
+   * not rejected merely because the geometry is one-dimensional. The same
+   * footprint remains small enough for the unit-mismatch guard below to
+   * reject genuinely enormous paper-space views.
+   */
+  const minimumDrawableSpan = drawableScale * 0.25;
+  const drawableArea =
+    Math.max(drawableWidth, minimumDrawableSpan) *
+    Math.max(drawableHeight, minimumDrawableSpan);
   const viewArea = camera.worldWidth * camera.worldHeight;
   /*
    * Some producers store paper-space viewport width in paper units while
@@ -1247,7 +1302,21 @@ export function validatedPreferredView(view, bounds, width, height) {
     Math.min(camera.origin[1] + halfHeight, bounds.max[1]) -
       Math.max(camera.origin[1] - halfHeight, bounds.min[1]),
   );
-  if (overlapWidth === 0 || overlapHeight === 0) {
+  const cameraMinimum = [
+    camera.origin[0] - halfWidth,
+    camera.origin[1] - halfHeight,
+  ];
+  const cameraMaximum = [
+    camera.origin[0] + halfWidth,
+    camera.origin[1] + halfHeight,
+  ];
+  if (
+    [0, 1].some(
+      (axis) =>
+        bounds.max[axis] < cameraMinimum[axis] ||
+        bounds.min[axis] > cameraMaximum[axis],
+    )
+  ) {
     return null;
   }
   /*
@@ -1256,8 +1325,11 @@ export function validatedPreferredView(view, bounds, width, height) {
    * strictly more useful at that scale.  Keep true zoomed-in saved views and
    * tolerate small outlying geometry by requiring only 90% bounds coverage.
    */
+  const coverageForAxis = (span, overlap) =>
+    span <= drawableScale * 1e-9 ? 1 : overlap / span;
   const drawableCoverage =
-    (overlapWidth * overlapHeight) / drawableArea;
+    coverageForAxis(drawableWidth, overlapWidth) *
+    coverageForAxis(drawableHeight, overlapHeight);
   if (viewArea > drawableArea && drawableCoverage < 0.9) {
     return null;
   }
@@ -3029,6 +3101,10 @@ export class WebGlLineRenderer {
       this.program,
       "u_lineWeightThreshold",
     );
+    this.lineWeightWorldScaleLocation = gl.getUniformLocation(
+      this.program,
+      "u_lineWeightWorldScale",
+    );
     this.layerLinetypeTextureLocation = gl.getUniformLocation(
       this.program,
       "u_layerLinetypes",
@@ -3708,10 +3784,10 @@ export class WebGlLineRenderer {
     this.uploadPlotStyleTextures();
   }
 
-  clearPlotStyle() {
+  clearPlotStyle(palette = DEFAULT_ACI_PALETTE) {
     this.plotStylesEnabled = false;
     this.plotStyleLineWeights.fill(-1);
-    this.setAciPalette(DEFAULT_ACI_PALETTE);
+    this.setAciPalette(palette);
     this.uploadPlotStyleTextures();
   }
 
@@ -6137,6 +6213,12 @@ export class WebGlLineRenderer {
     this.blocks = blocks;
     const drawableBounds = calculateOverviewBounds(batches, instanceGraph);
     includeFiniteBounds(drawableBounds, supplementalBounds);
+    const fittedView = validatedPreferredView(
+      preferredView,
+      drawableBounds,
+      size.width,
+      size.height,
+    );
     let bounds = drawableBounds;
     if (preferredBounds && boundsAreFinite(preferredBounds)) {
       if (!boundsAreFinite(bounds)) {
@@ -6155,6 +6237,13 @@ export class WebGlLineRenderer {
         };
       }
     }
+    if (!boundsAreFinite(bounds) && fittedView) {
+      bounds = boundsForNormalizedView(
+        fittedView,
+        size.width,
+        size.height,
+      );
+    }
     if (!boundsAreFinite(bounds)) {
       throw new Error("overview does not contain any drawable model-space geometry");
     }
@@ -6168,12 +6257,6 @@ export class WebGlLineRenderer {
             min: [...bounds.min],
             max: [...bounds.max],
           };
-    const fittedView = validatedPreferredView(
-      preferredView,
-      drawableBounds,
-      size.width,
-      size.height,
-    );
     const camera = fittedView
       ? makeCameraFromView(
           fittedView.origin,
@@ -6224,6 +6307,13 @@ export class WebGlLineRenderer {
       instanceGraph,
     );
     includeFiniteBounds(drawableBounds, supplementalBounds);
+    const size = this.resize();
+    const fittedView = validatedPreferredView(
+      preferredView,
+      drawableBounds,
+      size.width,
+      size.height,
+    );
     let bounds = drawableBounds;
     if (preferredBounds && boundsAreFinite(preferredBounds)) {
       if (!boundsAreFinite(bounds)) {
@@ -6242,6 +6332,13 @@ export class WebGlLineRenderer {
         };
       }
     }
+    if (!boundsAreFinite(bounds) && fittedView) {
+      bounds = boundsForNormalizedView(
+        fittedView,
+        size.width,
+        size.height,
+      );
+    }
     if (!boundsAreFinite(bounds)) {
       throw new Error("selected layout does not contain drawable geometry");
     }
@@ -6255,13 +6352,6 @@ export class WebGlLineRenderer {
             min: [...bounds.min],
             max: [...bounds.max],
           };
-    const size = this.resize();
-    const fittedView = validatedPreferredView(
-      preferredView,
-      drawableBounds,
-      size.width,
-      size.height,
-    );
     this.setViewportLayerVisibility(instanceGraph);
     this.detailSelections.clear();
     this.clearHatchPatterns();
@@ -8349,29 +8439,21 @@ export class WebGlLineRenderer {
       this.worldPerPixelLocation,
       camera.worldHeight / camera.height,
     );
+    gl.uniform1f(
+      this.lineWeightWorldScaleLocation,
+      Number.isFinite(this.overviewScene.instanceGraph.lineWeightWorldScale) &&
+      this.overviewScene.instanceGraph.lineWeightWorldScale > 0
+        ? this.overviewScene.instanceGraph.lineWeightWorldScale
+        : 0,
+    );
     gl.uniform1i(
       this.curveReplacementEnabledLocation,
       curveRefinementActive ? 1 : 0,
     );
-    const linePasses = interactive
-      ? [[0, 0, 0]]
-      : this.lineWeightsVisible
-      ? [
-          [0, 0, 0],
-          [0.75, 0, 1.5],
-          [-0.75, 0, 1.5],
-          [0, 0.75, 1.5],
-          [0, -0.75, 1.5],
-          [0.65, 0.65, 2.5],
-          [-0.65, 0.65, 2.5],
-          [0.65, -0.65, 2.5],
-          [-0.65, -0.65, 2.5],
-          [1.5, 0, 3.5],
-          [-1.5, 0, 3.5],
-          [0, 1.5, 3.5],
-          [0, -1.5, 3.5],
-        ]
-      : [[0, 0, 0]];
+    const linePasses =
+      !interactive && this.lineWeightsVisible
+        ? LINE_WEIGHT_PASSES
+        : [LINE_WEIGHT_PASSES[0]];
     const cullContext = interactiveCullContext(camera);
     const minimumPixelSpan = interactive
       ? INTERACTIVE_MINIMUM_PIXEL_SPAN

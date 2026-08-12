@@ -5,6 +5,7 @@ import {
   buildCurveRefinementMesh,
   circularSegmentCount,
   CURVE_PIXEL_ERROR,
+  scaleCurvePatternDistances,
 } from "../src/curve-refinement.mjs";
 import { identityMat4 } from "../src/math.mjs";
 
@@ -36,6 +37,20 @@ function scalarTable(values) {
     },
   };
 }
+
+test("preserves entity linetype scale in high-zoom curve distances", () => {
+  const source = new Float64Array([
+    0, 0, 0, 10, 0, 0, 0, 10,
+    10, 0, 0, 20, 0, 0, 10, 20,
+  ]);
+  const scaled = scaleCurvePatternDistances(source, 2);
+  assert.deepEqual([...scaled], [
+    0, 0, 0, 10, 0, 0, 0, 5,
+    10, 0, 0, 20, 0, 0, 5, 10,
+  ]);
+  assert.equal(source[7], 10);
+  assert.strictEqual(scaleCurvePatternDistances(source, 1), source);
+});
 
 function pointTable(points) {
   return {
@@ -203,6 +218,66 @@ function decodedSegments(refinement, handle) {
   }
   return output;
 }
+
+test("clips XLINE and RAY source geometry to each camera", () => {
+  const { blocks, instanceGraph, camera } = modelScene();
+  const source = sourceWithAllCurveKinds();
+  source.arcs = entityTable([]);
+  source.circles = entityTable([]);
+  source.ellipses = entityTable([]);
+  source.polylines = entityTable([]);
+  source.splines = entityTable([]);
+  source.constructionLines = entityTable([
+    {
+      ...common(61n),
+      kind: "xline",
+      point: [0, 0, 0],
+      direction: [2, 0, 0],
+    },
+    {
+      ...common(62n),
+      kind: "ray",
+      point: [1_005, 5, 0],
+      direction: [1, 0, 0],
+    },
+  ]);
+  source.curveLinetypeScales = new Map([
+    [61n, 1],
+    [62n, 1],
+  ]);
+  const pannedCamera = { ...camera, origin: [1_000, 0, 0] };
+
+  const refinement = buildCurveRefinementMesh(
+    source,
+    blocks,
+    instanceGraph,
+    pannedCamera,
+  );
+  const xline = decodedSegments(refinement, 61n);
+  const ray = decodedSegments(refinement, 62n);
+
+  assert.equal(refinement.metrics.sourceConstructionLines, 2);
+  assert.equal(refinement.metrics.refined, 2);
+  assert.deepEqual(xline, [[[980, 0, 0], [1_020, 0, 0]]]);
+  assert.deepEqual(ray, [[[1_005, 5, 0], [1_020, 5, 0]]]);
+  assert.deepEqual(decodedPatternDistances(refinement, 61n), [[980, 1_020]]);
+  assert.deepEqual(decodedPatternDistances(refinement, 62n), [[0, 15]]);
+
+  const centered = buildCurveRefinementMesh(
+    source,
+    blocks,
+    instanceGraph,
+    camera,
+  );
+  assert.deepEqual(decodedSegments(centered, 61n), [
+    [[-20, 0, 0], [0, 0, 0]],
+    [[0, 0, 0], [20, 0, 0]],
+  ]);
+  assert.deepEqual(decodedPatternDistances(centered, 61n), [
+    [20, 0],
+    [0, 20],
+  ]);
+});
 
 function decodedPatternDistances(refinement, handle) {
   const output = [];

@@ -46,14 +46,14 @@ startup. The extension then:
 5. writes the executable under the extension's private global storage, keyed by
    viewer version, platform, and digest;
 6. runs `doctor` and requires the expected platform, architecture, adapter
-   protocol, and Scene Cache `dwg-scene-cache/1.21`; and
+   protocol, and Scene Cache `dwg-scene-cache/1.24`; and
 7. reuses the verified local executable on later starts.
 
 The converter runs as a separate operating-system process. Updating the viewer
 selects a new version-bound catalog and storage directory, so an independently
 updated or older converter cannot silently produce an incompatible cache. If a
 previous `1.18` cache is found, the cache header check removes and rebuilds it
-with the current `1.21` writer.
+with the current `1.24` writer.
 
 A configured adapter path, environment override, or historical engine
 extension is considered only when automatic installation is unavailable. Every

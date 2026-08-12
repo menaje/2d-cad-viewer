@@ -1,13 +1,13 @@
-import { buildInstanceGraph } from "./instance-graph.mjs?v=1.21.3";
+import { buildInstanceGraph } from "./instance-graph.mjs?v=1.24.0";
 import { layerLinetypeCodes } from "./cad-linetype.mjs";
 import {
   buildLayoutInstanceGraph,
   paperViewportForLayout,
-} from "./layout-scene.mjs?v=1.21.0";
+} from "./layout-scene.mjs?v=1.24.0";
 import { readJsHeapSnapshot } from "./memory-telemetry.mjs";
 import { calculateRasterImageBounds } from "./raster-image-overlay.mjs";
-import { WebGlLineRenderer } from "./renderer.mjs?v=1.21.0";
-import { SceneCacheReader } from "./scene-cache.mjs?v=1.21.0";
+import { WebGlLineRenderer } from "./renderer.mjs?v=1.24.0";
+import { SceneCacheReader } from "./scene-cache.mjs?v=1.24.0";
 
 function now() {
   return globalThis.performance?.now?.() ?? Date.now();
@@ -70,7 +70,7 @@ function layoutPreferredView(layout) {
   });
 }
 
-function makeViewDescriptors(metadata) {
+export function makeViewDescriptors(metadata) {
   const orderedLayouts = [...metadata.layouts].sort(
     (left, right) => left.tabOrder - right.tabOrder,
   );
@@ -80,7 +80,7 @@ function makeViewDescriptors(metadata) {
         metadata.blocks[layout.blockIndex]?.name.toUpperCase() ===
         "*MODEL_SPACE",
     ) ?? null;
-  const views = [
+  const rawViews = [
     Object.freeze({
       id: "model",
       kind: "model",
@@ -102,10 +102,22 @@ function makeViewDescriptors(metadata) {
         }),
       ),
   ];
-  const active =
-    metadata.drawing.modelSpaceActive || views.length === 1
-      ? views[0]
-      : views.find((view) => view.kind === "layout") ?? views[0];
+  const rawActive =
+    metadata.drawing.modelSpaceActive || rawViews.length === 1
+      ? rawViews[0]
+      : rawViews.find((view) => view.kind === "layout") ?? rawViews[0];
+  const views = rawViews.map((view) =>
+    Object.freeze({
+      ...view,
+      annotationAllVisible:
+        view.kind === "layout"
+          ? view.layout?.annotationAllVisible ??
+            metadata.drawing.annotationAllVisible ??
+            true
+          : metadata.drawing.annotationAllVisible ?? true,
+    }),
+  );
+  const active = views.find((view) => view.id === rawActive.id) ?? views[0];
   return Object.freeze({
     views: Object.freeze(views),
     active,
@@ -126,15 +138,32 @@ function buildViewInstanceGraph(
       metadata.drawing.paperSpaceLinetypeScale,
     ...options,
   };
-  return view.kind === "layout"
-    ? buildLayoutInstanceGraph(
+  const graph =
+    view.kind === "layout"
+      ? buildLayoutInstanceGraph(
         metadata.blocks,
         metadata.inserts,
         metadata.layers,
         view.layout,
         common,
       )
-    : buildInstanceGraph(metadata.blocks, metadata.inserts, common);
+      : buildInstanceGraph(metadata.blocks, metadata.inserts, {
+          ...common,
+          linetypeScalesByVisibilityRow: [
+            metadata.drawing.modelSpaceLinetypeScale &&
+            Number.isFinite(metadata.drawing.modelAnnotationScale) &&
+            metadata.drawing.modelAnnotationScale > 0
+              ? metadata.drawing.modelAnnotationScale
+              : 1,
+          ],
+          annotationScalesByVisibilityRow: [
+            metadata.drawing.modelAnnotationScale ?? 0,
+          ],
+        });
+  return Object.freeze({
+    ...graph,
+    annotationAllVisible: view.annotationAllVisible ?? true,
+  });
 }
 
 export function createDisposableFirstFrameScene(input) {
@@ -311,15 +340,25 @@ export async function loadExternalFirstFrame(
     metadata.layers,
     metadata.linetypes,
   );
-  const instanceGraph = buildInstanceGraph(
-    metadata.blocks,
-    metadata.inserts,
-    {
+  const instanceGraph = Object.freeze({
+    ...buildInstanceGraph(metadata.blocks, metadata.inserts, {
       layers: metadata.layers,
       insertClips: metadata.insertClips,
       layerLinetypeCodes: layerLineTypes,
-    },
-  );
+      linetypeScalesByVisibilityRow: [
+        metadata.drawing.modelSpaceLinetypeScale &&
+        Number.isFinite(metadata.drawing.modelAnnotationScale) &&
+        metadata.drawing.modelAnnotationScale > 0
+          ? metadata.drawing.modelAnnotationScale
+          : 1,
+      ],
+      annotationScalesByVisibilityRow: [
+        metadata.drawing.modelAnnotationScale ?? 0,
+      ],
+    }),
+    annotationAllVisible:
+      metadata.drawing.annotationAllVisible ?? true,
+  });
   onProgress("참조도면 첫 화면 버퍼 읽는 중");
   const [overview, imageEntities, embeddedImages] = await Promise.all([
     reader.readOverviewVertices(),

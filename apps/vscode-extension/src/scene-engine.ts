@@ -1,7 +1,7 @@
 export const SCENE_ENGINE_CONTRACT = "dwg-scene-engine/1";
 export const SCENE_ENGINE_PROGRESS_SCHEMA =
   "dwg-scene-engine-progress/1";
-export const SCENE_CACHE_SCHEMA_VERSION = "dwg-scene-cache/1.21";
+export const SCENE_CACHE_SCHEMA_VERSION = "dwg-scene-cache/1.24";
 
 export class SceneEngineError extends Error {
   constructor(

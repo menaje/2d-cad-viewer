@@ -6,7 +6,7 @@ change/Save As 판정을 renderer 및 상위 Workspace 권한에서 분리합니
 
 현재 제품 상태는 `query-preview`입니다.
 
-- LibreDWG Native가 만든 Scene Cache v1.21 source record를 bounded range로
+- LibreDWG Native가 만든 Scene Cache v1.24 source record를 bounded range로
   읽어 handle/owner/layer/bounds만 packed typed array index에 저장합니다.
 - query 결과는 source fingerprint, space, nested instance path, native
   handle과 entity fingerprint에 묶입니다.

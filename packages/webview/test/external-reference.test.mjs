@@ -4,11 +4,13 @@ import test from "node:test";
 import {
   buildExternalLayerMap,
   buildExternalLinetypeMap,
+  blockExternalReferenceIsDisplayable,
   composeExternalInstanceGraph,
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
 } from "../src/external-reference.mjs";
+
 import { GpuLineBatchKind } from "../src/scene-cache.mjs";
 import { createClipNode } from "../src/instance-graph.mjs";
 import {
@@ -33,6 +35,24 @@ import {
 import {
   nestedInstanceGraph,
 } from "./nested-instance-graph-fixture.mjs";
+
+test("discovers only loaded and resolved external-reference blocks", () => {
+  const base = { flags: 1 << 2, xrefLoaded: true, xrefResolved: true };
+
+  assert.equal(blockExternalReferenceIsDisplayable(base), true);
+  assert.equal(
+    blockExternalReferenceIsDisplayable({ ...base, xrefLoaded: false }),
+    false,
+  );
+  assert.equal(
+    blockExternalReferenceIsDisplayable({ ...base, xrefResolved: false }),
+    false,
+  );
+  assert.equal(
+    blockExternalReferenceIsDisplayable({ ...base, flags: 0 }),
+    false,
+  );
+});
 
 function collection(...matrices) {
   const data = new Float64Array(matrices.length * 16);

@@ -6,6 +6,14 @@
   color: #eef2f7;
 }
 
+:root[data-qualification-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-qualification-theme] .viewport {
+  background: var(--vscode-editor-background);
+}
+
 * {
   box-sizing: border-box;
 }

@@ -4,7 +4,7 @@ This process-isolated adapter implements the `dwg-engine-adapter/1` inspection
 and conversion contract. It traverses LibreDWG's object model directly instead
 of creating a full JSON dump.
 
-The `convert` path writes Scene Cache v1.21 without a whole-drawing intermediate
+The `convert` path writes Scene Cache v1.24 without a whole-drawing intermediate
 model. It repeatedly traverses LibreDWG objects and streams sections and
 bounded GPU batches directly to a new cache file. For large drawings, it
 spills fixed-size detail records into private unnamed temporary files, sorts
@@ -55,8 +55,9 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   closure; one HATCH remains capped at 65,536 segments and reports expose
   rendered boundary segments and any capped entities;
 - bounded HATCH entity records retain pattern/gradient metadata, closed `f64`
-  rings, gradient colors and seed points; rings are capped at 65,536 vertices
-  per HATCH and 1,048,576 vertices globally;
+  rings, gradient colors, seed points and the named
+  `HATCHBACKGROUNDCOLOR` application-data value; rings are capped at 65,536
+  vertices per HATCH and 1,048,576 vertices globally;
 - pattern-definition lines retain their resolved angle, base, offset and dash
   sequence in packed source sections; one HATCH is capped at 4,096 definition
   lines and 65,536 dash values, with global caps of 262,144 and 1,048,576;
@@ -66,8 +67,10 @@ The current conversion coverage is corpus-qualified rather than format-wide:
 - TRACE retains the same 1-2-4-3 perimeter order as SOLID, and finite RAY
   display extends only in its forward direction;
 - POLYLINE mesh rows and columns retain their declared M/N topology and closed
-  directions; MLINE display retains styled parallel elements, cut parameters,
-  start/end caps and joined miters;
+  directions; MLINE display retains styled parallel elements, start/end caps,
+  joined miters and qualified uncut style fills. A filled MLINE carrying area
+  fill parameters fails conversion closed until their exact boundary meaning
+  is qualified;
 - REGION, 3DSOLID and BODY display reads bounded SAT plus ACIS/ASM SAB topology
   and emits transformed straight, elliptic and exact rational NURBS edge
   chords. The checksum-pinned LibreDWG 0.14 source is patched during every
@@ -79,27 +82,53 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   ordinary line and text sections. This currently preserves the complete
   `ACAD_TABLE` display found in the private qualification corpus without
   enabling LibreDWG's unstable TABLE object decoder;
+- proxy display follows AutoCAD's default `PROXYSHOW=1` policy because that
+  registry preference is not stored in the DWG. Conversion reports the exact
+  supported opcode set: polyline (6), polygon (7), color (14), linetype (18),
+  TrueColor (22), lineweight (23), matrix push/pop (29–31), polyline with
+  normals (32), and Unicode text (38). A malformed stream or a proxy with no
+  supported display primitive is counted in
+  `coverage.deferred_reasons.unsupported_proxy_graphics`; no guessed geometry
+  or bounding box is substituted;
 - 3DFACE retains four WCS corners and all four invisible-edge bits; its current
   wireframe display emits only visible, non-degenerate edges;
 - WIPEOUT retains its image basis, display properties, exact rectangular or
   polygonal clip vertices, definition handles and the drawing-wide frame
   setting; a missing WIPEOUT variables object leaves only that frame setting
   unavailable while preserving independent LWDISPLAY, FILLMODE and model-space
-  state; enabled frames are displayed while masks remain explicitly
-  deferred until draw-order-aware rendering exists;
+  state. Valid masks share the normalized draw-order buckets used by lines,
+  HATCH, primitives and text; an invalid or over-limit mask plan fails closed
+  to ordinary geometry plus any enabled WIPEOUT frame;
 - IMAGE retains the IMAGEDEF path, insertion/U/V basis, source pixel size,
   brightness/contrast/fade, definition handles and exact rectangular or
-  polygonal clipping boundary for lazy JPG/PNG display;
+  polygonal clipping boundary for lazy JPG/PNG/BMP/DIB/GIF display;
+- PDF/DWF/DGN underlays are recognized as logical entities and reported under
+  `coverage.deferred_reasons.unsupported_underlays`; their content is not
+  claimed as serialized because the current 2D viewer has no qualified
+  underlay decoder;
+- Scene Cache v1.24 retains ATTMODE, FRAME, IMAGEFRAME, XCLIPFRAME, OLEFRAME,
+  PDFFRAME, DWFFRAME, DGNFRAME, ANNOALLVISIBLE, MSLTSCALE, the current model CANNOSCALE factor, and XREF
+  loaded/resolved state. Missing optional dictionary values remain explicitly
+  unavailable instead of being guessed; invalid saved ranges fail conversion.
+- Each model/paper layout also retains its saved ANNOALLVISIBLE value. Paper
+  layouts read AutoCAD's `AcadAnnoAV` LAYOUT application data; a duplicate or
+  malformed value fails conversion closed instead of guessing visibility. A
+  layout with no such application data uses AutoCAD's documented initial value
+  1 instead of being interpreted as an explicit off state.
 - `SORTENTSTABLE` objects retain their block owner plus entity/sort-handle
   pairs in deterministic, bounded sections that the Webview reads lazily;
 - layer and entity colors, lineweights and named linetypes are retained,
-  including bounded complex-linetype text/shape metadata;
+  including bounded complex-linetype text/shape metadata; pre-R13 fixed simple
+  dash arrays are normalized without interpreting them as modern complex-dash
+  records;
 - named paper-space layouts retain their paper settings, active viewport and
   bounded VIEWPORT records so every saved layout can be selected independently;
 - LAYER extension dictionaries retain sparse per-viewport color, transparency,
   linetype and lineweight overrides, capped at 1,048,576 property records;
-- XLINE, MULTILEADER and classic LEADER geometry is displayed with bounded
-  approximations, including LEADER arrows and hook lines;
+- XLINE and RAY retain exact point/direction sources and are clipped as
+  infinite or half-infinite geometry for each camera, INSERT and XCLIP
+  occurrence. MULTILEADER and classic LEADER geometry is displayed with
+  bounded approximations, including LEADER arrows and hook lines;
 - OLE2FRAME accepts both observed embedded four-corner preamble markers,
   extracts bounded BMP/DIB presentations and reconstructs strictly validated
   chunked EMF presentations from Excel OLE previews; unsupported presentations
@@ -110,7 +139,10 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   fill/outline meshes, 3DFACE edges and enabled WIPEOUT frames under a
   combined 32 MiB GPU limit, then exits;
 - every unsupported logical entity is counted under
-  `coverage.deferred_entities`;
+  `coverage.deferred_entities`, with an exact partition in
+  `coverage.deferred_reasons` for unresolved DIMENSION pictures, underlays,
+  proxy graphics, unsupported 3D entities, invalid supported entities and
+  other unsupported families;
 - bounded SHX/BigFont and system-font fallback display is implemented in the
   Webview, including stored MTEXT WCS X-axis, attachment, columns and
   background fill plus bounded inline font/color/scale/slant/decorations and
@@ -137,7 +169,7 @@ range-read limit.
 ## Progressive first frame
 
 When the VS Code host supplies both private preview paths, the same conversion
-process emits a Scene Cache v1.21 first-frame sidecar immediately after parsing
+process emits a Scene Cache v1.24 first-frame sidecar immediately after parsing
 and overview planning, before the disk-backed full-detail sort. The sidecar
 contains drawing/layer/block/INSERT and layout/viewport metadata, including
 viewport layer overrides, plus overview-only GPU line data; remaining required
@@ -231,7 +263,7 @@ working drawings are not accepted as repository fixtures.
 The R2004 round-trip qualification used the repository's
 [`generate-viewport-layer-overrides.py`](../../tests/fixtures/generate-viewport-layer-overrides.py)
 definition and a separate write-enabled LibreDWG 0.14 build. The read-only
-product adapter emitted a valid 49-section Scene Cache v1.21, and the canonical
+product adapter emitted a valid 51-section Scene Cache v1.24, and the canonical
 reader recovered true color `0xc040c4ff`, transparency `0x27000000`, `DASHED`
 and lineweight `50` on the original viewport handle. The write-enabled build is
 only a fixture producer; it is not part of the product or release package.

@@ -14,7 +14,7 @@ let emfConverterModulePromise;
 async function defaultConvertEmf(source, options) {
   emfConverterModulePromise ??= import(
     new URL(
-      "./emf-converter-runtime.mjs?v=1.21.0",
+      "./emf-converter-runtime.mjs?v=1.24.0",
       import.meta.url,
     ).href
   );

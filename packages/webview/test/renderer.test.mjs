@@ -9,6 +9,7 @@ import {
   patchLineMaskBuckets,
   ROOT_RENDER_DELTA_SCENE_ID,
   selectInteractiveInstanceIndices,
+  validatedPreferredView,
   WebGlLineRenderer,
 } from "../src/renderer.mjs";
 import { curveRefinementCameraKey } from "../src/curve-contract.mjs";
@@ -41,6 +42,33 @@ import {
   NESTED_INSTANCE_LAYERS,
   nestedInstanceGraph,
 } from "./nested-instance-graph-fixture.mjs";
+
+test("accepts a saved view that intersects line-only construction geometry", () => {
+  const view = {
+    center: [0, 0, 0],
+    height: 20,
+    width: 50,
+    twist: 0,
+  };
+  const bounds = {
+    min: [0, -1_000, 0],
+    max: [0, 10, 0],
+  };
+
+  assert.deepEqual(validatedPreferredView(view, bounds, 1_000, 500), {
+    origin: [0, 0, 0],
+    worldHeight: 25,
+  });
+  assert.equal(
+    validatedPreferredView(
+      { ...view, center: [100, 0, 0] },
+      bounds,
+      1_000,
+      500,
+    ),
+    null,
+  );
+});
 
 function makeFakeGl() {
   let nextId = 0;
@@ -1406,6 +1434,46 @@ test("renders and fits a drawing whose only drawable content is an IMAGE", () =>
   });
   assert.deepEqual(renderer.fitAllCamera().origin, [10, 20, 0]);
   assert.equal(renderer.fitAllCamera().worldHeight, 108);
+  renderer.dispose();
+});
+
+test("opens a text-only drawing from its saved model view", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const rendered = renderer.renderOverview({
+    batches: [],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: {
+      buffer: new ArrayBuffer(0),
+      byteLength: 0,
+      vertexCount: 0,
+    },
+    preferredView: {
+      center: [23, 9, 0],
+      height: 20,
+      width: 50,
+      twist: 0,
+    },
+  });
+
+  assert.deepEqual(rendered.camera.origin, [23, 9, 0]);
+  assert.equal(rendered.camera.worldHeight, 25);
+  assert.deepEqual(renderer.overviewScene.bounds, {
+    min: [-2, -3.5, 0],
+    max: [48, 21.5, 0],
+  });
+  assert.equal(rendered.drawCalls, 0);
+  assert.equal(rendered.submittedVertices, 0);
   renderer.dispose();
 });
 
