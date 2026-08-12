@@ -99,7 +99,7 @@ test("subtracts a rotated DCS view center after applying view twist", () => {
     viewTwist: Math.PI / 2,
   };
   const matrix = viewportModelToPaperMatrix(twisted);
-  const worldViewCenter = [1_025, 2_050, 0];
+  const worldViewCenter = [975, 1_950, 0];
 
   assert.deepEqual(
     transformPoint(matrix, worldViewCenter).map((value) =>

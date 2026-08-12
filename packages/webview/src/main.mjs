@@ -58,7 +58,7 @@ import {
   makePlotStyleLineWeights,
   makePlotStylePalette,
   plotStyleDiagnostics,
-  plotStyleShownInLayout,
+  resolveScreenPlotStyleEnabled,
 } from "./cad-plot-style.mjs";
 import {
   bytesToBase64,
@@ -882,6 +882,7 @@ function normalizePlotStyleName(value) {
 function resetPlotStyleSession() {
   activePlotStyleName = "";
   activePlotStyleEnabled = false;
+  dropZone.classList.remove("plot-style-preview");
   plotStyleTables.clear();
   plotStylePreferences.clear();
   pendingPlotStyleRequests.clear();
@@ -898,6 +899,7 @@ function resetPlotStyleSession() {
 }
 
 function setPlotStyleUnavailable(name, state) {
+  dropZone.classList.remove("plot-style-preview");
   const messageKey =
     {
       ambiguous: "toolbar.plotStyle.unavailable.ambiguous",
@@ -925,6 +927,7 @@ function setPlotStyleUnavailable(name, state) {
 function clearPlotStyleForView(scene) {
   scene.renderer.clearPlotStyle();
   activeTextComposite?.setPalette(scene.renderer.aciPalette);
+  dropZone.classList.remove("plot-style-preview");
 }
 
 function applyPlotStyleEntry(scene, key, entry, enabled) {
@@ -939,6 +942,7 @@ function applyPlotStyleEntry(scene, key, entry, enabled) {
         makePlotStyleLineWeights(entry.table),
       );
       activeTextComposite?.setPalette(palette);
+      dropZone.classList.add("plot-style-preview");
     } else {
       clearPlotStyleForView(scene);
     }
@@ -982,9 +986,9 @@ function configurePlotStyleForView(scene, view, revision) {
     return;
   }
   activePlotStyleName = key;
-  activePlotStyleEnabled =
-    plotStylePreferences.get(key) ??
-    plotStyleShownInLayout(view.layout);
+  activePlotStyleEnabled = resolveScreenPlotStyleEnabled(
+    plotStylePreferences.get(key),
+  );
   const cached = plotStyleTables.get(key);
   if (cached?.status === "loaded") {
     applyPlotStyleEntry(

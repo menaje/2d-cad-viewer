@@ -870,7 +870,7 @@ byte-budgeted least-recently-used cache so viewport refinement can release
 inactive chunks instead of retaining the complete drawing. After the fitted
 overview, detail selection starts only at 4x zoom, intersects model and
 transformed block bounds with the viewport and limits one visible working set
-to 32 MiB. GPU detail resources use a 96 MiB LRU budget. Camera revisions stop
+to 256 MiB. GPU detail resources use the same 256 MiB LRU budget. Camera revisions stop
 stale queued work, while at most two in-flight local reads are allowed to
 finish and become reusable cache entries.
 

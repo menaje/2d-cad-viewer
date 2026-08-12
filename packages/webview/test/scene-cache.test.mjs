@@ -11,6 +11,7 @@ import {
   DIRECTORY_ENTRY_SIZE,
   ELLIPSE_RECORD_SIZE,
   GPU_LINE_VERTEX_RECORD_SIZE,
+  MAX_CURVE_SOURCE_BYTES,
   MAX_CURVE_SOURCE_RANGE_BYTES,
   POLYLINE_HEADER_RECORD_SIZE,
   POLYLINE_VERTEX_RECORD_SIZE,
@@ -167,7 +168,7 @@ test("reads deferred curve source only in record-aligned 512 KiB chunks", async 
   assert.equal(source.bytesRead, arcBytes);
   await assert.rejects(
     reader.readCurveRefinementSource({
-      maximumSourceBytes: 64 * 1024 * 1024 + 1,
+      maximumSourceBytes: MAX_CURVE_SOURCE_BYTES + 1,
     }),
     /byte budget must be between/,
   );
@@ -220,7 +221,7 @@ test("reads deferred polyline source in independently bounded chunks", async () 
   assert.equal(source.bytesRead, headerBytes + vertexBytes);
   await assert.rejects(
     reader.readPolylineSource({
-      maximumSourceBytes: 64 * 1024 * 1024 + 1,
+      maximumSourceBytes: MAX_CURVE_SOURCE_BYTES + 1,
     }),
     /byte budget must be between/,
   );

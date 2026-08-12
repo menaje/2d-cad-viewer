@@ -390,6 +390,11 @@ annotative, 3 multiline, 4 position locked and 5 really locked. Column flag
 bits are 0 automatic height and 1 reversed flow. Kind 23 is a packed `f64`
 pool; every offset/count pair is range-checked.
 
+Source attribute flag bits follow the DWG/DXF ATTDEF and ATTRIB flags: 0
+invisible, 1 constant, 2 verification required and 3 preset. A nonconstant
+ATTDEF inside a block is a value template and is replaced by the inserted
+block's ATTRIB record; it is not itself a visible text occurrence.
+
 ### MTEXT annotation contexts
 
 Scene Cache v1.19+ preserves the bounded `MTEXTOBJECTCONTEXTDATA` records

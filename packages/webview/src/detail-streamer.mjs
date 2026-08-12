@@ -1,7 +1,5 @@
 import {
-  DEFAULT_CACHE_BYTES,
   DEFAULT_CONCURRENCY,
-  DEFAULT_VISIBLE_BYTES,
   DetailStreamingController,
 } from "@menaje/viewer-core/detail-streaming";
 import { cameraViewportBounds } from "./camera.mjs";
@@ -15,6 +13,9 @@ import {
   GpuLineBatchKind,
 } from "./scene-cache.mjs";
 import { effectiveClipBounds } from "./instance-graph.mjs";
+
+const DEFAULT_CACHE_BYTES = 256 * 1024 * 1024;
+const DEFAULT_VISIBLE_BYTES = 256 * 1024 * 1024;
 
 function sameInstanceSelection(left, right) {
   if (left === right) {

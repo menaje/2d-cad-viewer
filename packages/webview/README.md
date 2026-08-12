@@ -268,7 +268,9 @@ built-in languages, template keys, or runtime shell keys diverge.
   to the sampled overview cannot abruptly remove visible objects.
 - Selects LOD 1 model and transformed block batches against the viewport.
 - Streams at most two detail reads concurrently and coalesces redraws.
-- Caps one visible detail set at 32 MiB and cached GPU detail at 96 MiB.
+- Caps one visible detail set and cached GPU detail at 256 MiB. This keeps
+  dense plan views complete while retaining a hard upper bound for unusually
+  large drawings.
 - Cancels stale queued work and safely releases in-flight results on disposal.
 - Reuses one geometrically growing instance-upload scratch buffer instead of
   allocating a new typed-array backing store per batched draw call.

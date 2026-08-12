@@ -50,7 +50,8 @@ export function viewportModelToPaperMatrix(viewport) {
       -viewport.viewCenter[1],
       0,
     ),
-    rotationZMat4(-viewport.viewTwist),
+    // WCS-to-DCS is the inverse of AutoCAD's negative DCS view twist.
+    rotationZMat4(viewport.viewTwist),
     worldToDcs,
     translationMat4(
       -viewport.viewTarget[0],

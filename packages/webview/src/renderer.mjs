@@ -3465,17 +3465,23 @@ export class WebGlLineRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.R16I,
-      width,
-      rows.length,
-      0,
-      gl.RED_INTEGER,
-      gl.SHORT,
-      this.layerLineWeights,
-    );
+    const unpackAlignment = gl.getParameter(gl.UNPACK_ALIGNMENT);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    try {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.R16I,
+        width,
+        rows.length,
+        0,
+        gl.RED_INTEGER,
+        gl.SHORT,
+        this.layerLineWeights,
+      );
+    } finally {
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, unpackAlignment);
+    }
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
   }
@@ -3624,17 +3630,23 @@ export class WebGlLineRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.R16UI,
-      width,
-      rows.length,
-      0,
-      gl.RED_INTEGER,
-      gl.UNSIGNED_SHORT,
-      layerCodes,
-    );
+    const unpackAlignment = gl.getParameter(gl.UNPACK_ALIGNMENT);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    try {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.R16UI,
+        width,
+        rows.length,
+        0,
+        gl.RED_INTEGER,
+        gl.UNSIGNED_SHORT,
+        layerCodes,
+      );
+    } finally {
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, unpackAlignment);
+    }
     gl.activeTexture(gl.TEXTURE5);
     gl.bindTexture(gl.TEXTURE_2D, this.linetypeHeaderTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -3680,6 +3692,7 @@ export class WebGlLineRenderer {
     this.aciPalette = new Uint8Array(palette);
     this.uploadAciTexture();
     this.uploadLayerTexture();
+    this.invalidateInteractionFrame();
   }
 
   setPlotStyle(palette, lineWeights) {
@@ -3797,14 +3810,19 @@ export class WebGlLineRenderer {
     const gl = this.gl;
     const originX = camera.origin[0];
     const originY = camera.origin[1];
+    /*
+     * Ordered Canvas overlays also use texture unit 1.  The clip payload may
+     * still be current while that unit now points at the overlay order map,
+     * so always restore the clip texture binding before a geometry pass.
+     */
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.clipTexture);
     if (
       this.boundClipGraph !== instanceGraph ||
       this.boundClipOriginX !== originX ||
       this.boundClipOriginY !== originY
     ) {
       const payload = makeClipTexturePayload(instanceGraph, camera);
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, this.clipTexture);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(
@@ -5890,6 +5908,15 @@ export class WebGlLineRenderer {
       this.deactivateInteractionFrame();
     }
     return this.interactionRenderingMode;
+  }
+
+  invalidateInteractionFrame() {
+    this.interactionSequenceActive = false;
+    this.lastHybridRefreshAt = 0;
+    this.interactionFrameAvailable = false;
+    this.interactionFrameCamera = null;
+    this.interactionFrameMetrics = null;
+    this.deactivateInteractionFrame();
   }
 
   deactivateInteractionFrame() {

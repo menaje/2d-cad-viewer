@@ -1452,11 +1452,13 @@ export class CanvasRasterImageOverlay {
             ),
           },
         );
+        const imagePath = this.imageEntities.readPath(imageIndex);
+        const embeddedPresentation = imagePath.startsWith("@embedded/");
         if (asset.status === "missing") {
           const requested = this.requestAsset({
             cacheId: this.cacheId,
             imageIndex,
-            path: this.imageEntities.readPath(imageIndex),
+            path: imagePath,
           });
           metrics.requestedImages += requested ? 1 : 0;
           continue;
@@ -1543,6 +1545,11 @@ export class CanvasRasterImageOverlay {
           topLeft[0],
           topLeft[1],
         );
+        if (embeddedPresentation) {
+          // OLE metafile previews use transparent pixels for their paper.
+          context.fillStyle = "#fff";
+          context.fillRect(0, 0, asset.width, asset.height);
+        }
         context.drawImage(asset.bitmap, 0, 0);
         context.restore();
         if (this.orderSurface && this.orderScratch) {
@@ -1560,6 +1567,10 @@ export class CanvasRasterImageOverlay {
           scratchContext.globalCompositeOperation = "source-over";
           scratchContext.filter = "none";
           scratchContext.clearRect(0, 0, asset.width, asset.height);
+          if (embeddedPresentation) {
+            scratchContext.fillStyle = "#fff";
+            scratchContext.fillRect(0, 0, asset.width, asset.height);
+          }
           scratchContext.drawImage(asset.bitmap, 0, 0);
           scratchContext.globalCompositeOperation = "source-in";
           scratchContext.fillStyle = encodedDrawOrderColor(

@@ -53,6 +53,7 @@ function fakeCanvas() {
     clips: [],
     clearRect: 0,
     drawImage: [],
+    fillRect: [],
     lineDashes: [],
     strokes: 0,
     transforms: [],
@@ -72,6 +73,15 @@ function fakeCanvas() {
       calls.drawImage.push({
         values,
         alpha: this.globalAlpha,
+        filter: this.filter,
+        transform: calls.transforms.at(-1),
+      });
+    },
+    fillRect(...values) {
+      calls.fillRect.push({
+        values,
+        alpha: this.globalAlpha,
+        fillStyle: this.fillStyle,
         filter: this.filter,
         transform: calls.transforms.at(-1),
       });
@@ -428,6 +438,44 @@ test("draws IMAGE placement with clipping and CAD display adjustments", () => {
   const restored = overlay.redraw(camera, [true]);
   assert.equal(restored.loadedOccurrences, 1);
   assert.equal(canvas.calls.drawImage.length, 2);
+});
+
+test("draws embedded OLE presentations over an opaque paper background", () => {
+  const canvas = fakeCanvas();
+  const bitmap = { width: 4, height: 3 };
+  const overlay = new CanvasRasterImageOverlay(canvas, {
+    imageEntities: imageTable(
+      visibleRecord,
+      "@embedded/ole-901.emf",
+    ),
+    blocks: [{ index: 0, handle: 100n }],
+    layers: [{ name: "0" }],
+    instanceGraph: modelGraph(),
+    cacheId: "root",
+    assetStore: {
+      lookup: () => ({
+        status: "ready",
+        bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+      }),
+      snapshot: () => ({ decodedBytes: 48 }),
+    },
+  });
+
+  const metrics = overlay.redraw(camera, [true]);
+
+  assert.equal(metrics.loadedOccurrences, 1);
+  assert.deepEqual(canvas.calls.fillRect, [
+    {
+      values: [0, 0, 4, 3],
+      alpha: 0.9,
+      fillStyle: "#fff",
+      filter: "brightness(0.8) contrast(1.2)",
+      transform: [100, 0, 0, 100, 200, 150],
+    },
+  ]);
+  assert.equal(canvas.calls.drawImage.length, 1);
 });
 
 test("draws repeated block images in absolute display order", () => {
