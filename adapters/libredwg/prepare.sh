@@ -20,10 +20,10 @@ fail() {
 }
 
 checksum() {
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
-  elif command -v sha256sum >/dev/null 2>&1; then
+  if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
   else
     fail "a SHA-256 tool (shasum or sha256sum) is required"
   fi
@@ -60,6 +60,9 @@ jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '2\n')
 case $jobs in
   ''|*[!0-9]*) jobs=2 ;;
 esac
+if [ "$jobs" -gt 8 ]; then
+  jobs=8
+fi
 
 mkdir -m 700 "$build_root"
 install_prefix="$build_root/install"
@@ -113,6 +116,8 @@ libredwg_source="$build_root/libredwg-$LIBREDWG_VERSION"
   < "$script_dir/libredwg-acds-sab.patch"
 "$patch_tool" --batch --forward -d "$libredwg_source" -p1 \
   < "$script_dir/libredwg-r2007-high-compression.patch"
+"$patch_tool" --batch --forward -d "$libredwg_source" -p1 \
+  < "$script_dir/libredwg-seekable-stdin.patch"
 (
   cd "$libredwg_source"
   PKG_CONFIG="$pkg_config" ./configure \

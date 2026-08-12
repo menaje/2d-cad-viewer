@@ -15,6 +15,8 @@ on:
       - "apps/vscode-extension/package.json"
       - "packages/webview/**"
       - "scripts/qualify-windows-native.mjs"
+      - "scripts/benchmark-windows-native.mjs"
+      - "scripts/benchmark-windows-native.test.mjs"
       - "scripts/qualify-windows-vscode-ui.mjs"
       - "scripts/qualify-windows-vscode-ui.test.mjs"
       - ".github/workflows/libredwg-adapter.yml"
@@ -33,6 +35,8 @@ on:
       - "apps/vscode-extension/package.json"
       - "packages/webview/**"
       - "scripts/qualify-windows-native.mjs"
+      - "scripts/benchmark-windows-native.mjs"
+      - "scripts/benchmark-windows-native.test.mjs"
       - "scripts/qualify-windows-vscode-ui.mjs"
       - "scripts/qualify-windows-vscode-ui.test.mjs"
       - ".github/workflows/libredwg-adapter.yml"
@@ -267,6 +271,24 @@ jobs:
             --unc-root "$env:DWG_VIEWER_UNC_ROOT" `
             --report "$env:RUNNER_TEMP\windows-native-qualification.json"
 
+      - name: Qualify repeated Windows inherited-handle performance metrics
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $performanceRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            "windows-native-performance"
+          node scripts/benchmark-windows-native.mjs `
+            --adapter "$env:RUNNER_TEMP\libredwg-adapter.exe" `
+            --fixture "$env:RUNNER_TEMP\dwg-libredwg-build\libredwg-0.14\test\test-data\2018\Dynblocks.dwg" `
+            --work-root $performanceRoot `
+            --report (Join-Path $performanceRoot "report.json") `
+            --location-kind local-disk `
+            --runs 3 `
+            --warmups 1 `
+            --max-median-wall-ms 2000 `
+            --max-peak-private-bytes 200000000
+
       - name: Prepare public Unicode Windows UI drawing
         if: runner.os == 'Windows'
         shell: pwsh
@@ -311,6 +333,15 @@ jobs:
           name: dwg-viewer-windows-vscode-ui-qualification
           retention-days: 7
           path: ${{ runner.temp }}/windows-vscode-ui-qualification
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v7
+        if: always() && runner.os == 'Windows'
+        with:
+          name: dwg-viewer-windows-native-performance
+          retention-days: 7
+          path: ${{ runner.temp }}/windows-native-performance/report.json
+          archive: false
           if-no-files-found: warn
 
       - name: Remove private Windows UNC qualification share

@@ -92,8 +92,11 @@ test("adapter revision follows executable contents instead of its path", async (
   await writeFile(firstPath, "same native adapter bytes");
   await writeFile(movedPath, "same native adapter bytes");
 
-  const first = await new LibreDwgNativeSceneEngine(firstPath).snapshot();
+  const firstEngine = new LibreDwgNativeSceneEngine(firstPath);
+  const first = await firstEngine.snapshot();
+  const repeated = await firstEngine.snapshot();
   const moved = await new LibreDwgNativeSceneEngine(movedPath).snapshot();
+  assert.equal(first.revision, repeated.revision);
   assert.equal(first.revision, moved.revision);
   assert.match(first.revision, /^[a-f0-9]{64}$/u);
 
@@ -379,9 +382,17 @@ test(
       adapterScript,
       `
 const fs = require("node:fs");
+const input = process.argv[3];
 const output = process.argv[4];
 const preview = process.env.DWG_VIEWER_PREVIEW_PATH;
 const ready = process.env.DWG_VIEWER_PREVIEW_READY_PATH;
+if (
+  input !== "-" ||
+  process.env.DWG_VIEWER_INPUT_TRANSPORT !== "inherited-file-handle" ||
+  process.env.DWG_VIEWER_STDIN_SOURCE_SIZE !== "13" ||
+  process.env.DWG_VIEWER_STDIN_SOURCE_VERSION !== "AC1015" ||
+  fs.readFileSync(0, "utf8") !== "AC1015drawing"
+) process.exit(14);
 fs.writeFileSync(preview, "preview");
 fs.writeFileSync(ready, "");
 setTimeout(() => {
@@ -436,6 +447,12 @@ setTimeout(() => {
     assert.equal(previewCount, 1);
     assert.equal(performanceCount, 1);
     assert.equal(await readFile(outputPath, "utf8"), "cache");
+    assert.equal(
+      (await readdir(unicodeRoot)).some((name) =>
+        name.startsWith(".dwg-input-"),
+      ),
+      false,
+    );
   },
 );
 
@@ -460,13 +477,15 @@ if (
   process.env.DWG_VIEWER_ADAPTER_PROTOCOL !== "dwg-engine-adapter/1" ||
   process.env.DWG_VIEWER_BENCHMARK_PHASE !== "convert"
 ) process.exit(12);
-const source = fs.readFileSync(input === "-" ? 0 : input, "utf8");
 if (
-  input === "-" &&
-  (
-    process.env.DWG_VIEWER_STDIN_SOURCE_SIZE !== String(Buffer.byteLength(source)) ||
-    process.env.DWG_VIEWER_STDIN_SOURCE_VERSION !== source.slice(0, 6)
-  )
+  input !== "-" ||
+  process.env.DWG_VIEWER_INPUT_TRANSPORT !== "inherited-file-handle"
+) process.exit(14);
+const source = fs.readFileSync(0, "utf8");
+if (
+  process.env.DWG_VIEWER_STDIN_SOURCE_SIZE !==
+    String(Buffer.byteLength(source)) ||
+  process.env.DWG_VIEWER_STDIN_SOURCE_VERSION !== source.slice(0, 6)
 ) process.exit(13);
 const mode = source.slice(6);
 const cache = Buffer.alloc(64);
@@ -557,7 +576,7 @@ else report();
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
     await writeFile(sourcePath, "AC1015changed");
-    await assert.rejects(changedInput, /CACHE_INPUT_CHANGED/u);
+    await assert.rejects(changedInput, /INPUT_CHANGED/u);
     assert.equal(changedPhases.at(-1), "failed");
 
     await writeFile(sourcePath, "AC1015slow");
@@ -574,6 +593,12 @@ else report();
     assert.equal(cancelledPhases.at(-1), "cancelled");
     assert.equal(
       (await readdir(cacheRoot)).some((name) => name.endsWith(".tmp")),
+      false,
+    );
+    assert.equal(
+      (await readdir(cacheRoot)).some((name) =>
+        name.startsWith(".dwg-input-"),
+      ),
       false,
     );
   },

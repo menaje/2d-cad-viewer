@@ -2469,7 +2469,20 @@ export class SceneCacheReader {
     return this.memoize("blocks", async () => {
       const section = this.getSection(SectionKind.Blocks);
       return this.readStringTable(section, 64, (view, offset, readString, index) => {
-        const flags = view.getUint32(offset + 24, true);
+        const rawFlags = view.getUint32(offset + 24, true);
+        const xrefPath = readString(
+          view.getUint32(offset + 56, true),
+          view.getUint32(offset + 60, true),
+        );
+        // Scene Cache v1.21 could retain xref_pname while omitting blkisxref.
+        // Recover that legacy representation without overriding the explicit
+        // loaded/resolved XREF state introduced in v1.22.
+        const flags =
+          this.header.minor < 22 &&
+          xrefPath.length > 0 &&
+          (rawFlags & (1 << 4)) !== 0
+            ? rawFlags | (1 << 2)
+            : rawFlags;
         const supportedFlags = this.header.minor >= 22 ? 0x1ff : 0x7f;
         if ((flags & ~supportedFlags) !== 0) {
           throw new Error(`block ${index} contains unsupported flags`);
@@ -2502,10 +2515,7 @@ export class SceneCacheReader {
             readVec3F64(view, offset + 32),
             "block base point",
           ),
-          xrefPath: readString(
-            view.getUint32(offset + 56, true),
-            view.getUint32(offset + 60, true),
-          ),
+          xrefPath,
         });
       });
     });

@@ -40,6 +40,7 @@ const ADAPTER_SOURCE_FILES = Object.freeze([
   "package.mjs",
   "libredwg-acds-sab.patch",
   "libredwg-r2007-high-compression.patch",
+  "libredwg-seekable-stdin.patch",
   "libredwg_adapter.c",
   "libredwg_scene_cache.c",
   "libredwg_scene_cache.h",

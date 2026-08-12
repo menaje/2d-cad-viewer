@@ -404,11 +404,21 @@ one LibreDWG parse
 ```
 
 The adapter publishes the preview only after closing it and creating a ready
-marker. The extension rechecks source and engine snapshots, opens a dedicated
-range channel and keeps the sidecar outside the reusable-cache namespace. The
-full cache retains its original atomic write, validation and cache identity.
-Preview failures are non-terminal, and editor close, retry, cancellation,
-render failure or the full first frame releases its channel and private file.
+marker. The extension rechecks source and engine snapshots, validates the
+preview header, and atomically commits it under a deterministic overview name
+derived from the full-cache identity. It remains outside the canonical
+full-cache namespace. The full cache retains its original atomic write,
+validation and cache identity. Preview failures are non-terminal; editor
+close, retry, cancellation, render failure or the full first frame releases
+the range channel while the validated overview remains reusable.
+
+On a later forced or interrupted full conversion, the extension publishes the
+stored overview before starting the converter and suppresses duplicate
+preview generation. It gives that reused overview up to 10 seconds to produce
+its first Webview frame before starting the full converter. This makes repeat
+recovery immediately displayable while the full cache is rebuilt. It does not
+reduce the initial uncached parse peak, because LibreDWG still retains its
+drawing object graph until the converter exits.
 
 The preview repeats the bounded overview traversal but does not copy the
 LibreDWG object graph or build full-detail geometry in memory. It contains the
@@ -441,6 +451,81 @@ than the default.
 DWG parsing runs outside the VS Code extension host and Webview. The converter
 writes a compact cache and exits, releasing transient parser memory. The
 Webview receives only visible chunks and display metadata.
+
+On Windows, the extension opens the source once and inherits that seekable
+read-only handle as the converter's standard input. Node.js neither copies the
+DWG into JavaScript buffers nor creates a hard-link/copy staging entry. Only
+the source size and six-byte DWG version travel in the environment, and the
+host rechecks size plus nanosecond modification time when conversion exits.
+The checksum-pinned LibreDWG source includes a small seekable-stdin patch:
+regular inherited handles use the existing sized bulk-read path instead of
+the upstream 4 KiB growable stream reader. Pipes retain the ordinary stream
+fallback. The original drawing path is not sent to the converter, cache or
+adapter report.
+
+Windows conversion telemetry records both current and process-peak working
+set/private bytes at the parse boundary and at completion, plus process I/O
+counters. This distinguishes parser-retained state from a later section-worker
+peak: lowering section concurrency cannot solve a memory peak that has already
+occurred, and a small parse-to-completion current-memory delta identifies the
+materialized LibreDWG object graph as the next optimization boundary. The
+pinned LibreDWG 0.14 reader has no supported selective or lazy object-decode
+mode to enable; `DWG_OPTS_MINIMAL` is declared but is not consumed by its DWG
+decoder. Reducing that graph is therefore a common engine/upstream task, not a
+Windows transport optimization. ETW/WPA is still required to attribute exact
+allocation stacks and system file-cache costs.
+
+A physical Windows x64 qualification of the Scene Cache v1.26 writer used one
+anonymous 51,723,767-byte drawing, automatic eight-worker conversion, one
+warmup, and three measured processes per location. The mapped drive was a real
+remote SMB share and the UNC row addressed that same share directly. These are
+warm-cache measurements, not cold-start claims:
+
+| Source location | Wall time min / median / max | Median adapter write | Maximum peak private bytes |
+| --- | ---: | ---: | ---: |
+| local disk | 10,500 / 10,682 / 10,737 ms | 6,280 ms | 1,172,262,912 |
+| mapped SMB drive | 10,598 / 10,977 / 11,074 ms | 6,199 ms | 1,172,267,008 |
+| direct UNC | 10,193 / 10,220 / 10,726 ms | 5,918 ms | 1,172,250,624 |
+
+The mapped and direct-UNC medians stayed within 4.4% of local disk. All
+measured caches were 408,758,712 bytes and were byte-identical across locations;
+their normalized reports were also identical. The local writer reported
+632,766,212 read bytes and 985,199,191 write bytes per conversion. At the local
+parse boundary, median current private bytes were about 1,011.0 MB; completion
+median current private bytes were about 1,015.2 MB. That small post-parse delta
+confirms that the roughly 1.17 GB process peak is already a
+parser/materialized-graph cost rather than a Windows path-copy or late section
+worker cost.
+
+The largest remaining staged section group was also tested as a direct final
+cache write. It removed about 119.0 MB of process reads and 118.5 MB of writes,
+but local median wall time regressed from 10,423 ms to 11,086 ms (+6.4%) and
+median adapter write time regressed from 6,163 ms to 6,821 ms. The direct-write
+experiment was therefore removed; only the GPU vertex body retains direct
+placement, and the other six bounded groups remain staged.
+
+The hosted viewer reports `dwg-visual-complete/1` after the full first frame,
+root text and raster setup, host font requests, embedded-image decoding, and
+every discovered XREF/image reference have reached a terminal state. Missing
+or invalid resources are terminal and are reported as issue counts rather
+than making completion impossible. View-dependent detail streaming does not
+block this drawing-level milestone; its current pending count is reported
+alongside the completion event. Completion checks are coalesced onto the
+first pending 80 ms timer so
+continuous detail updates cannot indefinitely postpone the terminal check.
+Root-scene deferred HATCH/primitive generation and view-dependent curve
+refinement remain
+post-frame quality upgrades and do not block this resource-completion marker;
+an XREF is not terminal until its child scene has mounted.
+The Windows qualification reporter can use `visual` as its close stage and
+records path-free XREF, image, and font totals with the host elapsed time.
+
+XREF discovery and Webview mounting use a bounded two-task queue. Cache
+preparation remains behind a separate one-task gate, so two already cached
+references can overlap their search and mount latency while Native converter
+processes can never overlap. Nested references retain the existing depth,
+cycle and total-reference limits, and cancellation rejects queued work before
+it can start.
 
 The `dwg-engine-adapter/1` benchmark boundary invokes `inspect` and `convert`
 in a new process for every run. It records process wall time, adapter-reported
@@ -888,8 +973,27 @@ Large-drawing detail records are ordered by group and a 32-bit interleaved XY
 Morton key computed from each segment midpoint within that group's finite
 bounds. Original traversal order resolves key ties deterministically. The
 LibreDWG writer creates sorted 8,192-record runs in a private temporary file
-and performs one bounded k-way merge into a second file, so it never retains
-the complete spatial index or geometry set in memory.
+and performs one bounded k-way merge directly into the GPU line encoder. It
+does not materialize a second globally sorted temporary file, and it never
+retains the complete spatial index or geometry set in memory. Each merge run
+has a 64-record read buffer; compared with the earlier 16-record buffer this
+cuts Windows seek/read calls by four while adding at most 48 records per run.
+Windows opens this run store with the random-access cache hint; the other
+section and vertex staging files retain their sequential-access hint.
+Conversion telemetry reports run construction as `spatial_index_ms` and the
+streaming merge as `spatial_merge_ms`; the latter runs inside and therefore
+overlaps `gpu_section_group_ms`, while adapter total time remains the enclosing
+wall time. The full-cache writer streams packed GPU vertices directly into the
+final cache on that pass. Only the much smaller batch directory is staged and
+appended after the vertex body, eliminating the largest section-group
+temporary-to-final copy. Directory entries, not physical payload order,
+identify sections; the reader sorts physical ranges only for overlap
+validation. The overview-only artifact retains the simpler vertex staging
+path because its vertex payload is capped at 4 MiB. The six smaller section
+groups still use bounded temporary files so their encoders can run in
+parallel. Exact range planning was evaluated for the largest of them and
+regressed wall time, so no additional group should be direct-written without
+new platform evidence.
 
 Detail ranges are independently capped at 512 KiB. The Webview includes a
 byte-budgeted least-recently-used cache so viewport refinement can release

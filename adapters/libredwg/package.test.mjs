@@ -203,7 +203,7 @@ test("keeps package and source preparation pins synchronized", async () => {
   );
 });
 
-test("uses native Windows isolation and a path-safe piped input contract", async () => {
+test("uses native Windows isolation and an inherited input handle", async () => {
   const [adapterSource, sceneCacheSource, hostSource] = await Promise.all([
     readFile(
       path.join(import.meta.dirname, "libredwg_adapter.c"),
@@ -238,9 +238,93 @@ test("uses native Windows isolation and a path-safe piped input contract", async
   assert.match(sceneCacheSource, /FILE_FLAG_DELETE_ON_CLOSE/u);
   assert.match(sceneCacheSource, /_O_NOINHERIT/u);
   assert.match(sceneCacheSource, /_lseeki64/u);
-  assert.match(hostSource, /adapterInputPath = "-"/u);
+  assert.match(adapterSource, /K32GetProcessMemoryInfo/u);
+  assert.match(adapterSource, /PeakWorkingSetSize/u);
+  assert.match(adapterSource, /counters\.WorkingSetSize/u);
+  assert.match(adapterSource, /PeakPagefileUsage/u);
+  assert.match(adapterSource, /counters\.PrivateUsage/u);
+  assert.match(adapterSource, /GetProcessIoCounters/u);
+  assert.match(adapterSource, /parse_working_set_bytes/u);
+  assert.match(adapterSource, /parse_private_bytes/u);
+  assert.match(adapterSource, /parse_peak_private_bytes/u);
+  assert.match(adapterSource, /peak_private_bytes/u);
+  assert.match(hostSource, /openWindowsInput/u);
   assert.match(hostSource, /windowsChildPath/u);
-  assert.match(hostSource, /createReadStream\(inputPath\)/u);
+  assert.match(
+    hostSource,
+    /inheritedInput \? inheritedInput\.handle\.fd : "ignore"/u,
+  );
+  assert.match(
+    hostSource,
+    /DWG_VIEWER_INPUT_TRANSPORT:[\s\S]*"inherited-file-handle"/u,
+  );
+  assert.match(hostSource, /adapterInputPath = "-"/u);
+  assert.doesNotMatch(hostSource, /stageWindowsInput|copyFile\(|stagedPath/u);
+  assert.match(
+    sceneCacheSource,
+    /block->blkisxref\s*\|\| \(block->xref_pname/u,
+  );
+});
+
+test("streams merged spatial runs directly into the GPU section encoder", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+  const mergeFunction = sceneCacheSource.match(
+    /merge_spatial_sort_runs \([\s\S]*?\n\}/u,
+  );
+  const storeBuilder = sceneCacheSource.match(
+    /build_spatial_segment_store \([\s\S]*?\n\}/u,
+  );
+
+  assert.ok(mergeFunction, "spatial run merge is missing");
+  assert.match(
+    sceneCacheSource,
+    /#define SPATIAL_MERGE_BUFFER_RECORDS 64u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /random_access \? FILE_FLAG_RANDOM_ACCESS[\s\S]*?FILE_FLAG_SEQUENTIAL_SCAN/u,
+  );
+  assert.match(mergeFunction[0], /LineSegmentConsumer consumer/u);
+  assert.match(
+    mergeFunction[0],
+    /consumer \(consumer_context,[\s\S]*?\.segment\)/u,
+  );
+  assert.doesNotMatch(mergeFunction[0], /fwrite|FILE \*output/u);
+  assert.ok(storeBuilder, "spatial run store builder is missing");
+  assert.equal(
+    storeBuilder[0].match(/open_spatial_run_file/g)?.length,
+    1,
+  );
+  assert.match(storeBuilder[0], /store->runs = builder\.runs/u);
+  assert.doesNotMatch(storeBuilder[0], /sorted_file/u);
+});
+
+test("writes full-cache GPU vertices directly into the final cache", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+  const gpuWriter = sceneCacheSource.match(
+    /write_gpu_sections \([\s\S]*?\n\}/u,
+  );
+
+  assert.ok(gpuWriter, "GPU section writer is missing");
+  assert.match(gpuWriter[0], /int split_output/u);
+  assert.match(gpuWriter[0], /int direct_output/u);
+  assert.match(gpuWriter[0], /batch_writer = &staging_writer/u);
+  assert.match(gpuWriter[0], /vertex_writer = writer/u);
+  assert.match(gpuWriter[0], /\*prefix_file = staging_file/u);
+  assert.match(
+    sceneCacheSource,
+    /if \(group == 3u\)[\s\S]*?tasks\[group\]\.file = writer->file;[\s\S]*?tasks\[group\]\.direct_output = 1;/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /if \(tasks\[group\]\.direct_output\)\s*continue;/u,
+  );
 });
 
 test("serializes sparse viewport layer overrides in Scene Cache v1.26", async () => {
@@ -578,6 +662,7 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
     wasmBuildScript,
     acdsPatchSource,
     highCompressionPatchSource,
+    seekableStdinPatchSource,
   ] = await Promise.all([
       readFile(path.join(import.meta.dirname, "package.mjs"), "utf8"),
       readFile(path.join(import.meta.dirname, "prepare.sh"), "utf8"),
@@ -596,6 +681,10 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
         ),
         "utf8",
       ),
+      readFile(
+        path.join(import.meta.dirname, "libredwg-seekable-stdin.patch"),
+        "utf8",
+      ),
     ]);
 
   assert.match(packageSource, /"libredwg-acds-sab\.patch"/u);
@@ -603,6 +692,7 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
     packageSource,
     /"libredwg-r2007-high-compression\.patch"/u,
   );
+  assert.match(packageSource, /"libredwg-seekable-stdin\.patch"/u);
   assert.match(
     prepareScript,
     /patch_tool=\$\{DWG_VIEWER_PATCH:-patch\}/u,
@@ -617,6 +707,13 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
   );
   assert.match(prepareScript, /libredwg-r2007-high-compression\.patch/u);
   assert.match(wasmBuildScript, /libredwg-r2007-high-compression\.patch/u);
+  assert.match(prepareScript, /libredwg-seekable-stdin\.patch/u);
+  assert.match(wasmBuildScript, /libredwg-seekable-stdin\.patch/u);
+  assert.match(
+    prepareScript,
+    /command -v sha256sum[\s\S]*command -v shasum/u,
+  );
+  assert.match(prepareScript, /if \[ "\$jobs" -gt 8 \]/u);
   assert.match(acdsPatchSource, /ACIS BinaryFile/u);
   assert.match(acdsPatchSource, /ASM BinaryFile/u);
   assert.match(acdsPatchSource, /sol->sab_size/u);
@@ -625,6 +722,9 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
     /MAX_R2007_SECTION_DECOMP_SIZE/u,
   );
   assert.match(highCompressionPatchSource, /section->data_size > MAX_/u);
+  assert.match(seekableStdinPatchSource, /seekable_stdin/u);
+  assert.match(seekableStdinPatchSource, /S_ISREG \(attrib\.st_mode\)/u);
+  assert.match(seekableStdinPatchSource, /dat_read_file/u);
 });
 
 test("rejects a silent LibreDWG parse that contains no drawing objects", async () => {

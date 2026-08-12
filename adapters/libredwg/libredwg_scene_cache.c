@@ -91,8 +91,7 @@ extern void dwg_resolve_objectrefs_silent (Dwg_Data *restrict dwg);
 #define SCENE_OVERVIEW_SEGMENTS                                       \
   (MAX_GPU_OVERVIEW_BYTES / (2u * GPU_LINE_VERTEX_RECORD_SIZE))
 #define SPATIAL_SORT_RUN_SEGMENTS 8192u
-#define SPATIAL_MERGE_BUFFER_RECORDS 16u
-#define SPATIAL_MERGE_OUTPUT_RECORDS 4096u
+#define SPATIAL_MERGE_BUFFER_RECORDS 64u
 #define MAX_CONVERSION_WORKERS 8u
 _Static_assert (
     GPU_BATCH_SEGMENTS * 2u * GPU_LINE_VERTEX_RECORD_SIZE
@@ -609,15 +608,18 @@ typedef struct
 
 typedef struct
 {
-  FILE *file;
-  uint64_t count;
-} SpatialSegmentStore;
-
-typedef struct
-{
   uint64_t start;
   uint64_t count;
 } SpatialSortRun;
+
+typedef struct
+{
+  FILE *file;
+  SpatialSortRun *runs;
+  size_t run_count;
+  uint64_t count;
+  uint64_t merge_nanoseconds;
+} SpatialSegmentStore;
 
 typedef struct
 {
@@ -4072,7 +4074,8 @@ write_block_section (CacheWriter *writer, const CacheTables *tables,
         flags |= 1u;
       if (block->hasattrs)
         flags |= 1u << 1;
-      if (block->blkisxref)
+      if (block->blkisxref
+          || (block->xref_pname && block->xref_pname[0]))
         flags |= 1u << 2;
       if (block->xrefoverlaid)
         flags |= 1u << 3;
@@ -16715,7 +16718,8 @@ typedef struct
 } SpatialSortBuilder;
 
 static FILE *
-open_spatial_temp_file (CacheWriter *writer)
+open_spatial_temp_file_with_access (CacheWriter *writer,
+                                    int random_access)
 {
 #if defined(_WIN32)
   wchar_t temporary_directory[MAX_PATH + 1u];
@@ -16739,7 +16743,8 @@ open_spatial_temp_file (CacheWriter *writer)
       temporary_path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
       CREATE_ALWAYS,
       FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE
-          | FILE_FLAG_SEQUENTIAL_SCAN,
+          | (random_access ? FILE_FLAG_RANDOM_ACCESS
+                           : FILE_FLAG_SEQUENTIAL_SCAN),
       NULL);
   if (handle == INVALID_HANDLE_VALUE)
     {
@@ -16768,6 +16773,7 @@ open_spatial_temp_file (CacheWriter *writer)
   FILE *file = tmpfile ();
   int descriptor;
   int flags;
+  (void)random_access;
   if (!file)
     {
       set_error (writer, "cannot create private spatial-sort storage");
@@ -16786,11 +16792,24 @@ open_spatial_temp_file (CacheWriter *writer)
 #endif
 }
 
+static FILE *
+open_spatial_temp_file (CacheWriter *writer)
+{
+  return open_spatial_temp_file_with_access (writer, 0);
+}
+
+static FILE *
+open_spatial_run_file (CacheWriter *writer)
+{
+  return open_spatial_temp_file_with_access (writer, 1);
+}
+
 static void
 close_spatial_segment_store (SpatialSegmentStore *store)
 {
   if (store->file)
     fclose (store->file);
+  free (store->runs);
   memset (store, 0, sizeof (*store));
 }
 
@@ -17126,21 +17145,20 @@ sift_spatial_heap (size_t *heap, size_t count, size_t root,
 static int
 merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
                          const SpatialSortRun *source_runs,
-                         size_t run_count, FILE *output,
+                         size_t run_count, LineSegmentConsumer consumer,
+                         void *consumer_context,
                          uint64_t expected)
 {
   SpatialMergeRun *runs = NULL;
-  SpatialSegmentRecord *output_records = NULL;
   size_t *heap = NULL;
   size_t heap_count = run_count;
-  size_t output_count = 0;
-  uint64_t written = 0;
+  uint64_t emitted = 0;
   int descriptor = fileno (input);
   size_t i;
   int success = 0;
-  if (descriptor < 0)
+  if (descriptor < 0 || !source_runs || !run_count || !consumer)
     {
-      set_error (writer, "cannot open spatial-sort runs");
+      set_error (writer, "spatial-sort runs are unavailable");
       return 0;
     }
   if (run_count > SIZE_MAX / sizeof (SpatialMergeRun)
@@ -17151,9 +17169,7 @@ merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
     }
   runs = (SpatialMergeRun *)calloc (run_count, sizeof (*runs));
   heap = (size_t *)malloc (run_count * sizeof (*heap));
-  output_records = (SpatialSegmentRecord *)malloc (
-      SPATIAL_MERGE_OUTPUT_RECORDS * sizeof (*output_records));
-  if (!runs || !heap || !output_records)
+  if (!runs || !heap)
     {
       set_error (writer, "out of memory while merging spatial-sort runs");
       goto done;
@@ -17173,18 +17189,10 @@ merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
     {
       size_t run_index = heap[0];
       SpatialMergeRun *run = &runs[run_index];
-      output_records[output_count++] = run->buffer[run->position];
-      if (output_count == SPATIAL_MERGE_OUTPUT_RECORDS
-          && fwrite (output_records, sizeof (SpatialSegmentRecord),
-                     output_count, output)
-                 != output_count)
-        {
-          set_error (writer, "cannot write sorted spatial geometry");
-          goto done;
-        }
-      if (output_count == SPATIAL_MERGE_OUTPUT_RECORDS)
-        output_count = 0;
-      written++;
+      if (!consumer (consumer_context,
+                     &run->buffer[run->position].segment))
+        goto done;
+      emitted++;
       run->position++;
       if (run->position == run->buffered)
         {
@@ -17201,20 +17209,14 @@ merge_spatial_sort_runs (CacheWriter *writer, FILE *input,
       if (heap_count)
         sift_spatial_heap (heap, heap_count, 0, runs);
     }
-  if ((output_count
-       && fwrite (output_records, sizeof (SpatialSegmentRecord),
-                  output_count, output)
-              != output_count)
-      || written != expected || fflush (output) != 0
-      || fseeko (output, 0, SEEK_SET) != 0)
+  if (emitted != expected)
     {
-      set_error (writer, "sorted spatial geometry is incomplete");
+      set_error (writer, "merged spatial geometry is incomplete");
       goto done;
     }
   success = 1;
 
 done:
-  free (output_records);
   free (heap);
   free (runs);
   return success;
@@ -17229,14 +17231,12 @@ build_spatial_segment_store (CacheWriter *writer, const Dwg_Data *dwg,
 {
   SpatialSortBuilder builder;
   FILE *runs_file = NULL;
-  FILE *sorted_file = NULL;
   uint64_t selected = 0;
   uint64_t run_capacity
       = total / SPATIAL_SORT_RUN_SEGMENTS
         + (total % SPATIAL_SORT_RUN_SEGMENTS != 0);
   uint64_t collect_started = 0;
   uint64_t collect_total = 0;
-  uint64_t merge_started = 0;
   int success = 0;
   memset (&builder, 0, sizeof (builder));
   memset (store, 0, sizeof (*store));
@@ -17248,11 +17248,8 @@ build_spatial_segment_store (CacheWriter *writer, const Dwg_Data *dwg,
       set_error (writer, "spatial-sort geometry is too large");
       return 0;
     }
-  runs_file = open_spatial_temp_file (writer);
+  runs_file = open_spatial_run_file (writer);
   if (!runs_file)
-    goto done;
-  sorted_file = open_spatial_temp_file (writer);
-  if (!sorted_file)
     goto done;
   builder.worker_count = performance->worker_count;
   if (!builder.worker_count
@@ -17303,23 +17300,17 @@ build_spatial_segment_store (CacheWriter *writer, const Dwg_Data *dwg,
             : 1u;
   free (builder.buffers);
   builder.buffers = NULL;
-  merge_started = monotonic_nanoseconds ();
-  if (!merge_spatial_sort_runs (
-          writer, runs_file, builder.runs, builder.run_count,
-          sorted_file, total))
-    goto done;
-  performance->spatial_merge_ms = milliseconds_from_nanoseconds (
-      elapsed_nanoseconds (merge_started));
-  store->file = sorted_file;
+  store->file = runs_file;
+  store->runs = builder.runs;
+  store->run_count = builder.run_count;
   store->count = total;
-  sorted_file = NULL;
+  runs_file = NULL;
+  builder.runs = NULL;
   success = 1;
 
 done:
   free (builder.runs);
   free (builder.buffers);
-  if (sorted_file)
-    fclose (sorted_file);
   if (runs_file)
     fclose (runs_file);
   return success;
@@ -17331,32 +17322,22 @@ iterate_spatial_segment_store (CacheWriter *writer,
                                LineSegmentConsumer consumer, void *context,
                                uint64_t *selected)
 {
-  SpatialSegmentRecord record;
-  uint64_t count;
-  if (!store || !store->file || !consumer)
+  uint64_t started;
+  int success;
+  if (!store || !store->file || !store->runs || !store->run_count
+      || !consumer)
     {
-      set_error (writer, "sorted spatial geometry is unavailable");
+      set_error (writer, "spatial-sort geometry is unavailable");
       return 0;
     }
-  clearerr (store->file);
-  if (fseeko (store->file, 0, SEEK_SET) != 0)
-    {
-      set_error (writer, "cannot rewind sorted spatial geometry");
-      return 0;
-    }
-  for (count = 0; count < store->count; count++)
-    {
-      if (fread (&record, sizeof (record), 1, store->file) != 1)
-        {
-          set_error (writer, "cannot read sorted spatial geometry");
-          return 0;
-        }
-      if (!consumer (context, &record.segment))
-        return 0;
-    }
-  if (selected)
-    *selected = count;
-  return 1;
+  started = monotonic_nanoseconds ();
+  success = merge_spatial_sort_runs (
+      writer, store->file, store->runs, store->run_count, consumer,
+      context, store->count);
+  store->merge_nanoseconds += elapsed_nanoseconds (started);
+  if (success && selected)
+    *selected = store->count;
+  return success;
 }
 
 static double
@@ -17665,48 +17646,69 @@ write_gpu_sections (CacheWriter *writer, const Dwg_Data *dwg,
                     OverviewPlan *overview,
                     SpatialSegmentStore *spatial,
                     SectionEntry *batch_entry,
-                    SectionEntry *vertex_entry, int overview_only)
+                    SectionEntry *vertex_entry, int overview_only,
+                    int direct_output,
+                    FILE **prefix_file, uint64_t *prefix_byte_length)
 {
-  CacheWriter vertex_writer;
-  FILE *vertex_file = NULL;
+  CacheWriter staging_writer;
+  CacheWriter *batch_writer = writer;
+  CacheWriter *vertex_writer = &staging_writer;
+  FILE *staging_file = NULL;
   uint8_t copy_buffer[64u * 1024u];
-  char vertex_error[160];
+  char staging_error[160];
   uint64_t batch_offset;
   uint64_t vertex_offset;
+  uint64_t vertex_end;
   uint64_t staged_bytes;
   uint64_t remaining;
   uint64_t selected = 0;
   uint64_t before_batches = summary->batches;
+  uint64_t batch_count;
+  uint64_t prefix_bytes = 0;
   uint64_t total
       = summary->model_segments + summary->block_segments;
   int separate_overview = total > SCENE_OVERVIEW_SEGMENTS;
+  int split_output
+      = !overview_only && !direct_output && prefix_file
+        && prefix_byte_length;
   int success = 0;
-  memset (&vertex_writer, 0, sizeof (vertex_writer));
-  memset (vertex_error, 0, sizeof (vertex_error));
+  memset (&staging_writer, 0, sizeof (staging_writer));
+  memset (staging_error, 0, sizeof (staging_error));
+  if (prefix_file)
+    *prefix_file = NULL;
+  if (prefix_byte_length)
+    *prefix_byte_length = 0;
   if (separate_overview && !overview_only
-      && (!spatial || !spatial->file || spatial->count != total))
+      && (!spatial || !spatial->file || !spatial->runs
+          || !spatial->run_count || spatial->count != total))
     {
-      set_error (writer, "sorted spatial geometry count is inconsistent");
+      set_error (writer, "spatial-sort geometry count is inconsistent");
       return 0;
     }
-  vertex_file = open_spatial_temp_file (writer);
-  if (!vertex_file)
+  staging_file = open_spatial_temp_file (writer);
+  if (!staging_file)
     return 0;
-  vertex_writer.file = vertex_file;
-  vertex_writer.error = vertex_error;
-  vertex_writer.error_size = sizeof (vertex_error);
-  if (!align_writer (writer, &batch_offset))
+  staging_writer.file = staging_file;
+  staging_writer.error = staging_error;
+  staging_writer.error_size = sizeof (staging_error);
+  if (split_output || direct_output)
+    {
+      batch_writer = &staging_writer;
+      vertex_writer = writer;
+    }
+  if (!align_writer (batch_writer, &batch_offset)
+      || !align_writer (vertex_writer, &vertex_offset))
     goto done;
   if (separate_overview)
     {
       if (!write_gpu_pass (
-              writer, &vertex_writer, dwg, tables, summary, overview,
+              batch_writer, vertex_writer, dwg, tables, summary, overview,
               NULL, 0, 1, &selected))
         goto done;
       summary->overview_segments = selected;
       if (!overview_only
           && !write_gpu_pass (
-              writer, &vertex_writer, dwg, tables, summary, NULL,
+              batch_writer, vertex_writer, dwg, tables, summary, NULL,
               spatial, 1, 1, NULL))
         goto done;
     }
@@ -17714,45 +17716,110 @@ write_gpu_sections (CacheWriter *writer, const Dwg_Data *dwg,
     {
       summary->overview_segments = total;
       if (!write_gpu_pass (
-              writer, &vertex_writer, dwg, tables, summary, NULL,
+              batch_writer, vertex_writer, dwg, tables, summary, NULL,
               NULL, 0, 0, NULL))
         goto done;
     }
+  batch_count = summary->batches - before_batches;
   if (!finish_fixed_section (
-          writer, batch_entry, SECTION_GPU_LINE_BATCHES,
+          batch_writer, batch_entry, SECTION_GPU_LINE_BATCHES,
           GPU_LINE_BATCH_RECORD_SIZE, "gpu_line_batches", batch_offset,
-          summary->batches - before_batches)
-      || !position (&vertex_writer, &staged_bytes)
-      || staged_bytes
+          batch_count)
+      || !position (vertex_writer, &vertex_end)
+      || vertex_end < vertex_offset
+      || (staged_bytes = vertex_end - vertex_offset)
              != summary->vertices * GPU_LINE_VERTEX_RECORD_SIZE
-      || fflush (vertex_file) != 0
-      || fseeko (vertex_file, 0, SEEK_SET) != 0
-      || !align_writer (writer, &vertex_offset))
+      || fflush (staging_file) != 0)
     {
       if (!writer->failed)
-        set_error (writer, "packed GPU vertex staging is incomplete");
+        set_error (writer, "packed GPU section staging is incomplete");
       goto done;
     }
-  remaining = staged_bytes;
-  while (remaining)
+  if (direct_output)
     {
-      size_t requested
-          = remaining < sizeof (copy_buffer)
-                ? (size_t)remaining
-                : sizeof (copy_buffer);
-      if (fread (copy_buffer, 1, requested, vertex_file) != requested
-          || !write_bytes (writer, copy_buffer, requested))
+      if (!position (batch_writer, &prefix_bytes)
+          || fseeko (staging_file, 0, SEEK_SET) != 0
+          || !finish_fixed_section (
+              writer, vertex_entry, SECTION_GPU_LINE_VERTICES,
+              GPU_LINE_VERTEX_RECORD_SIZE, "gpu_line_vertices",
+              vertex_offset, summary->vertices)
+          || !align_writer (writer, &batch_offset))
         {
-          set_error (writer, "cannot concatenate packed GPU vertices");
+          if (!writer->failed)
+            set_error (writer, "packed GPU direct output is incomplete");
           goto done;
         }
-      remaining -= requested;
+      remaining = prefix_bytes;
+      while (remaining)
+        {
+          size_t requested
+              = remaining < sizeof (copy_buffer)
+                    ? (size_t)remaining
+                    : sizeof (copy_buffer);
+          if (fread (copy_buffer, 1, requested, staging_file)
+                  != requested
+              || !write_bytes (writer, copy_buffer, requested))
+            {
+              set_error (writer, "cannot append packed GPU batches");
+              goto done;
+            }
+          remaining -= requested;
+        }
+      if (!finish_fixed_section (
+              writer, batch_entry, SECTION_GPU_LINE_BATCHES,
+              GPU_LINE_BATCH_RECORD_SIZE, "gpu_line_batches",
+              batch_offset, batch_count))
+        goto done;
     }
-  if (!finish_fixed_section (
-          writer, vertex_entry, SECTION_GPU_LINE_VERTICES,
-          GPU_LINE_VERTEX_RECORD_SIZE, "gpu_line_vertices", vertex_offset,
-          summary->vertices))
-    goto done;
+  else if (split_output)
+    {
+      if (!position (batch_writer, &prefix_bytes)
+          || fseeko (staging_file, 0, SEEK_SET) != 0
+          || !finish_fixed_section (
+              writer, vertex_entry, SECTION_GPU_LINE_VERTICES,
+              GPU_LINE_VERTEX_RECORD_SIZE, "gpu_line_vertices",
+              vertex_offset, summary->vertices)
+          || vertex_entry->offset > UINT64_MAX - prefix_bytes)
+        {
+          if (!writer->failed)
+            set_error (writer, "packed GPU split output is incomplete");
+          goto done;
+        }
+      vertex_entry->offset += prefix_bytes;
+      *prefix_file = staging_file;
+      *prefix_byte_length = prefix_bytes;
+      staging_file = NULL;
+    }
+  else
+    {
+      if (fseeko (staging_file, 0, SEEK_SET) != 0
+          || !align_writer (writer, &vertex_offset))
+        {
+          set_error (writer, "packed GPU vertex staging is incomplete");
+          goto done;
+        }
+      remaining = staged_bytes;
+      while (remaining)
+        {
+          size_t requested
+              = remaining < sizeof (copy_buffer)
+                    ? (size_t)remaining
+                    : sizeof (copy_buffer);
+          if (fread (copy_buffer, 1, requested, staging_file)
+                  != requested
+              || !write_bytes (writer, copy_buffer, requested))
+            {
+              set_error (writer, "cannot concatenate packed GPU vertices");
+              goto done;
+            }
+          remaining -= requested;
+        }
+      if (!finish_fixed_section (
+              writer, vertex_entry, SECTION_GPU_LINE_VERTICES,
+              GPU_LINE_VERTEX_RECORD_SIZE, "gpu_line_vertices",
+              vertex_offset, summary->vertices))
+        goto done;
+    }
   summary->cached_vertex_bytes
       = summary->vertices * GPU_LINE_VERTEX_RECORD_SIZE;
   summary->first_frame_vertex_bytes
@@ -17763,12 +17830,12 @@ write_gpu_sections (CacheWriter *writer, const Dwg_Data *dwg,
   success = 1;
 
 done:
-  if (!success && vertex_writer.failed && !writer->failed)
-    set_error (writer, vertex_error[0]
-                           ? vertex_error
-                           : "cannot stage packed GPU vertices");
-  if (vertex_file)
-    fclose (vertex_file);
+  if (!success && staging_writer.failed && !writer->failed)
+    set_error (writer, staging_error[0]
+                           ? staging_error
+                           : "cannot stage packed GPU section data");
+  if (staging_file)
+    fclose (staging_file);
   return success;
 }
 
@@ -17778,6 +17845,7 @@ typedef struct
 {
   size_t group;
   FILE *file;
+  FILE *prefix_file;
   Dwg_Data *dwg;
   const CacheTables *tables;
   const LibreDwgPrimitiveCounts *counts;
@@ -17789,9 +17857,12 @@ typedef struct
   uint32_t source_version;
   uint32_t wipeout_frame;
   uint32_t presentation_settings;
+  uint64_t prefix_byte_length;
   uint64_t byte_length;
   uint64_t elapsed;
   char error[160];
+  int direct_output;
+  int owns_file;
   int success;
 } SectionGroupTask;
 
@@ -17807,11 +17878,15 @@ write_section_group (SectionGroupTask *task)
 {
   CacheWriter writer;
   uint64_t started = monotonic_nanoseconds ();
+  uint64_t output_start = 0;
+  uint64_t main_byte_length = 0;
   int success = 0;
   memset (&writer, 0, sizeof (writer));
   writer.file = task->file;
   writer.error = task->error;
   writer.error_size = sizeof (task->error);
+  if (!position (&writer, &output_start))
+    goto done;
   switch (task->group)
     {
     case 0:
@@ -17867,7 +17942,9 @@ write_section_group (SectionGroupTask *task)
           = write_gpu_sections (
                 &writer, task->dwg, task->tables, task->gpu_lines,
                 task->overview, task->spatial, &task->sections[18],
-                &task->sections[19], 0);
+                &task->sections[19], 0, task->direct_output,
+                &task->prefix_file,
+                &task->prefix_byte_length);
       break;
     case 4:
       success
@@ -17954,12 +18031,22 @@ write_section_group (SectionGroupTask *task)
       set_error (&writer, "scene-cache section group is invalid");
       break;
     }
-  if (success
-      && (!position (&writer, &task->byte_length)
-          || fflush (task->file) != 0))
-    success = 0;
+  if (success)
+    {
+      if (!position (&writer, &main_byte_length)
+          || fflush (task->file) != 0
+          || main_byte_length < output_start
+          || main_byte_length - output_start
+                 > UINT64_MAX - task->prefix_byte_length)
+        success = 0;
+      else
+        task->byte_length
+            = task->prefix_byte_length
+              + main_byte_length - output_start;
+    }
   if (!success && !writer.failed)
     set_error (&writer, "cannot write scene-cache section group");
+done:
   task->success = success;
   task->elapsed = elapsed_nanoseconds (started);
 }
@@ -18075,19 +18162,33 @@ write_section_groups (
       tasks[group].source_version = source_version;
       tasks[group].wipeout_frame = wipeout_frame;
       tasks[group].presentation_settings = presentation_settings;
-      tasks[group].file = open_spatial_temp_file (writer);
-      if (!tasks[group].file)
-        goto done;
+      if (group == 3u)
+        {
+          tasks[group].file = writer->file;
+          tasks[group].direct_output = 1;
+        }
+      else
+        {
+          tasks[group].file = open_spatial_temp_file (writer);
+          tasks[group].owns_file = 1;
+          if (!tasks[group].file)
+            goto done;
+        }
     }
   queue.tasks = tasks;
   queue.count = SECTION_GROUP_COUNT;
   atomic_init (&queue.next, 0u);
   performance->parallel_section_workers = run_section_group_queue (
       &queue, performance->worker_count);
+  performance->spatial_merge_ms = milliseconds_from_nanoseconds (
+      spatial ? spatial->merge_nanoseconds : 0);
   for (group = 0; group < SECTION_GROUP_COUNT; group++)
     {
       uint64_t base;
-      uint64_t remaining;
+      uint64_t source_lengths[2];
+      FILE *source_files[2];
+      size_t source_count = 0;
+      size_t source_index;
       size_t section;
       performance->section_group_ms[group]
           = milliseconds_from_nanoseconds (tasks[group].elapsed);
@@ -18098,27 +18199,50 @@ write_section_groups (
                                  : "cannot write scene-cache section group");
           goto done;
         }
-      if (!align_writer (writer, &base)
-          || fseeko (tasks[group].file, 0, SEEK_SET) != 0)
+      if (tasks[group].direct_output)
+        continue;
+      if (!align_writer (writer, &base))
         {
           set_error (writer, "cannot concatenate scene-cache sections");
           goto done;
         }
-      remaining = tasks[group].byte_length;
-      while (remaining)
+      if (tasks[group].prefix_file)
         {
-          size_t requested
-              = remaining < sizeof (copy_buffer)
-                    ? (size_t)remaining
-                    : sizeof (copy_buffer);
-          if (fread (copy_buffer, 1, requested, tasks[group].file)
-                  != requested
-              || !write_bytes (writer, copy_buffer, requested))
+          source_files[source_count] = tasks[group].prefix_file;
+          source_lengths[source_count++]
+              = tasks[group].prefix_byte_length;
+        }
+      source_files[source_count] = tasks[group].file;
+      source_lengths[source_count++]
+          = tasks[group].byte_length
+            - tasks[group].prefix_byte_length;
+      for (source_index = 0; source_index < source_count;
+           source_index++)
+        {
+          uint64_t remaining = source_lengths[source_index];
+          if (fseeko (source_files[source_index], 0, SEEK_SET) != 0)
             {
               set_error (writer, "cannot concatenate scene-cache sections");
               goto done;
             }
-          remaining -= requested;
+          while (remaining)
+            {
+              size_t requested
+                  = remaining < sizeof (copy_buffer)
+                        ? (size_t)remaining
+                        : sizeof (copy_buffer);
+              if (fread (
+                      copy_buffer, 1, requested,
+                      source_files[source_index])
+                      != requested
+                  || !write_bytes (writer, copy_buffer, requested))
+                {
+                  set_error (
+                      writer, "cannot concatenate scene-cache sections");
+                  goto done;
+                }
+              remaining -= requested;
+            }
         }
       for (section = first_sections[group];
            section <= last_sections[group]; section++)
@@ -18135,8 +18259,12 @@ write_section_groups (
 
 done:
   for (group = 0; group < SECTION_GROUP_COUNT; group++)
-    if (tasks[group].file)
-      fclose (tasks[group].file);
+    {
+      if (tasks[group].prefix_file)
+        fclose (tasks[group].prefix_file);
+      if (tasks[group].owns_file && tasks[group].file)
+        fclose (tasks[group].file);
+    }
   return success;
 }
 
@@ -18276,7 +18404,7 @@ write_scene_preview (
       || !write_empty_fixed_section (&writer, &sections[17], 17)
       || !write_gpu_sections (
           &writer, dwg, tables, &preview_gpu_lines, overview, NULL,
-          &sections[18], &sections[19], 1)
+          &sections[18], &sections[19], 1, 0, NULL, NULL)
       || !write_empty_string_section (&writer, &sections[20], 20))
     goto done;
   for (index = 21; index <= 33; index++)

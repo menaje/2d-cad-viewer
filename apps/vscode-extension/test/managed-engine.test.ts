@@ -147,14 +147,18 @@ test("downloads, validates, installs, and reuses the exact engine", async (conte
   assert.equal(second.reused, true);
   assert.deepEqual(await readFile(first.adapterPath), engineBytes);
   assert.equal(downloads, 1);
-  assert.equal(diagnoses >= 2, true);
+  assert.equal(diagnoses, 2);
   assert.match(first.sourceUrl, /dwg-viewer-libredwg-0\.14-darwin-arm64/u);
 
-  await writeFile(first.adapterPath, Buffer.from("corrupt"));
+  await writeFile(
+    first.adapterPath,
+    Buffer.alloc(engineBytes.byteLength, 0x78),
+  );
   const repaired = await manager.ensure();
   assert.equal(repaired.reused, false);
   assert.deepEqual(await readFile(repaired.adapterPath), engineBytes);
   assert.equal(downloads, 2);
+  assert.equal(diagnoses, 4);
 });
 
 test("rejects a download whose digest differs from the catalog", async (context) => {

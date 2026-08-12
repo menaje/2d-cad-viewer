@@ -193,8 +193,10 @@ used as a reproducible product dependency.
 - It is the only candidate below the 600,000,000-byte target and
   800,000,000-byte hard limit.
 - Its direct C-to-cache writer avoids a second full drawing object graph.
-- Bounded repeated passes, 8,192-record sort runs and disk-backed Morton
-  ordering keep conversion memory at the parser-dominated level.
+- Bounded repeated passes, 8,192-record sort runs and a direct k-way merge
+  from the disk-backed Morton runs into the GPU encoder keep conversion memory
+  at the parser-dominated level without a second globally sorted temporary
+  file.
 - Korean strings and CP949 support are available in the native parse path,
   while SHX/BigFont glyph parsing stays lazy in the Webview.
 - Public cross-engine fixtures validate all current HATCH modes and exact
@@ -231,6 +233,11 @@ progressive run reached 1,824 ms but used 664,686,480 bytes, missing the
 bytes and failed the 800 MB hard limit. `dwgViewer.progressivePreview`
 therefore defaults to `false`; users can explicitly trade memory for the
 earlier frame without changing the chosen parser or canonical cache.
+
+Validated overview artifacts are stored under a deterministic identity that
+is separate from the canonical full cache. A forced or interrupted rebuild can
+therefore publish the existing overview immediately and avoid regenerating it;
+the first conversion still has the same LibreDWG parse-memory peak.
 
 ## WASM backend qualification
 

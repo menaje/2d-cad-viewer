@@ -78,6 +78,12 @@ and must be deleted after the full cache replaces it.
 
 Section kinds currently written:
 
+Directory order defines section identity but does not require payloads to be
+stored in kind order. Every payload must be 8-byte aligned, contained within
+the declared file size and non-overlapping. This permits the native writer to
+place the large kind-31 vertex body before the small kind-30 batch directory
+while writing the vertex body directly to its final range.
+
 | Kind | Payload |
 | ---: | --- |
 | 1 | drawing metadata and bounds |
@@ -299,6 +305,12 @@ offsets 56–63 are reserved and readers expose an empty XREF path. A v1.12
 writer retains the path stored by the DWG—relative, Windows drive, UNC or
 POSIX—without converting it to the current machine's path syntax. The host
 resolves that portable source string and never rewrites the original drawing.
+Writers set bit 2 whenever LibreDWG identifies the block as an XREF or retains
+a non-empty external path. The v1.21 compatibility path also normalizes a
+record that has bit 4 and a non-empty path but lacks bit 2; this preserves XREF
+discovery for compatible caches written from LibreDWG revisions that omit
+`blkisxref` while retaining `xref_pname`. Version 1.22+ readers preserve the
+explicit XREF, loaded and resolved state without that legacy inference.
 
 ## Shared block-instance records
 

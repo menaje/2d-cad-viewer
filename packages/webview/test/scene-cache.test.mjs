@@ -924,6 +924,52 @@ test("rejects XREF state bits on a non-XREF block", async () => {
   await assert.rejects(reader.readBlocks(), /invalid XREF state/u);
 });
 
+test("recovers the XREF flag when an existing cache only marks its path", async () => {
+  const buffer = makeFixtureCache({ minorVersion: 21 });
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  for (let index = 0; index < sectionCount; index += 1) {
+    const directoryOffset = 64 + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(directoryOffset, true) === SectionKind.Blocks) {
+      const sectionOffset = Number(
+        view.getBigUint64(directoryOffset + 8, true),
+      );
+      view.setUint32(sectionOffset + 16 + 2 * 64 + 24, 1 << 4, true);
+      break;
+    }
+  }
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  const blocks = await reader.readBlocks();
+
+  assert.equal(blocks[2].flags & (1 << 2), 1 << 2);
+  assert.equal(blocks[2].flags & (1 << 4), 1 << 4);
+});
+
+test("does not infer an XREF flag for current caches", async () => {
+  const buffer = makeFixtureCache();
+  const view = new DataView(buffer);
+  const sectionCount = view.getUint32(16, true);
+  for (let index = 0; index < sectionCount; index += 1) {
+    const directoryOffset = 64 + index * DIRECTORY_ENTRY_SIZE;
+    if (view.getUint32(directoryOffset, true) === SectionKind.Blocks) {
+      const sectionOffset = Number(
+        view.getBigUint64(directoryOffset + 8, true),
+      );
+      view.setUint32(sectionOffset + 16 + 2 * 64 + 24, 1 << 4, true);
+      break;
+    }
+  }
+
+  const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
+  const blocks = await reader.readBlocks();
+
+  assert.equal(blocks[2].flags & (1 << 2), 0);
+  assert.equal(blocks[2].flags & (1 << 4), 1 << 4);
+  assert.equal(blocks[2].xrefLoaded, false);
+  assert.equal(blocks[2].xrefResolved, false);
+});
+
 test("reads bounded INSERT XCLIP metadata", async () => {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(makeFixtureCache()),

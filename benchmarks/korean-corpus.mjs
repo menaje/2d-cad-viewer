@@ -318,9 +318,15 @@ async function executeBenchmark(inputPath, options) {
     "--warmup-runs",
     String(options.warmupRuns),
   ];
+  const runnerExtension = path.extname(options.runnerPath).toLowerCase();
+  const nodeRunner = [".cjs", ".js", ".mjs"].includes(
+    runnerExtension,
+  );
   const { stdout } = await execFile(
-    options.runnerPath,
-    arguments_,
+    nodeRunner ? process.execPath : options.runnerPath,
+    nodeRunner
+      ? [options.runnerPath, ...arguments_]
+      : arguments_,
     {
       encoding: "utf8",
       maxBuffer: MAX_REPORT_BYTES,

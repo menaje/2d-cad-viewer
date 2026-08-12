@@ -88,6 +88,19 @@ export interface ManagedEngineInstallation {
   readonly sha256: string;
 }
 
+interface ManagedEngineFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+
+interface ValidatedManagedEngine {
+  readonly installation: ManagedEngineInstallation;
+  readonly identity: ManagedEngineFileIdentity;
+}
+
 interface FetchHeaders {
   get(name: string): string | null;
 }
@@ -298,6 +311,19 @@ function isNotFound(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
+function sameManagedEngineFile(
+  left: ManagedEngineFileIdentity,
+  right: ManagedEngineFileIdentity,
+): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
 export class ManagedEngineManager {
   private readonly platform: NodeJS.Platform;
   private readonly architecture: string;
@@ -306,6 +332,7 @@ export class ManagedEngineManager {
     adapterPath: string,
   ) => Promise<LibreDwgDoctorReport>;
   private provisionPromise?: Promise<ManagedEngineInstallation>;
+  private validatedEngine?: ValidatedManagedEngine;
 
   constructor(private readonly options: ManagedEngineManagerOptions) {
     this.platform = options.platform ?? process.platform;
@@ -322,7 +349,7 @@ export class ManagedEngineManager {
 
   ensure(): Promise<ManagedEngineInstallation> {
     if (!this.provisionPromise) {
-      const provision = this.provision();
+      const provision = this.ensureValidated();
       this.provisionPromise = provision;
       void provision.then(
         () => {
@@ -338,6 +365,64 @@ export class ManagedEngineManager {
       );
     }
     return this.provisionPromise;
+  }
+
+  private async engineFileIdentity(
+    adapterPath: string,
+  ): Promise<ManagedEngineFileIdentity | undefined> {
+    try {
+      const metadata = await lstat(adapterPath, { bigint: true });
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        return undefined;
+      }
+      return {
+        dev: metadata.dev,
+        ino: metadata.ino,
+        size: metadata.size,
+        mtimeNs: metadata.mtimeNs,
+        ctimeNs: metadata.ctimeNs,
+      };
+    } catch (error) {
+      if (isNotFound(error)) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async ensureValidated(): Promise<ManagedEngineInstallation> {
+    const validated = this.validatedEngine;
+    if (validated) {
+      const currentIdentity = await this.engineFileIdentity(
+        validated.installation.adapterPath,
+      );
+      if (
+        currentIdentity &&
+        sameManagedEngineFile(validated.identity, currentIdentity)
+      ) {
+        this.options.onEvent?.("reused", {
+          target: validated.installation.target,
+          adapterPath: validated.installation.adapterPath,
+          sessionValidated: true,
+        });
+        return Object.freeze({
+          ...validated.installation,
+          reused: true,
+        });
+      }
+      this.validatedEngine = undefined;
+    }
+
+    const installation = await this.provision();
+    const identity = await this.engineFileIdentity(installation.adapterPath);
+    if (!identity) {
+      throw new SceneEngineError(
+        "ENGINE_INSTALL_REJECTED",
+        "설치된 DWG 변환기를 최종 검증하지 못했습니다.",
+      );
+    }
+    this.validatedEngine = { installation, identity };
+    return installation;
   }
 
   private async readCatalog(target: string): Promise<ManagedEngineCatalog> {

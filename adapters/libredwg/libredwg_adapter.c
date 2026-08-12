@@ -39,6 +39,7 @@
 #if defined(_WIN32)
 #include <io.h>
 #include <windows.h>
+#include <psapi.h>
 #define close _close
 #define dup _dup
 #define dup2 _dup2
@@ -370,21 +371,96 @@ monotonic_now (struct timespec *value)
 #endif
 }
 
-static uint64_t
-peak_rss_bytes (void)
+typedef struct
 {
+  uint64_t working_set_bytes;
+  uint64_t private_bytes;
+  uint64_t peak_rss_bytes;
+  uint64_t peak_private_bytes;
+} ProcessMemoryMetrics;
+
+typedef struct
+{
+  uint64_t read_operations;
+  uint64_t write_operations;
+  uint64_t read_bytes;
+  uint64_t write_bytes;
+} ProcessIoMetrics;
+
+static ProcessMemoryMetrics
+process_memory_metrics (void)
+{
+  ProcessMemoryMetrics result = { 0, 0, 0, 0 };
 #if defined(__unix__) || defined(__APPLE__)
   struct rusage usage;
   if (getrusage (RUSAGE_SELF, &usage) != 0 || usage.ru_maxrss < 0)
-    return 0;
+    return result;
 #if defined(__APPLE__)
-  return (uint64_t)usage.ru_maxrss;
+  result.peak_rss_bytes = (uint64_t)usage.ru_maxrss;
 #else
-  return (uint64_t)usage.ru_maxrss * 1024u;
+  result.peak_rss_bytes = (uint64_t)usage.ru_maxrss * 1024u;
 #endif
-#else
-  return 0;
+#elif defined(_WIN32)
+  {
+    typedef BOOL (WINAPI *GetProcessMemoryInfoFunction) (
+        HANDLE, PPROCESS_MEMORY_COUNTERS, DWORD);
+    HMODULE module = GetModuleHandleA ("kernel32.dll");
+    HMODULE loaded_module = NULL;
+    GetProcessMemoryInfoFunction get_process_memory_info = NULL;
+    PROCESS_MEMORY_COUNTERS_EX counters;
+    if (module)
+      {
+        FARPROC procedure
+            = GetProcAddress (module, "K32GetProcessMemoryInfo");
+        memcpy (&get_process_memory_info, &procedure,
+                sizeof (get_process_memory_info));
+      }
+    if (!get_process_memory_info)
+      {
+        loaded_module = LoadLibraryA ("psapi.dll");
+        if (loaded_module)
+          {
+            FARPROC procedure = GetProcAddress (
+                loaded_module, "GetProcessMemoryInfo");
+            memcpy (&get_process_memory_info, &procedure,
+                    sizeof (get_process_memory_info));
+          }
+      }
+    memset (&counters, 0, sizeof (counters));
+    counters.cb = sizeof (counters);
+    if (get_process_memory_info
+        && get_process_memory_info (
+            GetCurrentProcess (), (PPROCESS_MEMORY_COUNTERS)&counters,
+            sizeof (counters)))
+      {
+        result.working_set_bytes = (uint64_t)counters.WorkingSetSize;
+        result.private_bytes = (uint64_t)counters.PrivateUsage;
+        result.peak_rss_bytes = (uint64_t)counters.PeakWorkingSetSize;
+        result.peak_private_bytes = (uint64_t)counters.PeakPagefileUsage;
+      }
+    if (loaded_module)
+      FreeLibrary (loaded_module);
+  }
 #endif
+  return result;
+}
+
+static ProcessIoMetrics
+process_io_metrics (void)
+{
+  ProcessIoMetrics result = { 0, 0, 0, 0 };
+#if defined(_WIN32)
+  IO_COUNTERS counters;
+  memset (&counters, 0, sizeof (counters));
+  if (GetProcessIoCounters (GetCurrentProcess (), &counters))
+    {
+      result.read_operations = (uint64_t)counters.ReadOperationCount;
+      result.write_operations = (uint64_t)counters.WriteOperationCount;
+      result.read_bytes = (uint64_t)counters.ReadTransferCount;
+      result.write_bytes = (uint64_t)counters.WriteTransferCount;
+    }
+#endif
+  return result;
 }
 
 static int
@@ -887,7 +963,7 @@ inspect_dwg (const char *path)
   uint64_t blocks = 0;
   uint64_t block_references = 0;
   uint64_t objects;
-  uint64_t peak_rss;
+  ProcessMemoryMetrics memory;
   uint64_t parse_ms;
   uint64_t analysis_ms;
   uint64_t total_ms;
@@ -1030,7 +1106,7 @@ inspect_dwg (const char *path)
   parse_ms = elapsed_ms (&started, &parsed);
   analysis_ms = elapsed_ms (&parsed, &analyzed);
   total_ms = elapsed_ms (&started, &analyzed);
-  peak_rss = peak_rss_bytes ();
+  memory = process_memory_metrics ();
   objects = raw_objects - table_objects;
 
   fputs ("{\"schema\":\"" REPORT_SCHEMA "\",\"status\":\"ok\",", stdout);
@@ -1099,8 +1175,18 @@ inspect_dwg (const char *path)
   printf ("\"performance\":{\"parse_ms\":%" PRIu64
           ",\"analysis_ms\":%" PRIu64 ",\"total_ms\":%" PRIu64,
           parse_ms, analysis_ms, total_ms);
-  if (peak_rss)
-    printf (",\"peak_rss_bytes\":%" PRIu64, peak_rss);
+  if (memory.peak_rss_bytes)
+    printf (",\"peak_rss_bytes\":%" PRIu64,
+            memory.peak_rss_bytes);
+  if (memory.peak_private_bytes)
+    printf (",\"peak_private_bytes\":%" PRIu64,
+            memory.peak_private_bytes);
+  if (memory.working_set_bytes)
+    printf (",\"working_set_bytes\":%" PRIu64,
+            memory.working_set_bytes);
+  if (memory.private_bytes)
+    printf (",\"private_bytes\":%" PRIu64,
+            memory.private_bytes);
   fputs ("},\"entity_types\":", stdout);
   json_counter_map (&entity_types);
   fputs (",\"unknown_entities\":{\"count\":", stdout);
@@ -1360,7 +1446,9 @@ convert_dwg (const char *path, const char *output_path)
   uint64_t parse_ms;
   uint64_t write_ms;
   uint64_t total_ms;
-  uint64_t peak_rss;
+  ProcessMemoryMetrics parse_memory;
+  ProcessMemoryMetrics memory;
+  ProcessIoMetrics io;
   uint64_t source_size;
   unsigned int error;
   size_t i;
@@ -1419,6 +1507,7 @@ convert_dwg (const char *path, const char *output_path)
       fputs ("cannot read monotonic timer\n", stderr);
       goto done;
     }
+  parse_memory = process_memory_metrics ();
   if (error >= DWG_ERR_CRITICAL)
     {
       fprintf (stderr, "LibreDWG parse failed (0x%x)\n", error);
@@ -1448,7 +1537,8 @@ convert_dwg (const char *path, const char *output_path)
   parse_ms = elapsed_ms (&started, &parsed);
   write_ms = elapsed_ms (&parsed, &written);
   total_ms = elapsed_ms (&started, &written);
-  peak_rss = peak_rss_bytes ();
+  memory = process_memory_metrics ();
+  io = process_io_metrics ();
 
   fputs ("{\"schema\":\"" CONVERSION_REPORT_SCHEMA
          "\",\"status\":\"ok\",",
@@ -1529,8 +1619,38 @@ convert_dwg (const char *path, const char *output_path)
           report.performance.section_group_ms[4],
           report.performance.section_group_ms[5],
           report.performance.section_group_ms[6]);
-  if (peak_rss)
-    printf (",\"peak_rss_bytes\":%" PRIu64, peak_rss);
+  if (memory.peak_rss_bytes)
+    printf (",\"peak_rss_bytes\":%" PRIu64,
+            memory.peak_rss_bytes);
+  if (memory.peak_private_bytes)
+    printf (",\"peak_private_bytes\":%" PRIu64,
+            memory.peak_private_bytes);
+  if (memory.working_set_bytes)
+    printf (",\"working_set_bytes\":%" PRIu64,
+            memory.working_set_bytes);
+  if (memory.private_bytes)
+    printf (",\"private_bytes\":%" PRIu64,
+            memory.private_bytes);
+  if (parse_memory.peak_rss_bytes)
+    printf (",\"parse_peak_rss_bytes\":%" PRIu64,
+            parse_memory.peak_rss_bytes);
+  if (parse_memory.peak_private_bytes)
+    printf (",\"parse_peak_private_bytes\":%" PRIu64,
+            parse_memory.peak_private_bytes);
+  if (parse_memory.working_set_bytes)
+    printf (",\"parse_working_set_bytes\":%" PRIu64,
+            parse_memory.working_set_bytes);
+  if (parse_memory.private_bytes)
+    printf (",\"parse_private_bytes\":%" PRIu64,
+            parse_memory.private_bytes);
+  if (io.read_operations || io.write_operations
+      || io.read_bytes || io.write_bytes)
+    printf (",\"io_read_operations\":%" PRIu64
+            ",\"io_write_operations\":%" PRIu64
+            ",\"io_read_bytes\":%" PRIu64
+            ",\"io_write_bytes\":%" PRIu64,
+            io.read_operations, io.write_operations,
+            io.read_bytes, io.write_bytes);
   printf ("},\"diagnostics\":%" PRIu64 "}\n",
           diagnostic_count (error));
   if (fflush (stdout) != 0 || ferror (stdout))

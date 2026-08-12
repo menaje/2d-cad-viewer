@@ -14,8 +14,10 @@ selected worker; the temporary files are mode `0600`, close-on-exec, and
 removed automatically.
 GPU batch metadata and its packed 36-byte vertices are generated together in
 one geometry pass, with each bounded batch written as one vertex buffer rather
-than one field at a time. The final batch and vertex sections retain their
-existing deterministic byte layout.
+than one field at a time. The full-cache vertex body is written directly to
+its final range and only the small batch directory is staged and appended.
+Section bodies retain their deterministic byte layout even though those two
+physical ranges no longer follow kind order.
 HATCH sections use repeated bounded passes and retain at most one 65,536-point
 ring (about 1.5 MiB) while streaming. Pattern-definition lines and dash values
 are streamed in separate bounded passes, and no whole-drawing fill or pattern
@@ -206,10 +208,10 @@ graph or a higher parser memory class.
 ## Portable build and self-diagnosis
 
 The reproducible path downloads checksum-pinned LibreDWG and pkgconf sources,
-applies the repository's reviewed ACDS SAT/SAB and R2007 high-compression
-patches, builds a stripped adapter with LibreDWG linked statically under a new
-private directory, and writes the adapter to a new path. It never installs a
-system package:
+applies the repository's reviewed ACDS SAT/SAB, R2007 high-compression and
+seekable-stdin bulk-read patches, builds a stripped adapter with LibreDWG
+linked statically under a new private directory, and writes the adapter to a
+new path. It never installs a system package:
 
 ```bash
 adapters/libredwg/prepare.sh \
@@ -294,7 +296,7 @@ The packager refuses to overwrite a file, rejects a dynamic LibreDWG
 dependency, local build paths, a wrong source checksum or an incompatible
 doctor report. The archive includes the executable, unmodified GPL and MPL
 license texts, the DWG Viewer project notice, checksums, a machine-readable
-manifest, all adapter build sources (including both reviewed source patches)
+manifest, all adapter build sources (including the reviewed source patches)
 and the exact LibreDWG 0.14 source archive.
 Fixed metadata and sorted entries make repeated packaging from the same target
 binary byte-identical. The included repository license, notice and package
@@ -349,13 +351,25 @@ exits.
 
 The native writer resolves LibreDWG object references before parallel work,
 sorts copied spatial records across available cores, and writes seven
-independent contiguous section groups concurrently before deterministic
-concatenation. The GPU section group fuses batch-directory and packed-vertex
-generation into one traversal and buffers each batch before writing.
+independent section groups concurrently. The largest GPU vertex group writes
+directly to the final cache; six smaller groups are concatenated
+deterministically from bounded private files. The GPU section group fuses
+batch-directory and packed-vertex generation into one traversal and buffers
+each batch before writing.
+
+The remaining group staging is intentional. A physical-Windows A/B made the
+118,534,328-byte entity-geometry body write directly to the final cache. It
+removed 118,993,776 process-read bytes and 118,534,328 process-write bytes, but
+median wall time increased from 10,423 ms to 11,086 ms (+6.4%) and median
+adapter write time increased from 6,163 ms to 6,821 ms. Concurrent writes and
+final-file allocation outweighed the avoided copy, so that experiment was
+reverted and the six bounded group files remain.
 `DWG_VIEWER_CONVERSION_WORKERS=1..8` can override the automatic
 online-CPU count for qualification. The conversion report records the selected
 worker count, actual sort and section concurrency, coarse stages, spatial-sort
-sub-stages, and each section-group duration under `performance`.
+sub-stages, each section-group duration, parse-boundary and final current/peak
+working set and private bytes, plus Windows process I/O operations and bytes
+under `performance`.
 
 LibreDWG exposes block markers, polyline vertices and attached attributes as
 separate raw entities. The adapter keeps raw counts under `drawing.raw_*` and

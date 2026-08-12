@@ -70,7 +70,16 @@ function executable(name) {
 }
 
 function run(command, arguments_, { cwd = repositoryRoot } = {}) {
-  const result = spawnSync(command, arguments_, {
+  const commandExtension = path.extname(command).toLowerCase();
+  const windowsCommandShim =
+    process.platform === "win32" && commandExtension === ".cmd";
+  const childCommand = windowsCommandShim
+    ? (process.env.ComSpec ?? "cmd.exe")
+    : command;
+  const childArguments = windowsCommandShim
+    ? ["/d", "/s", "/c", command, ...arguments_]
+    : arguments_;
+  const result = spawnSync(childCommand, childArguments, {
     cwd,
     encoding: "utf8",
     env: {
