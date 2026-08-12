@@ -73,6 +73,21 @@ const VARIABLE_CONTRACTS = Object.freeze({
     values: Object.freeze([0, 1]),
     normalize: Boolean,
   }),
+  DISPSILHBLOCKS: Object.freeze({
+    field: "displaySilhouettesInBlocks",
+    values: Object.freeze([0, 1]),
+    normalize: Boolean,
+  }),
+  IMAGEQUALITY: Object.freeze({
+    field: "rasterImageQualityHigh",
+    values: Object.freeze([0, 1]),
+    normalize: Boolean,
+  }),
+  VISRETAIN: Object.freeze({
+    field: "retainExternalReferenceLayers",
+    values: Object.freeze([0, 1]),
+    normalize: Boolean,
+  }),
   XREFOVERRIDE: Object.freeze({
     field: "externalReferenceOverrides",
     values: Object.freeze([0, 1]),
@@ -223,6 +238,25 @@ function stateStem(caseId, value) {
   return `${caseId}-${value}`;
 }
 
+function autoCadSettingCommand(variable) {
+  if (variable === "IMAGEQUALITY") {
+    return '  (command "_.IMAGEQUALITY" (if (= (car dwgv-state) 0) "_Draft" "_High"))';
+  }
+  return `  (setvar "${variable}" (car dwgv-state))`;
+}
+
+function autoCadReloadCommand(variable) {
+  return variable === "VISRETAIN"
+    ? '  (command "_.-XREF" "_Reload" "*")'
+    : null;
+}
+
+function autoCadObservedExpression(variable) {
+  return variable === "IMAGEQUALITY"
+    ? '(cdr (assoc 71 (dictsearch (namedobjdict) "ACAD_IMAGE_VARS")))'
+    : `(getvar "${variable}")`;
+}
+
 export function createAutoCadPairScript({
   caseId,
   layoutName,
@@ -237,6 +271,9 @@ export function createAutoCadPairScript({
   const states = values
     .map((value) => `(${value} "${stateStem(caseId, value)}")`)
     .join(" ");
+  const settingCommand = autoCadSettingCommand(variable);
+  const reloadCommand = autoCadReloadCommand(variable);
+  const observedExpression = autoCadObservedExpression(variable);
   const context = [];
   if (space === "model") {
     context.push("(setvar \"TILEMODE\" 1)");
@@ -260,11 +297,12 @@ export function createAutoCadPairScript({
     ...context,
     "(command \"_.ZOOM\" \"_Extents\")",
     `(foreach dwgv-state '(${states})`,
-    `  (setvar "${variable}" (car dwgv-state))`,
+    settingCommand,
+    ...(reloadCommand ? [reloadCommand] : []),
     "  (command \"_.REGENALL\")",
     `  (command "_.PNGOUT" (strcat "${output}/" (cadr dwgv-state) ".png") "")`,
     `  (vla-SaveAs dwgv-doc (strcat "${output}/" (cadr dwgv-state) ".dwg"))`,
-    `  (dwgv-write (strcat "STATE\\t" (itoa (car dwgv-state)) "\\t" (getvar "CTAB") "\\t" (itoa (getvar "TILEMODE")) "\\t" (vl-princ-to-string (getvar "${variable}"))))`,
+    `  (dwgv-write (strcat "STATE\\t" (itoa (car dwgv-state)) "\\t" (getvar "CTAB") "\\t" (itoa (getvar "TILEMODE")) "\\t" (vl-princ-to-string ${observedExpression})))`,
     ")",
     `(setq dwgv-ready-stream (open "${readyPath}" "w"))`,
     "(write-line \"pass\" dwgv-ready-stream)",

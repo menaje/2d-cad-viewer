@@ -58,13 +58,17 @@ also present in qualification evidence.
 | `SPLFRAME` | Scene Cache v1.25 preserves the saved boolean. When enabled, invisible 3DFACE edges are restored. Autodesk's current definition also exposes HELIX control polygons, unsmoothed mesh objects and polyface edges. | Implemented for qualified 3DFACE records. HELIX, smoothed mesh reconstruction and polyface topology remain explicit 3D/mesh boundaries; a spline-fit 2D POLYLINE frame is not invented from this variable. The AutoCAD-created 0/1 native-pixel pair remains an external gate. |
 | `DISPSILH` | Scene Cache v1.25 preserves the saved boolean controlling 3D-solid silhouette display in 2D Wireframe. | Preserved, but silhouette extraction remains inside the explicit 3D boundary. A 0/1 native pair must stay pending rather than accepting the existing bounded SAT edge representation as silhouette parity. |
 | `XREFOVERRIDE` | Scene Cache v1.25 preserves the saved boolean. For objects inside a mounted DWG xref, value 1 resolves explicit color, linetype, lineweight and transparency as ByLayer through the host xref-layer mapping, including nested instances and Canvas/raster paths. The rule is not applied merely because an IMAGE, OLE or underlay file is itself an external resource. | Implemented for the four normalized properties. Per-object named plot-style override remains deferred with STB, and a real host/child xref 0/1 pair is required. |
-| `VISRETAIN` | Autodesk reloads xref-dependent layer visibility and properties from the child when the saved value is 0; the host layer table wins when it is 1. | Needs modification. The current external-layer map always uses the host's serialized xref-dependent layer records, which matches value 1. A value-0 host/child pair remains a fail-closed XREF gate until child on/off, freeze, color, linetype, lineweight and transparency can populate external visibility/style rows without mutating root layers. |
+| `VISRETAIN` | Scene Cache v1.26 preserves the saved boolean. Value 1 keeps the host's xref-dependent layer table. At value 0, mounting or reloading a child copies its matching on/off, freeze, lock, plot, color/transparency, linetype and lineweight state into immutable display rows for the exact nested XREF prefix. Root source metadata is not mutated and an explicit viewport override remains authoritative. | Implemented for mounted 2D XREF content, including prefix-qualified linetypes and nested contexts. Missing child rows retain the host value. A real host/child reload pair and packaged viewer capture remain external gates. |
+| `IMAGEQUALITY` | Scene Cache v1.26 reads the drawing's `RASTERVARIABLES` object. High enables high-quality Canvas sampling; Draft disables interpolation so source pixels remain visibly coarse. Embedded OLE presentations stay high quality because Autodesk scopes this command to raster IMAGE display. | Implemented for decoded IMAGE content. Autodesk states that plotting always uses high quality, so the native pair uses `PNGOUT`, which Autodesk documents as reflecting screen display, and must contain a loaded color/grayscale raster whose decoded pixels differ. |
+| `DISPSILHBLOCKS` | Scene Cache v1.26 preserves this drawing-saved boolean separately from `DISPSILH`. | Preserved, but generation and caching of 3D-solid silhouettes inside block instances remains inside the explicit 3D boundary. A native 0/1 block-solid pair must not be used to claim viewer silhouette support. |
 | XREF state | Original path plus XREF, overlay, loaded and resolved flags are preserved. Unloaded or unresolved references are not resolved or mounted. Nested INSERT/XREF transforms and XCLIP are applied to qualified child content. | Implemented. A redistributable loaded/unloaded/resolved/unresolved AutoCAD fixture is still required for reference pixels. |
 | VIEWPORT group 68 and status group 90 | Nonpositive group 68, invisible entities and group-90 off bit `0x20000` are excluded. Positive group 68 supplies stacking order. The primary paper viewport is not drawn as a model viewport. | Implemented. |
 | VIEWPORT perspective, front/back clipping and render mode | Perspective and front/back clipping flags, hidden/shaded render modes and related saved values are preserved. Unsupported model viewports are omitted with named reasons instead of being flattened as 2D Wireframe. Wireframe mode 0/1 remains eligible. | Explicit fail-closed boundary. |
 | `FRAME` family | `FRAME`, `IMAGEFRAME`, `XCLIPFRAME`, `OLEFRAME`, `PDFFRAME`, `DWFFRAME` and `DGNFRAME` values are preserved when present. `FRAME` 0/1/2 overrides IMAGE, XCLIP and WIPEOUT settings; its derived mixed value 3 selects each individual setting. `OLEFRAME` remains independent. Unavailable values remain unavailable. Values 0/1/2 retain the visible-versus-plot distinction even though the interactive viewer performs no plot job. | Implemented for supported IMAGE, XCLIP, WIPEOUT and OLE presentation boundaries. Underlay entities themselves remain deferred. |
 | `LTSCALE`, entity linetype scale, `MSLTSCALE`, `PSLTSCALE` | Global, per-entity, model-annotation and paper-viewport scale factors are combined for first-frame lines, complex linetype overlays and high-zoom curve/XLINE/RAY refinement. | Implemented with bounded dash/shape/text tables. |
 | `LWDISPLAY` | Drawing-wide lineweight visibility is saved. Layout lineweights use paper units, layout/model scale and device pixels; the displayed width is zoom/DPI aware and capped. | Implemented for the 2D renderer. Plot-device end/join styles are not independently reconstructed. |
+| `VIEWRES` / curve display resolution | Autodesk saves VIEWRES in the drawing and, with hardware acceleration disabled, can deliberately show circles, arcs, splines and arced polylines as coarse vectors. The viewer instead retains analytic curve sources and refines them to a bounded half-pixel screen tolerance. | Known fidelity-policy difference, not an object-presence loss. Scene Cache does not yet preserve the per-viewport VIEWRES value, so an exact low-VIEWRES polygonal screen is a remaining contract change. Native evidence must record hardware acceleration and `WHIPARC`; ordinary parity captures use a smooth-curve profile. |
+| `SORTENTS` | Current AutoCAD releases always sort REGEN display order; the former bit 16 is obsolete. The viewer therefore uses each owner record's `SORTENTSTABLE` rather than treating the current `SORTENTS` bit mask as a screen-display switch. | No modification required for current AutoCAD. Selection, object-snap and plot-only sorting choices are outside the ordinary screen renderer. |
 | `PROXYSHOW` / `PROXYGRAPHICS` | `PROXYSHOW` is not stored in a DWG, so the adapter uses AutoCAD's default value `1`. It renders only an allowlisted proxy-graphics primitive stream and defers a malformed or unsupported stream atomically. | Implemented policy; object-enabler reconstruction is out of scope. |
 
 Autodesk documents `FILLMODE` as affecting hatches, 2D solids, wide
@@ -89,7 +93,10 @@ choice.
 | `XDWGFADECTL` | `0` | Native xref fading is disabled for color comparison. AutoCAD's nonzero fade is a profile effect and must not be confused with missing or unresolved xref content. |
 | `LAYLOCKFADECTL` | `0` | Locked-layer fading is disabled for pixel comparison; lock still affects editing, not drawing visibility. |
 | `VISRETAINMODE` | `0` | Xref reload property synchronization is disabled while qualifying `VISRETAIN=1`; nonzero synchronization masks are separate reload-profile cases. |
-| `DISPSILHBLOCKS` | `1` | Block-instance 3D silhouette caching remains inside the explicit DISPSILH/3D boundary and cannot close a 2D entity-family gate. |
+| `PROXYSHOW` | `1` | Qualified proxy graphics are displayed. Values 0 and 2 are distinct registry-profile cases (hidden and bounding-box-only), not drawing decode results. |
+| `WHIPARC` / hardware acceleration | smooth-curve profile recorded | `WHIPARC` is obsolete but can still override VIEWRES under some graphics profiles. It is recorded with hardware acceleration so coarse VIEWRES evidence cannot be mislabeled. |
+| `LINESMOOTHING` | `1` | AutoCAD applies registry-backed 2D antialiasing. Pixel evidence records this separately from object geometry because WebGL/Canvas rasterization is not expected to be byte-identical. |
+| `LINEFADING` | `0` | Density-triggered hardware line fading is disabled so a missing-looking line cannot be accepted as source visibility behavior. |
 | `RTDISPLAY` | `0` | Static first-frame evidence is captured after pan/zoom has ended. Temporary raster/OLE suppression during real-time navigation is outside this loading-excluded audit. |
 
 Viewer background color, reduced-quality/progressive-display modes, font and
@@ -186,13 +193,17 @@ The current run records:
 - deferred partition: 43 unresolved dimensions, 3 underlays, 5 proxy streams,
   18 unsupported 3D entities, 0 invalid supported entities and 39 other
   unsupported entities;
-- 51 required Scene Cache v1.25 sections in every output;
+- 51 required Scene Cache v1.26 sections in every output;
 - zero omitted referenced linetypes;
 - model/layout, presentation-variable, viewport-mode and plot-style state
   distributions plus selected-fixture hashes and section counts;
 - all 141 public-corpus drawings use the saved/default-off state for
-  `QTEXTMODE`, `SPLFRAME`, `DISPSILH` and `XREFOVERRIDE`; this proves v1.25
+  `QTEXTMODE`, `SPLFRAME`, `DISPSILH` and `XREFOVERRIDE`; this proves v1.26
   decoding but deliberately does not replace the missing 0/1 pair fixtures;
+- Scene Cache v1.26 additionally observes `VISRETAIN=1` in 137 drawings and
+  `0` in 4, high `IMAGEQUALITY` in all 141 and `DISPSILHBLOCKS=1` in all 141;
+  the non-default VISRETAIN values prove both cache states are exercised, while
+  raster-quality and block-silhouette 0/1 pixels remain external gates;
 - AutoCAD ActiveX `BasePoint` and `DirectionVector` values for the public
   XLINE/RAY fixtures compared numerically with the decoded Scene Cache values;
 - Browser pixel evidence for HATCH, XLINE, RAY, MLINE, text-only MTEXT,
@@ -245,15 +256,19 @@ pnpm run qualify:autocad-variable-pair `
 ```
 
 The bounded whitelist is `FILLMODE`, `ATTMODE`, `ANNOALLVISIBLE`, `QTEXTMODE`,
-`SPLFRAME`, `DISPSILH`, `XREFOVERRIDE`, `FRAME`, `IMAGEFRAME`, `XCLIPFRAME`,
-`OLEFRAME`, `PDFFRAME`, `DWFFRAME` and `DGNFRAME`. `FRAME=3` is intentionally
+`SPLFRAME`, `DISPSILH`, `DISPSILHBLOCKS`, `IMAGEQUALITY`, `VISRETAIN`,
+`XREFOVERRIDE`, `FRAME`, `IMAGEFRAME`, `XCLIPFRAME`, `OLEFRAME`, `PDFFRAME`,
+`DWFFRAME` and `DGNFRAME`. `IMAGEQUALITY` uses the drawing-backed command and
+reads DXF group 71 from `ACAD_IMAGE_VARS`; `VISRETAIN` reloads every XREF after
+each value. `FRAME=3` is intentionally
 not an input: Autodesk documents it as the derived mixed state, not a manually
 settable value. Each report records
 the source, output DWGs and AutoCAD PNG dimensions and SHA-256 values, the
 source/serialized/deferred partition, and the Scene Cache drawing field read
 back from the AutoCAD save. The v2 report hashes decoded reference pixels and
-fails unless `FILLMODE`, `ANNOALLVISIBLE`, `QTEXTMODE`, `SPLFRAME`, `DISPSILH`
-and `XREFOVERRIDE` 0/1 differ, all three `ATTMODE` states differ, and every
+fails unless `FILLMODE`, `ANNOALLVISIBLE`, `QTEXTMODE`, `SPLFRAME`, `DISPSILH`,
+`DISPSILHBLOCKS`, `IMAGEQUALITY`, `VISRETAIN` and `XREFOVERRIDE` 0/1 differ,
+all three `ATTMODE` states differ, and every
 FRAME-family 0 state differs from the identical on-screen 1/2 states (value 2
 changes plotting, not screen display).
 Every AutoCAD report also records the Windows adapter filename, byte count and
@@ -268,7 +283,7 @@ single-current-space runner does not close those two gates by itself.
 The annotation runner creates one unsupported-scale annotative TEXT, one paper
 layout and one viewport, then captures all four model/layout 0/1 combinations
 without changing either camera. Each saved DWG is reconverted as Scene Cache
-v1.25 and must independently expose both the model and named-layout values:
+v1.26 and must independently expose both the model and named-layout values:
 
 ```powershell
 pnpm run qualify:autocad-annotation-matrix `
@@ -285,7 +300,8 @@ pnpm run qualify:autocad-annotation-matrix `
 Pass the ordinary pairs and dedicated reports back to the aggregate
 qualification. The aggregate gate remains pending until it
 has complete FILLMODE 0/1, ATTMODE 0/1/2, model and layout ANNOALLVISIBLE 0/1,
-QTEXTMODE 0/1, SPLFRAME 0/1, DISPSILH 0/1, XREFOVERRIDE 0/1, and FRAME,
+QTEXTMODE 0/1, SPLFRAME 0/1, DISPSILH 0/1, DISPSILHBLOCKS 0/1,
+IMAGEQUALITY 0/1, VISRETAIN 0/1, XREFOVERRIDE 0/1, and FRAME,
 IMAGEFRAME, XCLIPFRAME and OLEFRAME 0/1/2 reports. Annotation-scale and XREF
 state matrices remain independent completion gates.
 
@@ -330,7 +346,8 @@ boundaries remain explicit rather than being presented as rendered parity.
 
 This corpus does **not** contain `FILLMODE=0`, `ATTMODE=0/2`,
 `ANNOALLVISIBLE=0`, `QTEXTMODE=1`, `SPLFRAME=1`, `DISPSILH=1`,
-`XREFOVERRIDE=1`, FRAME values 1/2 for every family, STB, or a complete XREF
+`DISPSILHBLOCKS=0`, `IMAGEQUALITY=0`, `VISRETAIN=0`, `XREFOVERRIDE=1`,
+FRAME values 1/2 for every family, STB, or a complete XREF
 state matrix. The public AutoCAD reference-image gate is closed by the paired
 set and representative Browser review, while the AutoCAD-created
 system-variable pair gate remains pending. A packaged Windows VS Code run from
@@ -349,6 +366,7 @@ the current implementation also remains pending.
 - [ATTDISP / ATTMODE](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-BCFF32DB-6860-4812-BEF1-3BB658126B26.htm)
 - [ANNOALLVISIBLE](https://help.autodesk.com/cloudhelp/2021/ENU/AutoCAD-Core/files/GUID-D8E50F6F-FB71-4A20-A3B9-7701C0518B81.htm)
 - [QTEXTMODE](https://help.autodesk.com/cloudhelp/2022/ENG/AutoCAD-Core/files/GUID-95370B7F-B389-4026-94B7-7E869BF2AAB6.htm), [SPLFRAME](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-Core/files/GUID-9F9CC9C6-023C-44BC-A0BF-3C25F36C4259.htm) and [DISPSILH](https://help.autodesk.com/cloudhelp/2018/ENU/AutoCAD-Core/files/GUID-AFD89831-0DE8-4398-8774-0C3F8DB0D228.htm)
+- [IMAGEQUALITY](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-Core/files/GUID-19368CF1-3845-4E62-B408-B5036853C261.htm), [raster display versus plot quality](https://help.autodesk.com/cloudhelp/2020/ENU/OARX-ManagedRefGuide/files/OARX-ManagedRefGuide-Autodesk_AutoCAD_DatabaseServices_RasterVariables_ImageQuality.html) and [PNGOUT screen-display behavior](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-Core/files/GUID-DC273B67-42AC-4A2A-9001-4825FF268E5D.htm)
 - [XREFOVERRIDE](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-Core/files/GUID-131E3BBB-A28A-40BC-BDC5-A4486C1E2DBE.htm), [VISRETAIN](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-Core/files/GUID-897B1672-4E09-42E0-B857-A9D1F96ED671.htm), [VISRETAINMODE](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-Core/files/GUID-46480687-6DFF-499E-B7C0-E741AEA11D00.htm) and [xref layer/fade behavior](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-A987D2FF-45BD-474E-99C1-E6316A42F667.htm)
 - [TRANSPARENCYDISPLAY](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-0908F1AC-D122-4B3D-A17C-8705D03A0D0C.htm), [VPLAYEROVERRIDESMODE](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-MAC-Core/files/GUID-C70C14C3-7BF1-4199-BFD4-7AF172E344CB.htm), [OLEHIDE](https://help.autodesk.com/cloudhelp/2026/PTB/AutoCAD-Core/files/GUID-5C49940E-532B-4FDF-8EC4-D75C9779A8B8.htm), [LAYLOCKFADECTL](https://help.autodesk.com/cloudhelp/2016/ENU/AutoCAD-Core/files/GUID-753F2A76-E248-483F-9F55-CCF613B12C31.htm) and [RTDISPLAY](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-BA3CD3F0-A5A3-421A-92EC-C02317F9BE4A.htm)
 - [OBJECTISOLATIONMODE](https://help.autodesk.com/cloudhelp/2019/ENU/AutoCAD-Core/files/GUID-B4ED98BE-62D0-4982-82A2-87B744C56F99.htm), [common entity visibility](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-DXF/files/GUID-3610039E-27D1-4E23-B6D3-7E60B22BB5BD.htm) and [DISPSILHBLOCKS](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-Core/files/GUID-9E293ED4-1C00-4EF1-BD1D-338D2FEEC01B.htm)
@@ -356,6 +374,8 @@ the current implementation also remains pending.
 - [VIEWPORT group codes](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-DXF/files/GUID-2602B0FB-02E4-4B9A-B03C-B1D904753D34.htm)
 - [MSLTSCALE](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-023B046C-56EA-463C-A867-DF713666A69E.htm) and [PSLTSCALE](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-23EA4D64-AE7D-41E5-A8D0-20F060313D62.htm)
 - [LWDISPLAY](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-51D375D8-AA3D-4AA7-ADC4-1DCCC5BF6D12.htm)
+- [VIEWRES](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-77B1C617-E4BB-4D1E-823A-8E2B055B258E.htm), [WHIPARC](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-DFB5E247-3ADF-4F73-9DE3-E6EA4D2F4AAA.htm), [LINESMOOTHING](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-A3F27607-8A69-401B-9247-61E00584B7F4.htm) and [LINEFADING](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-7AA085DB-2F0C-43B6-933A-DB8170E20F58.htm)
+- [SORTENTS](https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-56B7D915-515B-4A9C-BCB5-EF2D43C05FE5.htm) and [current REGEN sorting behavior](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-4FEBA606-95E0-4DC4-A116-257ED86DCD58.htm)
 - [ACI 7 background behavior](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-Core/files/GUID-2B089E0A-BDC0-4916-885E-543A85FC8CFD.htm)
 - [Color-dependent and named plot styles](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-Core/files/GUID-929FE8EC-EFE3-43BB-A79F-4FF509A91D5A.htm)
 - [Layout ShowPlotStyles](https://help.autodesk.com/cloudhelp/2024/PTB/AutoCAD-ActiveX-Reference/files/GUID-31B8B6DE-C9F1-4BB2-916C-EF7B9AE723B5.htm)

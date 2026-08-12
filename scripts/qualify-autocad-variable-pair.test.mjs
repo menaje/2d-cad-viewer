@@ -122,6 +122,27 @@ test("generates one fixed AutoCAD camera and one output per value", () => {
   assert.match(script, /attmode-pair\.ready/u);
 });
 
+test("uses drawing-backed commands for image quality and XREF reload", () => {
+  const imageScript = createAutoCadPairScript({
+    caseId: "image-quality",
+    outputDirectory: "C:\\pairs",
+    values: [0, 1],
+    variable: "IMAGEQUALITY",
+  });
+  assert.match(imageScript, /_\.IMAGEQUALITY/u);
+  assert.match(imageScript, /ACAD_IMAGE_VARS/u);
+  assert.doesNotMatch(imageScript, /setvar "IMAGEQUALITY"/u);
+
+  const xrefScript = createAutoCadPairScript({
+    caseId: "visretain",
+    outputDirectory: "C:\\pairs",
+    values: [0, 1],
+    variable: "VISRETAIN",
+  });
+  assert.match(xrefScript, /setvar "VISRETAIN"/u);
+  assert.match(xrefScript, /_\.-XREF" "_Reload" "\*"/u);
+});
+
 test("maps every variable value to its Scene Cache drawing field", () => {
   assert.deepEqual(expectedDrawingVariable("FILLMODE", 0), {
     field: "fillMode",
@@ -150,6 +171,18 @@ test("maps every variable value to its Scene Cache drawing field", () => {
   assert.deepEqual(expectedDrawingVariable("XREFOVERRIDE", 1), {
     field: "externalReferenceOverrides",
     value: true,
+  });
+  assert.deepEqual(expectedDrawingVariable("VISRETAIN", 0), {
+    field: "retainExternalReferenceLayers",
+    value: false,
+  });
+  assert.deepEqual(expectedDrawingVariable("IMAGEQUALITY", 1), {
+    field: "rasterImageQualityHigh",
+    value: true,
+  });
+  assert.deepEqual(expectedDrawingVariable("DISPSILHBLOCKS", 0), {
+    field: "displaySilhouettesInBlocks",
+    value: false,
   });
   assert.deepEqual(expectedDrawingVariable("XCLIPFRAME", 1), {
     field: "xclipFrame",

@@ -2,7 +2,7 @@ import {
   buildInstanceGraph,
   CoordinateSpaceKind,
 } from "./instance-graph.mjs";
-import { ViewportLayerOverrideFlags } from "./scene-cache.mjs?v=1.25.0";
+import { ViewportLayerOverrideFlags } from "./scene-cache.mjs?v=1.26.0";
 import {
   arbitraryAxisMat4,
   identityMat4,

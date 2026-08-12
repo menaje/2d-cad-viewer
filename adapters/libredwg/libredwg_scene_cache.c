@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MPL-2.0
  *
- * A bounded-memory Scene Cache v1.25 writer for GNU LibreDWG. Geometry and
+ * A bounded-memory Scene Cache v1.26 writer for GNU LibreDWG. Geometry and
  * source text are traversed repeatedly and written directly to the
  * destination; the writer never creates a JSON or whole-drawing in-memory
  * representation. Large detail passes use private temporary files for an
@@ -3618,7 +3618,10 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
   uint32_t quick_text_mode = (uint32_t)dwg->header_vars.QTEXTMODE;
   uint32_t spline_frame = (uint32_t)dwg->header_vars.SPLFRAME;
   uint32_t display_silhouettes = (uint32_t)dwg->header_vars.DISPSILH;
+  uint32_t retain_external_reference_layers
+      = (uint32_t)dwg->header_vars.VISRETAIN;
   uint32_t image_frame = UINT32_MAX;
+  uint32_t raster_image_quality = UINT32_MAX;
   uint32_t xclip_frame = (uint32_t)dwg->header_vars.XCLIPFRAME;
   uint32_t ole_frame;
   uint32_t annotation_all_visible;
@@ -3628,6 +3631,7 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
   uint32_t dwf_frame;
   uint32_t dgn_frame;
   uint32_t xref_override;
+  uint32_t display_silhouettes_in_blocks;
   uint32_t packed;
   size_t object_index;
   if (attribute_mode > 2u)
@@ -3636,7 +3640,8 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
       return 0;
     }
   if (quick_text_mode > 1u || spline_frame > 1u
-      || display_silhouettes > 1u)
+      || display_silhouettes > 1u
+      || retain_external_reference_layers > 1u)
     {
       set_error (writer,
                  "boolean drawing presentation setting is outside the supported range");
@@ -3672,6 +3677,21 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
           return 0;
         }
       image_frame = raw;
+      raw = (uint32_t)variables->image_quality;
+      if (raw > 1u)
+        {
+          set_error (writer,
+                     "IMAGEQUALITY setting is outside the supported range");
+          return 0;
+        }
+      if (raster_image_quality != UINT32_MAX
+          && raster_image_quality != raw)
+        {
+          set_error (writer,
+                     "drawing contains conflicting IMAGEQUALITY settings");
+          return 0;
+        }
+      raster_image_quality = raw;
     }
   if (!read_dictionary_display_setting (
           writer, dwg, "OLEFRAME", 2u, &ole_frame)
@@ -3690,7 +3710,10 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
       || !read_dictionary_display_setting (
           writer, dwg, "DGNFRAME", 2u, &dgn_frame)
       || !read_dictionary_display_setting (
-          writer, dwg, "XREFOVERRIDE", 1u, &xref_override))
+          writer, dwg, "XREFOVERRIDE", 1u, &xref_override)
+      || !read_dictionary_display_setting (
+          writer, dwg, "DISPSILHBLOCKS", 1u,
+          &display_silhouettes_in_blocks))
     return 0;
   packed = attribute_mode
            | ((image_frame == UINT32_MAX ? 3u : image_frame) << 2)
@@ -3717,6 +3740,13 @@ read_drawing_presentation_settings (CacheWriter *writer, Dwg_Data *dwg,
     packed |= 1u << 23;
   if (xref_override != UINT32_MAX && xref_override)
     packed |= 1u << 24;
+  if (retain_external_reference_layers)
+    packed |= 1u << 25;
+  if (raster_image_quality == UINT32_MAX || raster_image_quality)
+    packed |= 1u << 26;
+  if (display_silhouettes_in_blocks == UINT32_MAX
+      || display_silhouettes_in_blocks)
+    packed |= 1u << 27;
   *result = packed;
   return 1;
 }

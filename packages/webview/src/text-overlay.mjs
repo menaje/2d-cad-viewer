@@ -1,6 +1,6 @@
 import {
   TextEntityKind,
-} from "./scene-cache.mjs?v=1.25.0";
+} from "./scene-cache.mjs?v=1.26.0";
 import {
   decodeCadColor,
   decodeCadOpacity,

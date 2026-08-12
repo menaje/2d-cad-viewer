@@ -266,7 +266,7 @@ exercises intended-versus-reopened-observed receipt validation. The rejected
 WASM MEMFS candidate remains outside settings and the VSIX.
 
 The product and preview writers plus benchmark validator emit Scene Cache
-v1.25. The Webview reader accepts the explicit v1.21–v1.25 backward window;
+v1.26. The Webview reader accepts the explicit v1.21–v1.26 backward window;
 lower version numbers in the milestone evidence below are historical
 development records, not supported runtime formats.
 
@@ -335,6 +335,11 @@ entity color, transparency, lineweight and linetype through the resolved root
 layer while preserving the host XREF insertion and layer mapping. DISPSILH is
 retained, but true 3D silhouette generation remains an explicit view-style
 boundary rather than guessed 2D geometry.
+Scene Cache v1.26 adds VISRETAIN, raster IMAGEQUALITY and DISPSILHBLOCKS.
+VISRETAIN=0 synchronizes exact prefix-qualified XREF layer display rows from
+the mounted child while preserving viewport overrides; IMAGEQUALITY selects
+high or uninterpolated Draft Canvas sampling. DISPSILHBLOCKS is retained but
+does not expand the explicit 3D silhouette boundary.
 Remaining exact CAD text layout and draw-order work are product-completeness
 gates on this selected engine, not an open parser choice.
 

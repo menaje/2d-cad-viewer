@@ -1,7 +1,7 @@
 // Canonical Scene Cache reader shared by DwgSceneCacheSource and legacy Webview imports.
 export const CACHE_MAGIC = new Uint8Array([68, 87, 71, 83, 67, 78, 49, 0]);
 export const CACHE_VERSION_MAJOR = 1;
-export const CACHE_VERSION_MINOR = 25;
+export const CACHE_VERSION_MINOR = 26;
 export const MINIMUM_CACHE_VERSION_MINOR = 21;
 export const HEADER_SIZE = 64;
 export const DIRECTORY_ENTRY_SIZE = 40;
@@ -2184,8 +2184,10 @@ export class SceneCacheReader {
         (this.header.minor >= 22 &&
           ((presentationSettings &
               ~(
-                this.header.minor >= 25
-                  ? 0x1ffffff
+                this.header.minor >= 26
+                  ? 0x0fffffff
+                  : this.header.minor >= 25
+                    ? 0x1ffffff
                   : this.header.minor >= 23
                     ? 0x1fffff
                     : 0x7fff
@@ -2297,6 +2299,18 @@ export class SceneCacheReader {
         externalReferenceOverrides:
           this.header.minor >= 25 &&
           (presentationSettings & (1 << 24)) !== 0,
+        retainExternalReferenceLayers:
+          this.header.minor >= 26
+            ? (presentationSettings & (1 << 25)) !== 0
+            : true,
+        rasterImageQualityHigh:
+          this.header.minor >= 26
+            ? (presentationSettings & (1 << 26)) !== 0
+            : true,
+        displaySilhouettesInBlocks:
+          this.header.minor >= 26
+            ? (presentationSettings & (1 << 27)) !== 0
+            : true,
         modelAnnotationScale,
         savedModelView,
         totalEntities: readSafeU64(view, 16, "drawing entity count"),

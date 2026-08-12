@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyDisplayLayerProperties,
   buildExternalLayerMap,
   buildExternalLinetypeMap,
   blockExternalReferenceIsDisplayable,
@@ -10,6 +11,7 @@ import {
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
+  synchronizeExternalLayerProperties,
 } from "../src/external-reference.mjs";
 
 import { GpuLineBatchKind } from "../src/scene-cache.mjs";
@@ -244,6 +246,98 @@ test("keeps external Layer 0 mapped to root Layer 0 for block inheritance", () =
   assert.deepEqual([...mapping], [0]);
 });
 
+test("synchronizes only exact XREF-dependent host layers from the child", () => {
+  const root = [
+    { name: "0", color: 1, flags: 0, lineWeight: -3, linetype: "Continuous" },
+    { name: "1F|A-WALL", color: 2, flags: 1 << 4, lineWeight: 25, linetype: "Hidden" },
+    { name: "A-WALL", color: 3, flags: 0, lineWeight: 30, linetype: "Center" },
+  ];
+  const result = synchronizeExternalLayerProperties(
+    root,
+    [
+      { name: "A-WALL", color: 99, flags: 0b101, lineWeight: 50, linetype: "Dashed" },
+      { name: "UNKNOWN", color: 77, flags: 0, lineWeight: 18, linetype: "Continuous" },
+    ],
+    "1F",
+  );
+
+  assert.deepEqual([...result.changedIndices], [1]);
+  assert.strictEqual(result.layers[0], root[0]);
+  assert.deepEqual(result.layers[1], {
+    name: "1F|A-WALL",
+    color: 99,
+    flags: (1 << 4) | 0b101,
+    lineWeight: 50,
+    linetype: "Dashed",
+  });
+  assert.strictEqual(result.layers[2], root[2]);
+});
+
+test("applies reloaded XREF layer properties without replacing viewport overrides", () => {
+  const baseline = [
+    { name: "0", color: 7, flags: 0, lineWeight: -3, linetype: "Continuous" },
+    { name: "1F|A-WALL", color: 2, flags: 1 << 4, lineWeight: 25, linetype: "Hidden" },
+  ];
+  const display = [
+    baseline[0],
+    { ...baseline[1], color: 99, flags: (1 << 4) | 1, lineWeight: 50, linetype: "Dashed" },
+  ];
+  const instanceGraph = {
+    layerVisibilityRows: [
+      new Uint8Array([1, 1]),
+      new Uint8Array([1, 1]),
+    ],
+    layerColorsByVisibilityRow: [
+      new Uint32Array([7, 2]),
+      new Uint32Array([7, 123]),
+    ],
+    layerLineWeightsByVisibilityRow: [
+      new Int16Array([-3, 25]),
+      new Int16Array([-3, 77]),
+    ],
+    layerLinetypesByVisibilityRow: [
+      new Uint16Array([2, 3]),
+      new Uint16Array([2, 8]),
+    ],
+  };
+  const result = applyDisplayLayerProperties(
+    instanceGraph,
+    baseline,
+    display,
+    [
+      { name: "Continuous", code: 2 },
+      { name: "Hidden", code: 3 },
+      { name: "Dashed", code: 4 },
+    ],
+  );
+
+  assert.deepEqual(
+    [...result.instanceGraph.layerColorsByVisibilityRow[0]],
+    [7, 99],
+  );
+  assert.deepEqual(
+    [...result.instanceGraph.layerLineWeightsByVisibilityRow[0]],
+    [-3, 50],
+  );
+  assert.deepEqual(
+    [...result.instanceGraph.layerLinetypesByVisibilityRow[0]],
+    [2, 4],
+  );
+  assert.deepEqual(
+    [...result.instanceGraph.layerColorsByVisibilityRow[1]],
+    [7, 123],
+  );
+  assert.deepEqual(
+    [...result.instanceGraph.layerLineWeightsByVisibilityRow[1]],
+    [-3, 77],
+  );
+  assert.deepEqual(
+    [...result.instanceGraph.layerLinetypesByVisibilityRow[1]],
+    [2, 8],
+  );
+  assert.deepEqual([...result.layerLinetypeCodes], [2, 4]);
+});
+
 test("rewrites packed GPU vertex layer indices in place", () => {
   const buffer = new ArrayBuffer(72);
   const view = new DataView(buffer);
@@ -278,6 +372,20 @@ test("maps and rewrites XREF linetype codes without changing other style bits", 
   assert.equal((view.getUint32(28, true) >>> 5) & 0x7ff, 8);
   assert.equal((view.getUint32(64, true) >>> 5) & 0x7ff, 2);
   assert.equal(view.getUint32(28, true) & (1 << 16), 1 << 16);
+});
+
+test("prefers the XREF-dependent linetype with the matching prefix", () => {
+  const mapping = buildExternalLinetypeMap(
+    [
+      { name: "Continuous", code: 2 },
+      { name: "CENTER", code: 8 },
+      { name: "1F|CENTER", code: 9 },
+    ],
+    [{ name: "CENTER", code: 3 }],
+    "1F",
+  );
+
+  assert.equal(mapping[3], 9);
 });
 
 test("forces XREF common display properties to ByLayer without changing other style bits", () => {

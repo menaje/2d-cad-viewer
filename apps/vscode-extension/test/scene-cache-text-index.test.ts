@@ -377,7 +377,7 @@ test("accepts the cache window and rejects an unsupported revision or header fla
     );
 
     const futureRevisionPath = path.join(directory, "future.cache");
-    await writeFile(futureRevisionPath, fixtureCache([], 26));
+    await writeFile(futureRevisionPath, fixtureCache([], 27));
     await assert.rejects(
       readSceneCacheTextIndex(futureRevisionPath),
       /version is unsupported/u,
@@ -393,7 +393,7 @@ test("accepts the cache window and rejects an unsupported revision or header fla
     );
 
     const flaggedPath = path.join(directory, "flagged.cache");
-    cache.writeUInt16LE(25, 10);
+    cache.writeUInt16LE(26, 10);
     cache.writeUInt32LE(2, 24);
     await writeFile(flaggedPath, cache);
     await assert.rejects(

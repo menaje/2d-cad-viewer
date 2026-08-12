@@ -363,7 +363,7 @@ test("rejects a newer unsupported Scene Cache minor version", async () => {
         makeFixtureCache({ minorVersion: CACHE_VERSION_MINOR + 1 }),
       ),
     ),
-    /unsupported scene-cache version 1\.26/,
+    /unsupported scene-cache version 1\.27/,
   );
 });
 
@@ -390,6 +390,9 @@ test("accepts the previous Scene Cache minor with legacy display defaults", asyn
   assert.equal(drawing.splineFrame, false);
   assert.equal(drawing.displaySilhouettes, false);
   assert.equal(drawing.externalReferenceOverrides, false);
+  assert.equal(drawing.retainExternalReferenceLayers, true);
+  assert.equal(drawing.rasterImageQualityHigh, true);
+  assert.equal(drawing.displaySilhouettesInBlocks, true);
   assert.equal(blocks[2].xrefLoaded, true);
   assert.equal(blocks[2].xrefResolved, true);
 });
@@ -437,6 +440,9 @@ test("reads current drawing display settings", async () => {
         splineFrame: true,
         displaySilhouettes: true,
         externalReferenceOverrides: true,
+        retainExternalReferenceLayers: false,
+        rasterImageQualityHigh: false,
+        displaySilhouettesInBlocks: false,
       }),
     ),
   );
@@ -470,6 +476,9 @@ test("reads current drawing display settings", async () => {
   assert.equal(metadata.drawing.splineFrame, true);
   assert.equal(metadata.drawing.displaySilhouettes, true);
   assert.equal(metadata.drawing.externalReferenceOverrides, true);
+  assert.equal(metadata.drawing.retainExternalReferenceLayers, false);
+  assert.equal(metadata.drawing.rasterImageQualityHigh, false);
+  assert.equal(metadata.drawing.displaySilhouettesInBlocks, false);
   assert.equal(metadata.drawing.modelAnnotationScale, 1);
 
   const missingWipeoutReader = await SceneCacheReader.open(
@@ -489,7 +498,7 @@ test("reads current drawing display settings", async () => {
   assert.equal(missingWipeoutDrawing.modelSpaceActive, false);
 });
 
-test("rejects reserved Scene Cache v1.25 presentation bits", async () => {
+test("rejects reserved Scene Cache v1.26 presentation bits", async () => {
   const buffer = makeFixtureCache();
   const view = new DataView(buffer);
   const sectionCount = view.getUint32(16, true);
@@ -503,7 +512,7 @@ test("rejects reserved Scene Cache v1.25 presentation bits", async () => {
     }
   }
   assert.notEqual(drawingOffset, undefined);
-  view.setUint32(drawingOffset + 100, 1 << 25, true);
+  view.setUint32(drawingOffset + 100, 1 << 28, true);
 
   const reader = await SceneCacheReader.open(new MemoryRangeSource(buffer));
   await assert.rejects(
@@ -512,7 +521,7 @@ test("rejects reserved Scene Cache v1.25 presentation bits", async () => {
   );
 });
 
-test("rejects an invalid Scene Cache v1.25 layout annotation value", async () => {
+test("rejects an invalid Scene Cache v1.26 layout annotation value", async () => {
   const buffer = makeFixtureCache();
   const view = new DataView(buffer);
   const sectionCount = view.getUint32(16, true);
@@ -761,7 +770,7 @@ test("reads the current saved model view", async () => {
   assert.deepEqual(metadata.drawing.savedModelView, savedModelView);
 });
 
-test("reads bounded Scene Cache v1.25 raster image references", async () => {
+test("reads bounded Scene Cache v1.26 raster image references", async () => {
   const source = new TrackedRangeSource(
     new MemoryRangeSource(makeFixtureCache()),
   );

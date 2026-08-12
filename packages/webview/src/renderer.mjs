@@ -3342,17 +3342,50 @@ export class WebGlLineRenderer {
     return this.instanceScratch.subarray(0, requiredValues);
   }
 
-  setLayers(layers) {
+  setLayers(layers, { preserveVisibility = false } = {}) {
+    if (!Array.isArray(layers)) {
+      throw new TypeError("layers must be an array");
+    }
+    const previousVisibility = preserveVisibility
+      ? [...this.layerVisibility]
+      : null;
     this.viewportInstanceGraph = null;
     this.layers = layers;
     this.layerZeroIndex = layers.findIndex(
       (layer) =>
         layer.name?.normalize("NFC").toLocaleLowerCase("en-US") === "0",
     );
-    this.layerVisibility = layers.map((layer) => (layer.flags & 0b11) === 0);
+    this.layerVisibility = layers.map((layer, index) =>
+      previousVisibility?.[index] ?? (layer.flags & 0b11) === 0,
+    );
     this.uploadLayerTexture();
     this.uploadLineWeightTexture();
     this.uploadLayerPlotStyleIndexTexture();
+  }
+
+  setDisplayLayerPresentation(
+    layers,
+    instanceGraph,
+    layerLinetypeCodes = this.layerLinetypeCodes,
+    changedIndices = null,
+  ) {
+    if (
+      !this.overviewScene ||
+      !(layerLinetypeCodes instanceof Uint16Array) ||
+      layerLinetypeCodes.length !== layers.length ||
+      (changedIndices !== null && !(changedIndices instanceof Uint32Array))
+    ) {
+      throw new TypeError("display layer presentation is inconsistent");
+    }
+    this.setLayers(layers, { preserveVisibility: true });
+    for (const index of changedIndices ?? []) {
+      if (index >= layers.length) {
+        throw new RangeError("changed display layer index is invalid");
+      }
+      this.layerVisibility[index] = (layers[index].flags & 0b11) === 0;
+    }
+    this.layerLinetypeCodes = new Uint16Array(layerLinetypeCodes);
+    this.setViewportLayerVisibility(instanceGraph);
   }
 
   uploadLayerTexture(instanceGraph = this.viewportInstanceGraph) {

@@ -98,7 +98,7 @@ Gate는
 
 AutoCAD 2026 2D Wireframe 화면 표시 전수조사의 구현/보류 매트릭스와 공식
 근거는 [`docs/autocad-display-compatibility.md`](../docs/autocad-display-compatibility.md)에
-있다. 고정된 LibreDWG 0.14 공개 코퍼스 141개 전체를 Scene Cache v1.25로
+있다. 고정된 LibreDWG 0.14 공개 코퍼스 141개 전체를 Scene Cache v1.26로
 변환하고 source/serialized/deferred partition, 표시 변수 분포, 대표 fixture와
 75개 AutoCAD 참조 JPG–DWG 쌍, AutoCAD XLINE/RAY 속성, Autodesk Support가
 배포하는 공식 샘플 DWG 18개와 11개 Browser pixel hash를 검증한 현재 결과는

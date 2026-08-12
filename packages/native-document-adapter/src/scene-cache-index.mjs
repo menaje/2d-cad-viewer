@@ -837,7 +837,7 @@ export function createSceneCacheNativeDescriptor({
   );
   capabilities[NativeAdapterOperation.READ] = capability(
     NativeCapabilityStatus.NATIVE,
-    "LibreDWG source records are preserved in packed Scene Cache v1.25",
+    "LibreDWG source records are preserved in packed Scene Cache v1.26",
   );
   capabilities[NativeAdapterOperation.QUERY_ENTITY] = capability(
     NativeCapabilityStatus.MAPPED,

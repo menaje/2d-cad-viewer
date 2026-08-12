@@ -4,7 +4,7 @@ This process-isolated adapter implements the `dwg-engine-adapter/1` inspection
 and conversion contract. It traverses LibreDWG's object model directly instead
 of creating a full JSON dump.
 
-The `convert` path writes Scene Cache v1.25 without a whole-drawing intermediate
+The `convert` path writes Scene Cache v1.26 without a whole-drawing intermediate
 model. It repeatedly traverses LibreDWG objects and streams sections and
 bounded GPU batches directly to a new cache file. For large drawings, it
 spills fixed-size detail records into private unnamed temporary files, sorts
@@ -106,10 +106,12 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   `coverage.deferred_reasons.unsupported_underlays`; their content is not
   claimed as serialized because the current 2D viewer has no qualified
   underlay decoder;
-- Scene Cache v1.25 retains ATTMODE, FRAME, IMAGEFRAME, XCLIPFRAME, OLEFRAME,
-  PDFFRAME, DWFFRAME, DGNFRAME, ANNOALLVISIBLE, MSLTSCALE, the current model CANNOSCALE factor, and XREF
-  loaded/resolved state. Missing optional dictionary values remain explicitly
-  unavailable instead of being guessed; invalid saved ranges fail conversion.
+- Scene Cache v1.26 retains ATTMODE, FRAME, IMAGEFRAME, XCLIPFRAME, OLEFRAME,
+  PDFFRAME, DWFFRAME, DGNFRAME, ANNOALLVISIBLE, MSLTSCALE, the current model
+  CANNOSCALE factor, QTEXTMODE, SPLFRAME, DISPSILH, DISPSILHBLOCKS,
+  XREFOVERRIDE, VISRETAIN, raster IMAGEQUALITY and XREF loaded/resolved state.
+  Missing optional dictionary values remain explicitly unavailable instead of
+  being guessed; invalid saved ranges fail conversion.
 - Each model/paper layout also retains its saved ANNOALLVISIBLE value. Paper
   layouts read AutoCAD's `AcadAnnoAV` LAYOUT application data; a duplicate or
   malformed value fails conversion closed instead of guessing visibility. A
@@ -169,7 +171,7 @@ range-read limit.
 ## Progressive first frame
 
 When the VS Code host supplies both private preview paths, the same conversion
-process emits a Scene Cache v1.25 first-frame sidecar immediately after parsing
+process emits a Scene Cache v1.26 first-frame sidecar immediately after parsing
 and overview planning, before the disk-backed full-detail sort. The sidecar
 contains drawing/layer/block/INSERT and layout/viewport metadata, including
 viewport layer overrides, plus overview-only GPU line data; remaining required
@@ -263,7 +265,7 @@ working drawings are not accepted as repository fixtures.
 The R2004 round-trip qualification used the repository's
 [`generate-viewport-layer-overrides.py`](../../tests/fixtures/generate-viewport-layer-overrides.py)
 definition and a separate write-enabled LibreDWG 0.14 build. The read-only
-product adapter emitted a valid 51-section Scene Cache v1.25, and the canonical
+product adapter emitted a valid 51-section Scene Cache v1.26, and the canonical
 reader recovered true color `0xc040c4ff`, transparency `0x27000000`, `DASHED`
 and lineweight `50` on the original viewport handle. The write-enabled build is
 only a fixture producer; it is not part of the product or release package.

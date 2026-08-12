@@ -243,7 +243,7 @@ test("uses native Windows isolation and a path-safe piped input contract", async
   assert.match(hostSource, /createReadStream\(inputPath\)/u);
 });
 
-test("serializes sparse viewport layer overrides in Scene Cache v1.25", async () => {
+test("serializes sparse viewport layer overrides in Scene Cache v1.26", async () => {
   const [sceneCacheSource, sceneCacheHeader] = await Promise.all([
     readFile(
       path.join(import.meta.dirname, "libredwg_scene_cache.c"),
@@ -257,7 +257,7 @@ test("serializes sparse viewport layer overrides in Scene Cache v1.25", async ()
 
   assert.match(
     sceneCacheHeader,
-    /LIBREDWG_SCENE_CACHE_VERSION_MINOR 25u/u,
+    /LIBREDWG_SCENE_CACHE_VERSION_MINOR 26u/u,
   );
   assert.match(
     sceneCacheHeader,

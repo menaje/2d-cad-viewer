@@ -81,7 +81,7 @@ export async function createEngineCatalog({ directory, version }) {
       id: "libredwg",
       version: LIBREDWG_VERSION,
       protocol: "dwg-engine-adapter/1",
-      cacheSchema: "dwg-scene-cache/1.25",
+      cacheSchema: "dwg-scene-cache/1.26",
       license: "GPL-3.0-or-later",
     }),
     targets: Object.freeze(targets),

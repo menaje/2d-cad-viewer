@@ -1,7 +1,7 @@
-# Scene Cache v1.25
+# Scene Cache v1.26
 
-Status: current writer. Product writers emit major 1, minor 25. Product
-readers accept the explicit backward window 1.21–1.25; older and newer minor
+Status: current writer. Product writers emit major 1, minor 26. Product
+readers accept the explicit backward window 1.21–1.26; older and newer minor
 versions fail closed. References to lower minor versions below otherwise
 describe additive format history and do not define supported runtime inputs.
 The current implementation includes source geometry/text writing, resolved
@@ -53,7 +53,7 @@ Header flag bit 0 (`0x00000001`) marks a display-only progressive preview.
 All other bits are reserved and must be zero; the Webview rejects a cache with
 an unknown header flag. A canonical full cache always writes flags as zero.
 
-A flagged preview is still an independently readable v1.25 container with the
+A flagged preview is still an independently readable v1.26 container with the
 complete section directory. It carries drawing, layer, block and INSERT
 metadata, layout/viewport state including viewport layer overrides, INSERT
 clip boundaries, plus only the LOD-0 GPU line batches and vertices needed for
@@ -179,6 +179,9 @@ section or change a record size; a v1.24 writer still emits all 51 sections.
 Version 1.25 assigns drawing-presentation bits 21–24 to the saved QTEXTMODE,
 SPLFRAME, DISPSILH and XREFOVERRIDE booleans. It does not add a section or
 change a record size; a v1.25 writer still emits all 51 sections.
+Version 1.26 assigns drawing-presentation bits 25–27 to VISRETAIN,
+RASTERVARIABLES image quality and DISPSILHBLOCKS. It does not add a section or
+change a record size; a v1.26 writer still emits all 51 sections.
 
 ## Shared primitive prefix
 
@@ -203,7 +206,7 @@ coordinates without replacing these source-precision records.
 
 ## Drawing record
 
-In v1.20–v1.25, kind 1 contains one 160-byte record:
+In v1.20–v1.26, kind 1 contains one 160-byte record:
 
 | Offset | Type | Field |
 | ---: | --- | --- |
@@ -251,6 +254,12 @@ DISPSILH and bit 24 to XREFOVERRIDE. A set bit means the saved drawing value
 is 1 and a clear bit means 0. Bits 25–31 remain reserved and must be zero.
 Readers of v1.21–v1.24 expose the documented initial value 0 for all four
 fields.
+
+Scene Cache v1.26 assigns bit 25 to VISRETAIN, bit 26 to high raster IMAGE
+quality and bit 27 to DISPSILHBLOCKS. A clear raster-quality bit means draft
+display. Bits 28–31 remain reserved and must be zero. Readers of v1.21–v1.25
+expose Autodesk's documented initial values: VISRETAIN 1, high IMAGE quality
+and DISPSILHBLOCKS 1.
 
 ## String-table sections
 
@@ -1078,7 +1087,7 @@ generated artifacts and must not be committed.
 
 ## LibreDWG qualification writer
 
-The selected LibreDWG adapter writes a valid v1.25 cache
+The selected LibreDWG adapter writes a valid v1.26 cache
 to measure the direct object-to-cache boundary. It preserves layer/block UTF-8
 names and source records for LINE, ARC, CIRCLE, INSERT/MINSERT,
 LWPOLYLINE/2D/3D POLYLINE, ELLIPSE and SPLINE, including the four SPLINE value
@@ -1091,7 +1100,8 @@ evaluation and malformed-input fallback use the 256-segments-per-entity limit.
 It also writes the seven bounded HATCH source/fill/pattern sections and the
 POINT/SOLID/3DFACE/WIPEOUT source sections, including `PDMODE`, `PDSIZE`,
 `FILLMODE`, invisible face edges, exact WIPEOUT clip vertices and saved
-ATTMODE/FRAME-family plus QTEXTMODE/SPLFRAME/DISPSILH/XREFOVERRIDE
+ATTMODE/FRAME-family, QTEXTMODE/SPLFRAME/DISPSILH/XREFOVERRIDE and
+VISRETAIN/IMAGEQUALITY/DISPSILHBLOCKS
 presentation settings, normalized draw-order tables and
 entries, bounded INSERT/XREF
 `SPATIAL_FILTER` boundaries, and IMAGE/IMAGEDEF paths, placement bases and
@@ -1122,7 +1132,7 @@ This qualification writer keeps the 4 MiB overview and 512 KiB detail
 limits and uses disk-backed group-local XY Morton ordering for detail batches.
 When the extension requests progressive publication, the writer emits the
 flagged overview-only sidecar before that detail sort, then continues to the
-full v1.25 cache.
+full v1.26 cache.
 LibreDWG is the selected primary engine path. The remaining unsupported source
 families and exact CAD text-layout fidelity must be closed before that path is
 release-ready.

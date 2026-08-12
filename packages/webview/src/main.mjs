@@ -17,6 +17,7 @@ import {
   normalizeZoomSensitivity,
 } from "./interaction.mjs?v=1.18.13";
 import {
+  applyDisplayLayerProperties,
   buildExternalLayerMap,
   buildExternalLinetypeMap,
   blockExternalReferenceIsDisplayable,
@@ -25,13 +26,14 @@ import {
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
-} from "./external-reference.mjs?v=1.25.0";
+  synchronizeExternalLayerProperties,
+} from "./external-reference.mjs?v=1.26.0";
 import {
   createVsCodeRangeSource,
   installWorkerRangeProxy,
   WORKER_RANGE_REQUEST,
 } from "./host-range-source.mjs";
-import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.25.0";
+import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.26.0";
 import {
   buildLayerGroups,
   isolateLayerGroup,
@@ -97,10 +99,10 @@ import {
   CompositeTextOverlay,
   registerLocalOutlineFont,
   unregisterLocalOutlineFont,
-} from "./text-overlay.mjs?v=1.25.0";
+} from "./text-overlay.mjs?v=1.26.0";
 import {
   loadExternalFirstFrame,
-} from "./viewer.mjs?v=1.25.0";
+} from "./viewer.mjs?v=1.26.0";
 import {
   addViewBookmark,
   CameraViewHistory,
@@ -114,8 +116,8 @@ import {
   environmentLocales,
   escapeHtmlText,
 } from "./i18n.mjs?v=1.0.0";
-import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.25.0";
-import { effectiveFrameSetting } from "./frame-setting.mjs?v=1.25.0";
+import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.26.0";
+import { effectiveFrameSetting } from "./frame-setting.mjs?v=1.26.0";
 
 const standaloneQualificationParameters =
   typeof globalThis.acquireVsCodeApi === "function"
@@ -355,6 +357,7 @@ let externalCurveRefinementTimer;
 let externalCurveRequestRevision = 0;
 let activeMaskOrder;
 let activeRenderInstanceGraph;
+let activeDisplayLayers;
 let activeMaskStatus;
 let activeWipeoutMasksVisible = false;
 let activeViewId;
@@ -3540,6 +3543,8 @@ async function initializeImageOverlay(
           scene.metadata.drawing.frame,
           scene.metadata.drawing.imageFrame,
         ) ?? 0,
+      rasterImageQualityHigh:
+        scene.metadata.drawing.rasterImageQualityHigh ?? true,
     });
   activeImageComposite.add(
     overlay,
@@ -5350,6 +5355,57 @@ function externalParentContexts(parentCacheId) {
   return externalAttachmentsByCache.get(parentCacheId) ?? [];
 }
 
+function synchronizeMountedExternalLayers(
+  childLayers,
+  prefix,
+  retainExternalReferenceLayers,
+) {
+  const scene = activeScene;
+  const baselineLayers = scene?.metadata.layers;
+  if (
+    !scene ||
+    retainExternalReferenceLayers ||
+    !Array.isArray(baselineLayers) ||
+    !activeRenderInstanceGraph
+  ) {
+    return;
+  }
+  const currentLayers = activeDisplayLayers ?? baselineLayers;
+  const synchronized = synchronizeExternalLayerProperties(
+    currentLayers,
+    childLayers,
+    prefix,
+  );
+  if (synchronized.changedIndices.length === 0) {
+    return;
+  }
+  const presentation = applyDisplayLayerProperties(
+    activeRenderInstanceGraph,
+    currentLayers,
+    synchronized.layers,
+    scene.metadata.linetypes,
+  );
+  activeDisplayLayers = synchronized.layers;
+  activeRenderInstanceGraph = presentation.instanceGraph;
+  for (const contexts of externalAttachmentsByCache.values()) {
+    for (const context of contexts) {
+      context.instanceGraph = applyDisplayLayerProperties(
+        context.instanceGraph,
+        currentLayers,
+        activeDisplayLayers,
+        scene.metadata.linetypes,
+      ).instanceGraph;
+    }
+  }
+  scene.renderer.setDisplayLayerPresentation(
+    activeDisplayLayers,
+    activeRenderInstanceGraph,
+    presentation.layerLinetypeCodes,
+    synchronized.changedIndices,
+  );
+  syncLayerCheckboxes(scene.renderer.getLayerVisibility());
+}
+
 function loadExternalCacheData(message, revision) {
   const existing = externalCacheData.get(message.cacheId);
   if (existing) {
@@ -5522,7 +5578,7 @@ async function addExternalText(
   const overlay = new CanvasTextOverlay(textCanvas, {
     textEntities: remapped,
     blocks: externalScene.metadata.blocks,
-    layers: rootScene.metadata.layers,
+    layers: activeDisplayLayers ?? rootScene.metadata.layers,
     instanceGraph: composedInstanceGraph,
     glyphCache,
     maskOrder,
@@ -5556,7 +5612,7 @@ async function addExternalText(
       batches: overview.batches,
       linetypes: rootScene.metadata.linetypes,
       textStyles: rootStyles,
-      layers: rootScene.metadata.layers,
+      layers: activeDisplayLayers ?? rootScene.metadata.layers,
       instanceGraph: composedInstanceGraph,
       glyphCache,
       globalLinetypeScale:
@@ -5584,6 +5640,7 @@ async function addExternalImages(
   sceneId,
   composedInstanceGraph,
   layerMap,
+  linetypeMap,
   sourceLabel,
   maskOrder = null,
   maskBucketScale = 1,
@@ -5618,7 +5675,7 @@ async function addExternalImages(
       imageEntities,
       blocks: externalScene.metadata.blocks,
       layers: externalScene.metadata.layers,
-      displayLayers: rootScene.metadata.layers,
+      displayLayers: activeDisplayLayers ?? rootScene.metadata.layers,
       instanceGraph: composedInstanceGraph,
       cacheId,
       assetStore: store,
@@ -5630,10 +5687,7 @@ async function addExternalImages(
       ),
       orderDepthBias: -0.25 * maskBucketScale,
       layerMap,
-      linetypeMap: buildExternalLinetypeMap(
-        rootScene.metadata.linetypes,
-        externalScene.metadata.linetypes,
-      ),
+      linetypeMap,
       sourceId: sceneId,
       sourceLabel,
       imageFrame:
@@ -5641,6 +5695,8 @@ async function addExternalImages(
           externalScene.metadata.drawing.frame,
           externalScene.metadata.drawing.imageFrame,
         ) ?? 0,
+      rasterImageQualityHigh:
+        externalScene.metadata.drawing.rasterImageQualityHigh ?? true,
       externalReferenceOverrides,
       maskBucketScale,
     });
@@ -5707,12 +5763,22 @@ async function handleExternalCacheReady(message) {
   const childContexts = externalAttachmentsByCache.get(message.cacheId) ?? [];
   const externalReferenceOverrides =
     activeScene.metadata.drawing.externalReferenceOverrides ?? false;
+  const retainExternalReferenceLayers =
+    activeScene.metadata.drawing.retainExternalReferenceLayers ?? true;
   let lastFit;
   for (const parentContext of parentContexts) {
     const maskState = externalMaskState(loaded, parentContext);
     const prefix = parentContext.prefix
       ? `${parentContext.prefix}|${message.name}`
       : message.name;
+    synchronizeMountedExternalLayers(
+      loaded.scene.metadata.layers,
+      prefix,
+      retainExternalReferenceLayers,
+    );
+    if (parentContext.id === "root") {
+      parentContext.instanceGraph = activeRenderInstanceGraph;
+    }
     const layerMap = buildExternalLayerMap(
       activeScene.metadata.layers,
       loaded.scene.metadata.layers,
@@ -5721,6 +5787,7 @@ async function handleExternalCacheReady(message) {
     const linetypeMap = buildExternalLinetypeMap(
       activeScene.metadata.linetypes,
       loaded.scene.metadata.linetypes,
+      prefix,
     );
     const composed = composeExternalInstanceGraph(
       parentContext.instanceGraph,
@@ -5831,7 +5898,7 @@ async function handleExternalCacheReady(message) {
       batches: mountedOverview?.batches ?? [],
       vertices: mountedOverview?.vertices,
       instanceGraph: composed.instanceGraph,
-      layers: activeScene.metadata.layers,
+      layers: activeDisplayLayers ?? activeScene.metadata.layers,
       blocks: loaded.scene.metadata.blocks,
       linetypes: activeScene.metadata.linetypes,
       layerMap,
@@ -5858,6 +5925,7 @@ async function handleExternalCacheReady(message) {
       sceneId,
       composed.instanceGraph,
       layerMap,
+      linetypeMap,
       prefix,
       maskState.maskOrder,
       maskState.maskBucketScale,
@@ -6245,6 +6313,12 @@ async function activateView(
     ) {
       return;
     }
+    activeDisplayLayers = scene.metadata.layers;
+    scene.renderer.setDisplayLayerPresentation(
+      activeDisplayLayers,
+      instanceGraph,
+      instanceGraph.layerLinetypeCodes,
+    );
     const render = scene.renderer.setInstanceGraph(instanceGraph, {
       preferredBounds: view.preferredBounds,
       preferredView: view.preferredView,
@@ -6446,6 +6520,7 @@ async function openCache(source, workerSource, cacheSha256) {
   activeCurveStatus = undefined;
   activeMaskOrder = undefined;
   activeRenderInstanceGraph = undefined;
+  activeDisplayLayers = undefined;
   activeMaskStatus = undefined;
   activeWipeoutMasksVisible = false;
   updateWipeoutToggle();
@@ -6510,6 +6585,7 @@ async function openCache(source, workerSource, cacheSha256) {
     }
     activeViewerRuntime = runtime;
     activeScene = scene;
+    activeDisplayLayers = scene.metadata.layers;
     activeTextComposite = new CompositeTextOverlay(textCanvas);
     scene.renderer.setTextOverlay(activeTextComposite);
     activeImageComposite = new CompositeRasterImageOverlay(imageCanvas);
@@ -6623,6 +6699,7 @@ async function openCache(source, workerSource, cacheSha256) {
     activeReviewTools?.dispose();
     activeReviewTools = undefined;
     activeScene = undefined;
+    activeDisplayLayers = undefined;
     dropZone.classList.remove("loaded");
     status.textContent = t("status.openFailed", {
       detail: error.message,
@@ -7471,6 +7548,7 @@ window.addEventListener("beforeunload", () => {
   resetExternalReferences();
   activeInteraction = undefined;
   activeScene = undefined;
+  activeDisplayLayers = undefined;
   activeRangeMetricsSource = undefined;
   activeMemoryTelemetry = undefined;
   glyphCache.dispose();

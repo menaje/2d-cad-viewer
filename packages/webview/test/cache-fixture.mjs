@@ -1740,6 +1740,9 @@ export function makeFixtureCache({
   splineFrame = false,
   displaySilhouettes = false,
   externalReferenceOverrides = false,
+  retainExternalReferenceLayers = true,
+  rasterImageQualityHigh = true,
+  displaySilhouettesInBlocks = true,
   xrefLoaded = true,
   xrefResolved = true,
   globalLinetypeScale = 1,
@@ -1780,6 +1783,12 @@ export function makeFixtureCache({
       (splineFrame ? 1 << 22 : 0) |
       (displaySilhouettes ? 1 << 23 : 0) |
       (externalReferenceOverrides ? 1 << 24 : 0);
+  }
+  if (minorVersion >= 26) {
+    presentationSettings |=
+      (retainExternalReferenceLayers ? 1 << 25 : 0) |
+      (rasterImageQualityHigh ? 1 << 26 : 0) |
+      (displaySilhouettesInBlocks ? 1 << 27 : 0);
   }
   const sections = [
     makeDrawingSection(

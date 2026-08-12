@@ -119,7 +119,7 @@ function report(overrides = {}) {
     status: "ok",
     cache: {
       format_major: 1,
-      format_minor: 25,
+      format_minor: 26,
       validated: true,
       sections: Array.from({ length: 51 }, () => ({})),
     },
@@ -372,7 +372,7 @@ test("keeps the AutoCAD annotation gate open until one drawing can switch views"
       report: {
         case: {
           ...partial.cases[0],
-          cacheSchema: "dwg-scene-cache/1.25",
+          cacheSchema: "dwg-scene-cache/1.26",
           singleDrawingViewSwitch: true,
         },
         states: stateValues.map(([id, model, layout]) => ({
@@ -452,6 +452,9 @@ test("requires every AutoCAD system-variable pair before closing the gate", () =
     pairEvidence("qtextmode", "QTEXTMODE", [0, 1]),
     pairEvidence("splframe", "SPLFRAME", [0, 1]),
     pairEvidence("dispsilh", "DISPSILH", [0, 1]),
+    pairEvidence("dispsilhblocks", "DISPSILHBLOCKS", [0, 1]),
+    pairEvidence("imagequality", "IMAGEQUALITY", [0, 1]),
+    pairEvidence("visretain", "VISRETAIN", [0, 1]),
     pairEvidence("xrefoverride", "XREFOVERRIDE", [0, 1]),
   ]);
   assert.equal(complete.complete, true);
@@ -463,12 +466,15 @@ test("requires every AutoCAD system-variable pair before closing the gate", () =
       "annotation-model",
       "attmode",
       "dispsilh",
+      "dispsilhblocks",
       "fillmode",
       "frame",
       "imageframe",
+      "imagequality",
       "oleframe",
       "qtextmode",
       "splframe",
+      "visretain",
       "xclipframe",
       "xrefoverride",
     ],
@@ -503,6 +509,10 @@ test("requires the documented AutoCAD screen-pixel transitions", () => {
   );
   assert.equal(
     validateAutoCadPairPixelStates("QTEXTMODE", states("0", "1")),
+    true,
+  );
+  assert.equal(
+    validateAutoCadPairPixelStates("IMAGEQUALITY", states("0", "1")),
     true,
   );
   assert.throws(
@@ -865,7 +875,7 @@ test("verifies an AutoCAD annotation 2x2 matrix and decoded pixels", async (cont
       activeScale: { name: "1:2", value: 2 },
       states: contracts.map(([id]) => id),
       singleSession: true,
-      cacheSchema: "dwg-scene-cache/1.25",
+      cacheSchema: "dwg-scene-cache/1.26",
       singleDrawingViewSwitch: true,
       cameras:
         "one model camera and one layout camera retained across every state",

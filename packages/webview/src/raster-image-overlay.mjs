@@ -5,7 +5,7 @@ import {
   includePoint,
   transformPoint,
 } from "./math.mjs";
-import { effectiveClipBounds } from "./instance-graph.mjs?v=1.25.0";
+import { effectiveClipBounds } from "./instance-graph.mjs?v=1.26.0";
 import {
   decodeCadColor,
   decodeCadOpacity,
@@ -888,6 +888,7 @@ export class CanvasRasterImageOverlay {
       maximumOccurrences = DEFAULT_MAXIMUM_OCCURRENCES,
       minimumScreenDimension = DEFAULT_MINIMUM_SCREEN_DIMENSION,
       imageFrame = 0,
+      rasterImageQualityHigh = true,
       externalReferenceOverrides = false,
     },
   ) {
@@ -944,6 +945,10 @@ export class CanvasRasterImageOverlay {
       throw new RangeError("IMAGEFRAME must be 0, 1, or 2");
     }
     this.imageFrame = imageFrame;
+    if (typeof rasterImageQualityHigh !== "boolean") {
+      throw new TypeError("IMAGEQUALITY must be a boolean");
+    }
+    this.rasterImageQualityHigh = rasterImageQualityHigh;
     if (typeof externalReferenceOverrides !== "boolean") {
       throw new TypeError("XREFOVERRIDE must be a boolean");
     }
@@ -1141,8 +1146,10 @@ export class CanvasRasterImageOverlay {
     if (clear) {
       context.clearRect(0, 0, width, height);
     }
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = "high";
+    context.imageSmoothingEnabled = this.rasterImageQualityHigh;
+    context.imageSmoothingQuality = this.rasterImageQualityHigh
+      ? "high"
+      : "low";
     const metrics = {
       sourceImages: this.imageEntities.length,
       renderDeltaTransforms: this.renderDeltaTransforms.length,
@@ -1154,6 +1161,8 @@ export class CanvasRasterImageOverlay {
       decodingImages: 0,
       failedImages: 0,
       imageFrames: 0,
+      rasterImageQuality:
+        this.rasterImageQualityHigh ? "high" : "draft",
       clipOperations: 0,
       xclipOperations: 0,
       truncated: false,
@@ -1496,7 +1505,7 @@ export class CanvasRasterImageOverlay {
           this.instanceGraph,
           viewportStyleRow(instances, instanceIndex),
           layerIndex,
-          this.layers?.[layerIndex]?.color ?? 0,
+          this.displayLayers?.[layerIndex]?.color ?? 0,
         );
         const effectiveColor = this.externalReferenceOverrides
           ? BY_LAYER_ENTITY_COLOR
@@ -1576,6 +1585,12 @@ export class CanvasRasterImageOverlay {
           continue;
         }
         context.save();
+        const imageQualityHigh =
+          embeddedPresentation || this.rasterImageQualityHigh;
+        context.imageSmoothingEnabled = imageQualityHigh;
+        context.imageSmoothingQuality = imageQualityHigh
+          ? "high"
+          : "low";
         this.#applyXClip(
           instances.clipIds?.[instanceIndex] ?? 0,
           camera,
@@ -1605,7 +1620,7 @@ export class CanvasRasterImageOverlay {
                   this.instanceGraph,
                   viewportStyleRow(instances, instanceIndex),
                   layerIndex,
-                  this.layers?.[layerIndex]?.color ?? 0,
+                  this.displayLayers?.[layerIndex]?.color ?? 0,
                 ),
               ),
               byBlock: 1,
@@ -1660,6 +1675,10 @@ export class CanvasRasterImageOverlay {
           scratchContext.globalAlpha = 1;
           scratchContext.globalCompositeOperation = "source-over";
           scratchContext.filter = "none";
+          scratchContext.imageSmoothingEnabled = imageQualityHigh;
+          scratchContext.imageSmoothingQuality = imageQualityHigh
+            ? "high"
+            : "low";
           scratchContext.clearRect(0, 0, asset.width, asset.height);
           if (embeddedPresentation) {
             scratchContext.fillStyle = "#fff";
@@ -1706,6 +1725,10 @@ export class CanvasRasterImageOverlay {
             );
             this.context.globalAlpha = 1;
             this.context.filter = "none";
+            this.context.imageSmoothingEnabled = imageQualityHigh;
+            this.context.imageSmoothingQuality = imageQualityHigh
+              ? "high"
+              : "low";
             this.context.setTransform(
               (topRight[0] - topLeft[0]) / asset.width,
               (topRight[1] - topLeft[1]) / asset.width,

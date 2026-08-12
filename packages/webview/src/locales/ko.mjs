@@ -7,7 +7,7 @@ export const KO_MESSAGES = Object.freeze({
   "common.noPath": "(경로 없음)",
   "common.unknownError": "알 수 없는 오류",
   "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.25",
+  "page.eyebrow": "DWG Viewer · Scene Cache v1.26",
   "page.heading": "대형 도면 첫 화면 검증기",
   "page.hostHeading": "DWG 도면 뷰어",
   "toolbar.more.open": "도면 도구 펼치기",

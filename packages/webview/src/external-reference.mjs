@@ -1,9 +1,9 @@
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.25.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.26.0";
 import {
   multiplyMat4,
   transformPoint,
 } from "./math.mjs";
-import { createClipNode } from "./instance-graph.mjs?v=1.25.0";
+import { createClipNode } from "./instance-graph.mjs?v=1.26.0";
 
 const MATRIX_VALUES = 16;
 const MODEL_BLOCK_INDEX = -1;
@@ -12,6 +12,8 @@ const BY_LAYER_ENTITY_COLOR = 1 << 24;
 const LINE_WEIGHT_MASK = 0x1f;
 const LINETYPE_MASK = 0x7ff << 5;
 const BY_LAYER_LINE_WEIGHT_CODE = 2;
+const EXTERNAL_DEPENDENT_LAYER_FLAG = 1 << 4;
+const RELOADABLE_LAYER_FLAGS = 0x0f;
 
 export function blockExternalReferenceIsDisplayable(block) {
   return Boolean(
@@ -28,7 +30,11 @@ function layerKey(value) {
     .toLocaleLowerCase("en-US");
 }
 
-export function buildExternalLinetypeMap(rootLinetypes, childLinetypes) {
+export function buildExternalLinetypeMap(
+  rootLinetypes,
+  childLinetypes,
+  prefix = "",
+) {
   const rootByName = new Map(
     (rootLinetypes ?? []).map((linetype) => [
       layerKey(linetype.name),
@@ -40,12 +46,20 @@ export function buildExternalLinetypeMap(rootLinetypes, childLinetypes) {
     maximumChildCode = Math.max(maximumChildCode, linetype.code);
   }
   const output = new Uint16Array(maximumChildCode + 1);
+  const normalizedPrefix = String(prefix ?? "")
+    .normalize("NFC")
+    .replace(/\|+$/u, "");
   output.fill(2);
   output[0] = 0;
   output[1] = 1;
   output[2] = 2;
   for (const linetype of childLinetypes ?? []) {
-    const rootCode = rootByName.get(layerKey(linetype.name));
+    const rootCode =
+      (normalizedPrefix
+        ? rootByName.get(
+            layerKey(`${normalizedPrefix}|${linetype.name}`),
+          )
+        : undefined) ?? rootByName.get(layerKey(linetype.name));
     output[linetype.code] =
       Number.isInteger(rootCode) && rootCode >= 0 ? rootCode : 2;
   }
@@ -536,6 +550,201 @@ export function buildExternalLayerMap(
       );
     }),
   );
+}
+
+export function synchronizeExternalLayerProperties(
+  displayLayers,
+  childLayers,
+  prefix,
+) {
+  if (
+    !Array.isArray(displayLayers) ||
+    !Array.isArray(childLayers) ||
+    typeof prefix !== "string" ||
+    prefix.length === 0 ||
+    prefix.length > 1_024
+  ) {
+    throw new TypeError("external layer synchronization input is invalid");
+  }
+  const normalizedPrefix = prefix
+    .normalize("NFC")
+    .replace(/\|+$/u, "");
+  if (!normalizedPrefix) {
+    throw new TypeError("external layer prefix is empty");
+  }
+  const rootByName = new Map(
+    displayLayers.map((layer, index) => [layerKey(layer?.name), index]),
+  );
+  const next = [...displayLayers];
+  const changed = [];
+  for (const child of childLayers) {
+    const childName = String(child?.name ?? "");
+    if (!childName) {
+      continue;
+    }
+    const targetIndex = rootByName.get(
+      layerKey(`${normalizedPrefix}|${childName}`),
+    );
+    if (targetIndex === undefined) {
+      continue;
+    }
+    const current = next[targetIndex];
+    if (
+      !current ||
+      ((current.flags ?? 0) & EXTERNAL_DEPENDENT_LAYER_FLAG) === 0
+    ) {
+      continue;
+    }
+    const color = child.color >>> 0;
+    const flags =
+      (((current.flags ?? 0) & ~RELOADABLE_LAYER_FLAGS) |
+        ((child.flags ?? 0) & RELOADABLE_LAYER_FLAGS)) >>>
+      0;
+    const lineWeight =
+      Number.isInteger(child.lineWeight) &&
+      child.lineWeight >= -3 &&
+      child.lineWeight <= 211
+        ? child.lineWeight
+        : -3;
+    const linetype = String(child.linetype ?? "Continuous");
+    if (
+      current.color === color &&
+      current.flags === flags &&
+      current.lineWeight === lineWeight &&
+      current.linetype === linetype
+    ) {
+      continue;
+    }
+    next[targetIndex] = Object.freeze({
+      ...current,
+      color,
+      flags,
+      lineWeight,
+      linetype,
+    });
+    changed.push(targetIndex);
+  }
+  return Object.freeze({
+    layers: Object.freeze(next),
+    changedIndices: Uint32Array.from(changed),
+  });
+}
+
+export function applyDisplayLayerProperties(
+  instanceGraph,
+  baselineLayers,
+  displayLayers,
+  linetypes,
+) {
+  if (
+    !instanceGraph ||
+    !Array.isArray(baselineLayers) ||
+    !Array.isArray(displayLayers) ||
+    baselineLayers.length !== displayLayers.length ||
+    !Array.isArray(instanceGraph.layerVisibilityRows) ||
+    !Array.isArray(instanceGraph.layerColorsByVisibilityRow) ||
+    !Array.isArray(instanceGraph.layerLineWeightsByVisibilityRow) ||
+    !Array.isArray(instanceGraph.layerLinetypesByVisibilityRow)
+  ) {
+    throw new TypeError("display layer presentation input is inconsistent");
+  }
+  const codeByName = new Map([
+    ["bylayer", 0],
+    ["byblock", 1],
+    ["continuous", 2],
+  ]);
+  for (const linetype of linetypes ?? []) {
+    if (
+      Number.isInteger(linetype?.code) &&
+      linetype.code >= 0 &&
+      linetype.code <= 2047
+    ) {
+      codeByName.set(layerKey(linetype.name), linetype.code);
+    }
+  }
+  const linetypeCodeForLayer = (layer) => {
+    const name = String(layer?.linetype ?? "Continuous");
+    const exact = codeByName.get(layerKey(name));
+    if (exact !== undefined) {
+      return exact;
+    }
+    const layerName = String(layer?.name ?? "");
+    const separator = layerName.lastIndexOf("|");
+    return separator > 0
+      ? codeByName.get(
+          layerKey(`${layerName.slice(0, separator)}|${name}`),
+        ) ?? 2
+      : 2;
+  };
+  const layerLinetypeCodes = Uint16Array.from(
+    displayLayers,
+    linetypeCodeForLayer,
+  );
+  const baselineLinetypeCodes = Uint16Array.from(
+    baselineLayers,
+    linetypeCodeForLayer,
+  );
+  const colors = instanceGraph.layerColorsByVisibilityRow.map(
+    (source, rowIndex) => {
+      if (
+        !(source instanceof Uint32Array) ||
+        source.length !== displayLayers.length
+      ) {
+        throw new TypeError(`layer color row ${rowIndex} is invalid`);
+      }
+      const row = new Uint32Array(source);
+      for (let index = 0; index < row.length; index += 1) {
+        if (row[index] === (baselineLayers[index].color >>> 0)) {
+          row[index] = displayLayers[index].color >>> 0;
+        }
+      }
+      return row;
+    },
+  );
+  const lineWeights = instanceGraph.layerLineWeightsByVisibilityRow.map(
+    (source, rowIndex) => {
+      if (
+        !(source instanceof Int16Array) ||
+        source.length !== displayLayers.length
+      ) {
+        throw new TypeError(`layer lineweight row ${rowIndex} is invalid`);
+      }
+      const row = new Int16Array(source);
+      for (let index = 0; index < row.length; index += 1) {
+        if (row[index] === baselineLayers[index].lineWeight) {
+          row[index] = displayLayers[index].lineWeight;
+        }
+      }
+      return row;
+    },
+  );
+  const linetypeRows = instanceGraph.layerLinetypesByVisibilityRow.map(
+    (source, rowIndex) => {
+      if (
+        !(source instanceof Uint16Array) ||
+        source.length !== displayLayers.length
+      ) {
+        throw new TypeError(`layer linetype row ${rowIndex} is invalid`);
+      }
+      const row = new Uint16Array(source);
+      for (let index = 0; index < row.length; index += 1) {
+        if (row[index] === baselineLinetypeCodes[index]) {
+          row[index] = layerLinetypeCodes[index];
+        }
+      }
+      return row;
+    },
+  );
+  return Object.freeze({
+    instanceGraph: Object.freeze({
+      ...instanceGraph,
+      layerColorsByVisibilityRow: Object.freeze(colors),
+      layerLineWeightsByVisibilityRow: Object.freeze(lineWeights),
+      layerLinetypesByVisibilityRow: Object.freeze(linetypeRows),
+      layerLinetypeCodes,
+    }),
+    layerLinetypeCodes,
+  });
 }
 
 export function remapLineVertexLayers(buffer, layerMap, stride = 36) {

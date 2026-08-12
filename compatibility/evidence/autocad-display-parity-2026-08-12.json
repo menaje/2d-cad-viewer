@@ -1,7 +1,7 @@
 {
   "schema": "dwg-autocad-display-parity-evidence/1",
   "status": "pass-with-explicit-external-gates",
-  "observedAt": "2026-08-12T12:49:32Z",
+  "observedAt": "2026-08-12T13:34:32Z",
   "scope": {
     "repository": "menaje/dwg-viewer",
     "comparisonTarget": "AutoCAD 2026 2D Wireframe model/layout display",
@@ -19,7 +19,7 @@
       "linkage": "static"
     },
     "cache": {
-      "schema": "dwg-scene-cache/1.25"
+      "schema": "dwg-scene-cache/1.26"
     },
     "target": {
       "platform": "darwin",
@@ -809,7 +809,7 @@
       {
         "fixture": "architectural_-_annotation_scaling_and_multileaders.dwg",
         "inputSha256": "0e74f0aa84b1323c922345f067739c42ee26213dea010b407b87a94212271654",
-        "cacheSha256": "939fa09c8e311563d45c8f42b3840664702f6eac1399ffbfd4cb6095694d8c9c",
+        "cacheSha256": "2c6a66d2e264eb9da5f0ec3ac4eb195e4aaa259de53f3ba32705a13fac3f310b",
         "inputBytes": 188992,
         "cacheBytes": 491968,
         "coverage": {
@@ -913,7 +913,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -946,7 +949,7 @@
       {
         "fixture": "architectural_example-imperial.dwg",
         "inputSha256": "52d14a7bdb946099d3cf16fd276d19bd8924348fd02b2ddd0003cd4f6b34cce7",
-        "cacheSha256": "0822660734a2868ed2a1e048b96f900572e0cf6ad9d70ff4c5aa7e6a5022494e",
+        "cacheSha256": "7958a7b07de3caa981dfcddb6756c2b452520176bf067cd2a2e46e6880b9a940",
         "inputBytes": 148638,
         "cacheBytes": 30160,
         "coverage": {
@@ -1039,7 +1042,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1072,7 +1078,7 @@
       {
         "fixture": "blocks_and_tables_-_imperial.dwg",
         "inputSha256": "3c95e8a82d5c8c251483fabc61efa8ca904f4e4bc8c2fce4786d74e812284d07",
-        "cacheSha256": "b585f26134badd15ef83e3c16eb4e112e6ada630f30ac7b7a64f71a4a326535a",
+        "cacheSha256": "be2e264016ff2de8bb3e30941ac0a5b1502c4a85f9e8522d176f81257eb3c830",
         "inputBytes": 227008,
         "cacheBytes": 826392,
         "coverage": {
@@ -1174,7 +1180,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1207,7 +1216,7 @@
       {
         "fixture": "blocks_and_tables_-_metric.dwg",
         "inputSha256": "7d5507da05fb70ba55875d99e676524ca2caa0ed7a5582ad130c3c06e8d925f1",
-        "cacheSha256": "dbd00149520cdcb698845a310a4811e1800e5f98365132c964503b460a8759b3",
+        "cacheSha256": "f6891178abaf6928b8db67cd35801071c9cfe8ce2a0fb9b9afc7794dbf550b16",
         "inputBytes": 258848,
         "cacheBytes": 914824,
         "coverage": {
@@ -1309,7 +1318,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1342,7 +1354,7 @@
       {
         "fixture": "civil_example-imperial.dwg",
         "inputSha256": "45b419d0c7382eb271079b80c3237a52183f4fa09e7b495c3d7a65c6baa927dc",
-        "cacheSha256": "b2dff2fa9fa5405cf72259b2249f79f6d905c917bb519aa47be205471a06133d",
+        "cacheSha256": "d32d73d70f07a610187e278b87ed1fb2ccb5009aa856ec440684cf5a29fd47c5",
         "inputBytes": 169592,
         "cacheBytes": 239464,
         "coverage": {
@@ -1436,7 +1448,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1469,7 +1484,7 @@
       {
         "fixture": "colorwh.dwg",
         "inputSha256": "7c70a76ce00647770b5026727fd0156a94a11d456db47db97d0bdf5a81acc344",
-        "cacheSha256": "588cfa2ec6a86ecac8cf0523bf662329dfbddd706a2f7f6e27d09135963e7d46",
+        "cacheSha256": "937feb7e15796414359cf6b1240ce46235af1714ecb6c00036a0d25a8b68c82e",
         "inputBytes": 1786976,
         "cacheBytes": 6140944,
         "coverage": {
@@ -1562,7 +1577,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -1595,7 +1613,7 @@
       {
         "fixture": "lineweights.dwg",
         "inputSha256": "ad2656f141675aeda06ede347f8921516700b60a0f5ba17af042419be5397b4d",
-        "cacheSha256": "fd71c675d129dad4ed0ec65523356c5e1d95e9d0e68090172878f9eff8e3d253",
+        "cacheSha256": "a1d1cc9ec0d1a76272ac526908e64df0d181456120e713eaec0466169901f064",
         "inputBytes": 58496,
         "cacheBytes": 32584,
         "coverage": {
@@ -1685,7 +1703,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -1718,7 +1739,7 @@
       {
         "fixture": "mechanical_example-imperial.dwg",
         "inputSha256": "854c8ebed8726add72ba4a9a2a19ba0d010372f5cadefb40e648cdf881cad858",
-        "cacheSha256": "a4a60380b952b58bc1d24739573751a1b31a40996b8ec8d0c828acc331b786d1",
+        "cacheSha256": "fc9c99d6a49c84b211c87163c9115b3104ef085b011576a168391f3547fde302",
         "inputBytes": 142267,
         "cacheBytes": 31712,
         "coverage": {
@@ -1810,7 +1831,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -1843,7 +1867,7 @@
       {
         "fixture": "plot_screening_and_fill_patterns.dwg",
         "inputSha256": "3eb8c946863ca733a289813589ecee8ea383aa63b4c5fa2a22fe31feacf02f71",
-        "cacheSha256": "6cacb79de643171bc2ff499e6447e20f8c7d2bec96aee47a2a638477d81bc6d8",
+        "cacheSha256": "6d8d413681c584c9d6b92216e7a0bae1cfda97b3d581c8eec14f8d6d8bc8fb1a",
         "inputBytes": 85952,
         "cacheBytes": 70464,
         "coverage": {
@@ -1932,7 +1956,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 7,
         "annotationAllVisible": {
@@ -1965,7 +1992,7 @@
       {
         "fixture": "tablet.dwg",
         "inputSha256": "7f203649dc8434ef7cf7a46f7f6def2a0192a1163ba34ebcf88ebfe69635ccd4",
-        "cacheSha256": "1f1f91a615c020fc70191e632e0843e7707a68bb84c4dd7b7793b3c0ab9431ce",
+        "cacheSha256": "09bdd6a0a2122bc1f59124f15f97c2d11fefd520ab1cfe23737a06e3ce59d96b",
         "inputBytes": 438656,
         "cacheBytes": 2585432,
         "coverage": {
@@ -2071,7 +2098,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2104,7 +2134,7 @@
       {
         "fixture": "title_block-ansi.dwg",
         "inputSha256": "907398897552a090182f5446f18ad1ef82b91176764c8ccf08b5c5799546eeba",
-        "cacheSha256": "6247f86be412bbf6139192e4fc47f88d91da40a5cb67e1367db7d3d8d9ce38e7",
+        "cacheSha256": "9d15627ba865db345f255d36218e6350e40d4d9c48a0b68be0481ec56212f88a",
         "inputBytes": 125896,
         "cacheBytes": 260352,
         "coverage": {
@@ -2197,7 +2227,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -2230,7 +2263,7 @@
       {
         "fixture": "title_block-arch.dwg",
         "inputSha256": "59876d9e1fa9f4d64304d6e7e35cbfafa127e0b5363b3afbe6ed48ef3d2e867d",
-        "cacheSha256": "07e581601b108b8362552e7598e8aeafc2a0d4b7012e4c42a88970b00af27104",
+        "cacheSha256": "0707b67071ba542a72b8958bc2c4f6f6da6ab96d9c814d51e9d413d04ae1858b",
         "inputBytes": 126985,
         "cacheBytes": 260808,
         "coverage": {
@@ -2323,7 +2356,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -2356,7 +2392,7 @@
       {
         "fixture": "title_block-iso.dwg",
         "inputSha256": "b874d82c5ee04f8a4fa6e907408c4ed770ee8208740fe4e1eb0f96fb2f793bc2",
-        "cacheSha256": "6c3617d724433d78d227621b4e77d07008cbc5d725bc6311e764070599b0bbac",
+        "cacheSha256": "ec56efca4fcb5d43fe6565f14a8af0e572b3ce5479aa6f2746557c8bbf7d08c2",
         "inputBytes": 128233,
         "cacheBytes": 259608,
         "coverage": {
@@ -2448,7 +2484,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 2,
         "annotationAllVisible": {
@@ -2481,7 +2520,7 @@
       {
         "fixture": "truetype.dwg",
         "inputSha256": "1e105bc884972d3d80cd983965d8dfa17f6f392042ec6c5997d99ae347487a92",
-        "cacheSha256": "32e3867df0cce527f870cb9227ada2ac169f6ae0d45a3b0fb46e9662e6cf06b2",
+        "cacheSha256": "a90f26177bee3a87e9179ce5a75b2ab61f3a5a47335915344c02de3e06f5834b",
         "inputBytes": 70464,
         "cacheBytes": 35912,
         "coverage": {
@@ -2571,7 +2610,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2604,7 +2646,7 @@
       {
         "fixture": "visualization_-_aerial.dwg",
         "inputSha256": "edf22e187337e37d2083b26d6d00ce30ed78d2fd31d6bf0e9869902325ad3ab1",
-        "cacheSha256": "98479f45003fa4c1fba5da66078fcd92c782b904db695d09a07dc48c283177ba",
+        "cacheSha256": "d5714678f88a698db289e3ff4a4e315bd7e71a0b9c9e439597d4187c60cce1e1",
         "inputBytes": 733036,
         "cacheBytes": 7568,
         "coverage": {
@@ -2688,7 +2730,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2721,7 +2766,7 @@
       {
         "fixture": "visualization_-_condominium_with_skylight.dwg",
         "inputSha256": "1a94d2412b7aac3c1c3ab6fdb2b62c4e8b031e5868ad45d2169f571bfc7cf8d4",
-        "cacheSha256": "53423715586c8b273835843be92b320300c2cf368392a55d5e2a318cf0f01554",
+        "cacheSha256": "369b04092d2b1fd0e092578929cdaeb90233d15c627750212679ded709345501",
         "inputBytes": 1415699,
         "cacheBytes": 504328,
         "coverage": {
@@ -2815,7 +2860,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2848,7 +2896,7 @@
       {
         "fixture": "visualization_-_conference_room.dwg",
         "inputSha256": "0579e4b5746593ff41d9326e488b1faddc0f7cc10e7db5317fc1d5b86f0132c4",
-        "cacheSha256": "e289ad730cb97627b3ae32042568203cd2a708110a6bbf78d073d92eb038b842",
+        "cacheSha256": "90f6ea8f7e51460921d68d2bb48f5ef8952f75c50563b010ff343a749a3ccaf9",
         "inputBytes": 973730,
         "cacheBytes": 158864,
         "coverage": {
@@ -2941,7 +2989,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -2974,7 +3025,7 @@
       {
         "fixture": "visualization_-_sun_and_sky_demo.dwg",
         "inputSha256": "fad5a9f95ac72c1ef572b2b69f831ee08492135acd5da5ff76af01b2ec506881",
-        "cacheSha256": "1d6e7f9aaca5d937f08cc39f65c148e31098970390fe4916a907d8dd802b6840",
+        "cacheSha256": "238843c956af8a27836f5739e34f391c9b00ec5da521d341c9c2885c9b9bd379",
         "inputBytes": 553297,
         "cacheBytes": 43352,
         "coverage": {
@@ -3066,7 +3117,10 @@
           "quickTextMode": false,
           "splineFrame": false,
           "displaySilhouettes": false,
-          "externalReferenceOverrides": false
+          "externalReferenceOverrides": false,
+          "retainExternalReferenceLayers": true,
+          "rasterImageQualityHigh": true,
+          "displaySilhouettesInBlocks": true
         },
         "layouts": 3,
         "annotationAllVisible": {
@@ -3099,7 +3153,7 @@
     ]
   },
   "conversion": {
-    "cacheSchema": "dwg-scene-cache/1.25",
+    "cacheSchema": "dwg-scene-cache/1.26",
     "sectionCount": 51,
     "coverage": {
       "total_entities": 59627,
@@ -3225,6 +3279,16 @@
     },
     "externalReferenceOverrides": {
       "false": 141
+    },
+    "retainExternalReferenceLayers": {
+      "true": 137,
+      "false": 4
+    },
+    "rasterImageQualityHigh": {
+      "true": 141
+    },
+    "displaySilhouettesInBlocks": {
+      "true": 141
     }
   },
   "layoutState": {
@@ -3385,6 +3449,9 @@
       "QTEXTMODE-0-1",
       "SPLFRAME-0-1",
       "DISPSILH-0-1",
+      "DISPSILHBLOCKS-0-1",
+      "IMAGEQUALITY-0-1",
+      "VISRETAIN-0-1",
       "XREFOVERRIDE-0-1",
       "ANNOALLVISIBLE-model-0-1",
       "ANNOALLVISIBLE-layout-0-1",
@@ -3419,7 +3486,7 @@
     {
       "fixture": "2004/HatchG.dwg",
       "inputSha256": "9d03bcf4330ff5940a45e0fded1a4278810a626cc93cafe04b5ea0931a1ccc31",
-      "cacheSha256": "0260afb5439893d962515ab7ba829b3ac17c2cd1fa8fabe5f21be603f564efd6",
+      "cacheSha256": "9480d7cf3d07c73842de7a298dacea9d74e553160607df9840dad3ef54075c08",
       "inputBytes": 59489,
       "cacheBytes": 130256,
       "coverage": {
@@ -3513,7 +3580,10 @@
         "quickTextMode": false,
         "splineFrame": false,
         "displaySilhouettes": false,
-        "externalReferenceOverrides": false
+        "externalReferenceOverrides": false,
+        "retainExternalReferenceLayers": true,
+        "rasterImageQualityHigh": true,
+        "displaySilhouettesInBlocks": true
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3546,7 +3616,7 @@
     {
       "fixture": "2004/Underlay.dwg",
       "inputSha256": "0f061fe45c2e9a64028b465568e1fcb2b9b57e8ba20d533e53dc0704f4a03268",
-      "cacheSha256": "1f3a8323b105c86cd6834646eb29a7c7ac6bc2420ce92bcf8854e9dd64dd712b",
+      "cacheSha256": "cd01468e690ad31712b13ea56b84092d68cf3332314de24934fe56f3a1be2613",
       "inputBytes": 70412,
       "cacheBytes": 3992,
       "coverage": {
@@ -3628,7 +3698,10 @@
         "quickTextMode": false,
         "splineFrame": false,
         "displaySilhouettes": false,
-        "externalReferenceOverrides": false
+        "externalReferenceOverrides": false,
+        "retainExternalReferenceLayers": true,
+        "rasterImageQualityHigh": true,
+        "displaySilhouettesInBlocks": true
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3661,7 +3734,7 @@
     {
       "fixture": "2013/ConstructionLine.dwg",
       "inputSha256": "7f0349aa01202098e9db748a38224b5bc710f0c88b53c549f4a73c4435a12f12",
-      "cacheSha256": "9cc110e1a6e3a906808f4084f8e2433583d883d05d855abbd5e6ba653bd70b5f",
+      "cacheSha256": "00ad81098445dbf9e7aaf3af32f90fc2751f5742982358c5f2993e347a4281e5",
       "inputBytes": 31899,
       "cacheBytes": 4832,
       "coverage": {
@@ -3748,7 +3821,10 @@
         "quickTextMode": false,
         "splineFrame": false,
         "displaySilhouettes": false,
-        "externalReferenceOverrides": false
+        "externalReferenceOverrides": false,
+        "retainExternalReferenceLayers": true,
+        "rasterImageQualityHigh": true,
+        "displaySilhouettesInBlocks": true
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3781,7 +3857,7 @@
     {
       "fixture": "2013/Multiline.dwg",
       "inputSha256": "82d963274ae5d236b3e2206fb47da1c303b6858b6b30460401d42fbcb07920db",
-      "cacheSha256": "04a7d5e99346e121c952c72b7d3811618daa6429d07df247fbaddfbe4044a4bc",
+      "cacheSha256": "70d4cab950dc43a2982fc15774be3542b6d58c4fd604290cfaa2b26c63e0f0b5",
       "inputBytes": 31614,
       "cacheBytes": 5384,
       "coverage": {
@@ -3866,7 +3942,10 @@
         "quickTextMode": false,
         "splineFrame": false,
         "displaySilhouettes": false,
-        "externalReferenceOverrides": false
+        "externalReferenceOverrides": false,
+        "retainExternalReferenceLayers": true,
+        "rasterImageQualityHigh": true,
+        "displaySilhouettesInBlocks": true
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -3899,7 +3978,7 @@
     {
       "fixture": "2013/RAY.dwg",
       "inputSha256": "1c189782df5254881d915596ed1d02debcec26985e93a1b5b29e1ddb17c88777",
-      "cacheSha256": "5601b9b423aba8e0b82b77fec56e03eb787ac717ccfd5230279f6abb002015e1",
+      "cacheSha256": "16bd5ae57f32c7f063bb756c378addef080199311a67b9cafdf232dc52d834e3",
       "inputBytes": 37634,
       "cacheBytes": 4832,
       "coverage": {
@@ -3986,7 +4065,10 @@
         "quickTextMode": false,
         "splineFrame": false,
         "displaySilhouettes": false,
-        "externalReferenceOverrides": false
+        "externalReferenceOverrides": false,
+        "retainExternalReferenceLayers": true,
+        "rasterImageQualityHigh": true,
+        "displaySilhouettesInBlocks": true
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -4019,7 +4101,7 @@
     {
       "fixture": "2013/Text.dwg",
       "inputSha256": "5410979aab86bf912aa7018845e8723ed756d98c01d6008a223b0fd0b2072ebc",
-      "cacheSha256": "3474242643bf85a9b05486d733700f2cec6e1ace4d32e8eb0480fc41a54166ac",
+      "cacheSha256": "2f91cec779426f73ff24d47328eb7d761a3c0dd0ff723fff34c3e66a93aa5594",
       "inputBytes": 31164,
       "cacheBytes": 4976,
       "coverage": {
@@ -4103,7 +4185,10 @@
         "quickTextMode": false,
         "splineFrame": false,
         "displaySilhouettes": false,
-        "externalReferenceOverrides": false
+        "externalReferenceOverrides": false,
+        "retainExternalReferenceLayers": true,
+        "rasterImageQualityHigh": true,
+        "displaySilhouettesInBlocks": true
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -4136,7 +4221,7 @@
     {
       "fixture": "2013/gh109_1.dwg",
       "inputSha256": "97156d13d70e04c4b3f7f379a6c4568ba24d384449d64127e743471b55bdfadf",
-      "cacheSha256": "d94f1bebfa91fe1fda6eab9eff9efcc8e44c356e7d2ee35780af24199d3c222f",
+      "cacheSha256": "4c1ed4c0d5c3e66e7146ec1b2481c25f3ef64569234c217d525d1baf16fda136",
       "inputBytes": 102258,
       "cacheBytes": 86568,
       "coverage": {
@@ -4240,7 +4325,10 @@
         "quickTextMode": false,
         "splineFrame": false,
         "displaySilhouettes": false,
-        "externalReferenceOverrides": false
+        "externalReferenceOverrides": false,
+        "retainExternalReferenceLayers": true,
+        "rasterImageQualityHigh": true,
+        "displaySilhouettesInBlocks": true
       },
       "layouts": 3,
       "annotationAllVisible": {
@@ -4273,7 +4361,7 @@
     {
       "fixture": "r11/ACEB10.dwg",
       "inputSha256": "cc5808621cfdc597f6e726a4f3591402b92ea627e581ce4380344c5dd02392f1",
-      "cacheSha256": "fd27d41050fbcf798b13c976c179f1659bff2178e1ec0de60b4be8c3f8b7397c",
+      "cacheSha256": "c384b379a525f3f6b7504aab0593fc1f5b6977dca99ea97776d7d9ca3f2de783",
       "inputBytes": 93538,
       "cacheBytes": 383064,
       "coverage": {
@@ -4367,7 +4455,10 @@
         "quickTextMode": false,
         "splineFrame": false,
         "displaySilhouettes": false,
-        "externalReferenceOverrides": false
+        "externalReferenceOverrides": false,
+        "retainExternalReferenceLayers": false,
+        "rasterImageQualityHigh": true,
+        "displaySilhouettesInBlocks": true
       },
       "layouts": 0,
       "annotationAllVisible": {

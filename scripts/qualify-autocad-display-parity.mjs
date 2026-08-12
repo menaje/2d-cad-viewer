@@ -37,7 +37,7 @@ const AUTOCAD_PAIR_SCHEMA = "dwg-autocad-system-variable-pair/2";
 const AUTOCAD_XREF_SCHEMA = "dwg-autocad-xref-state-matrix/2";
 const AUTOCAD_ANNOTATION_SCHEMA =
   "dwg-autocad-annotation-scale-matrix/2";
-const CURRENT_CACHE_SCHEMA = "dwg-scene-cache/1.25";
+const CURRENT_CACHE_SCHEMA = "dwg-scene-cache/1.26";
 const WINDOWS_VSCODE_UI_SCHEMA = "dwg-windows-vscode-ui-qualification/1";
 const MAX_EXTERNAL_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_EXTERNAL_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -144,6 +144,9 @@ const PRESENTATION_FIELDS = Object.freeze([
   "splineFrame",
   "displaySilhouettes",
   "externalReferenceOverrides",
+  "retainExternalReferenceLayers",
+  "rasterImageQualityHigh",
+  "displaySilhouettesInBlocks",
 ]);
 const AUTOCAD_PAIR_CONTRACTS = Object.freeze({
   FILLMODE: Object.freeze({ field: "fillMode", values: [0, 1] }),
@@ -159,6 +162,18 @@ const AUTOCAD_PAIR_CONTRACTS = Object.freeze({
   SPLFRAME: Object.freeze({ field: "splineFrame", values: [0, 1] }),
   DISPSILH: Object.freeze({
     field: "displaySilhouettes",
+    values: [0, 1],
+  }),
+  DISPSILHBLOCKS: Object.freeze({
+    field: "displaySilhouettesInBlocks",
+    values: [0, 1],
+  }),
+  IMAGEQUALITY: Object.freeze({
+    field: "rasterImageQualityHigh",
+    values: [0, 1],
+  }),
+  VISRETAIN: Object.freeze({
+    field: "retainExternalReferenceLayers",
     values: [0, 1],
   }),
   XREFOVERRIDE: Object.freeze({
@@ -424,7 +439,7 @@ export function validateConversionReport(report) {
   assert.equal(report?.schema, CONVERSION_SCHEMA);
   assert.equal(report?.status, "ok");
   assert.equal(report?.cache?.format_major, 1);
-  assert.equal(report?.cache?.format_minor, 25);
+  assert.equal(report?.cache?.format_minor, 26);
   assert.equal(report?.cache?.validated, true);
   assert.equal(report?.cache?.sections?.length, 51);
   const coverage = report?.coverage;
@@ -874,6 +889,9 @@ function normalizedPairValue(variable, value) {
     "QTEXTMODE",
     "SPLFRAME",
     "DISPSILH",
+    "DISPSILHBLOCKS",
+    "IMAGEQUALITY",
+    "VISRETAIN",
     "XREFOVERRIDE",
   ].includes(variable)
     ? Boolean(value)
@@ -910,11 +928,15 @@ function relevantPairSourceCount(variable, state) {
         (coverage.polyline_meshes ?? 0)
       );
     case "DISPSILH":
+    case "DISPSILHBLOCKS":
       return (
         (coverage.regions ?? 0) +
         (coverage.solids_3d ?? 0) +
         (coverage.bodies ?? 0)
       );
+    case "IMAGEQUALITY":
+      return coverage.images ?? 0;
+    case "VISRETAIN":
     case "XREFOVERRIDE":
       return sections.blocks ?? 0;
     case "IMAGEFRAME":
@@ -961,6 +983,9 @@ export function validateAutoCadPairPixelStates(variable, states) {
       "QTEXTMODE",
       "SPLFRAME",
       "DISPSILH",
+      "DISPSILHBLOCKS",
+      "IMAGEQUALITY",
+      "VISRETAIN",
       "XREFOVERRIDE",
     ].includes(variable)
   ) {
@@ -1160,6 +1185,12 @@ export function summarizeAutoCadPairCoverage(evidence) {
     ["QTEXTMODE-0-1", covers("QTEXTMODE", [0, 1])],
     ["SPLFRAME-0-1", covers("SPLFRAME", [0, 1])],
     ["DISPSILH-0-1", covers("DISPSILH", [0, 1])],
+    [
+      "DISPSILHBLOCKS-0-1",
+      covers("DISPSILHBLOCKS", [0, 1]),
+    ],
+    ["IMAGEQUALITY-0-1", covers("IMAGEQUALITY", [0, 1])],
+    ["VISRETAIN-0-1", covers("VISRETAIN", [0, 1])],
     ["XREFOVERRIDE-0-1", covers("XREFOVERRIDE", [0, 1])],
     [
       "ANNOALLVISIBLE-model-0-1",
@@ -2374,7 +2405,7 @@ function buildEvidence({
       fixtures: officialRecords.map(fixtureEvidence),
     },
     conversion: {
-      cacheSchema: "dwg-scene-cache/1.25",
+      cacheSchema: "dwg-scene-cache/1.26",
       sectionCount: 51,
       coverage,
       deferredReasonPartitionExact: true,
@@ -2482,7 +2513,7 @@ export async function qualify(options) {
   const doctor = await runAdapter(options.adapterPath, ["doctor"], "adapter doctor");
   assert.equal(doctor?.schema, DOCTOR_SCHEMA);
   assert.equal(doctor?.status, "ok");
-  assert.equal(doctor?.cache?.schema, "dwg-scene-cache/1.25");
+  assert.equal(doctor?.cache?.schema, "dwg-scene-cache/1.26");
   const [
     sourceArchive,
     provenance,

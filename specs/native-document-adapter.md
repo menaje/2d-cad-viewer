@@ -83,7 +83,7 @@ reopen-validate
 
 ## Packed query index
 
-현재 Native query provider는 Scene Cache v1.25의 source-precision record를
+현재 Native query provider는 Scene Cache v1.26의 source-precision record를
 최대 512KiB씩 읽습니다. handle/owner, section locator, layer, bounds와
 bounds precision만 parallel typed array에 저장하며 entity별 JavaScript
 object graph를 만들지 않습니다.

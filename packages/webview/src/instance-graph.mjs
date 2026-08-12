@@ -3,7 +3,7 @@ import {
   insertCellMatrix,
   multiplyMat4Into,
   transformPoint,
-} from "./math.mjs?v=1.25.0";
+} from "./math.mjs?v=1.26.0";
 import {
   MAX_GLOBAL_MASK_BUCKET,
   maskBucketBefore,
