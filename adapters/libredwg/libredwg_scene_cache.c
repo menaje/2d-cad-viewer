@@ -6050,6 +6050,49 @@ validate_insert_clip (CacheWriter *writer,
   return 1;
 }
 
+/*
+ * AutoCAD stores a rectangular SPATIAL_FILTER as two opposing corners in
+ * the filter definition's source coordinates.  Its inverse transform maps
+ * those points into the referenced block's local coordinates.  Transforming
+ * only the opposing corners, then treating the result as another axis-aligned
+ * rectangle, is incorrect when the INSERT is rotated or mirrored: the two
+ * transformed points can even share one coordinate and collapse the clip into
+ * a diagonal sliver.  Expand the source rectangle before applying the inverse
+ * transform and persist it as an ordinary four-point polygon.
+ */
+static uint32_t
+serialized_insert_clip_vertex_count (
+    const Dwg_Object_SPATIAL_FILTER *filter)
+{
+  return filter && filter->num_clip_verts == 2
+             ? 4u
+             : filter ? (uint32_t)filter->num_clip_verts : 0u;
+}
+
+static void
+insert_clip_source_vertex (const Dwg_Object_SPATIAL_FILTER *filter,
+                           uint32_t vertex_index, double *x, double *y)
+{
+  if (filter->num_clip_verts == 2)
+    {
+      const double minimum_x = fmin (filter->clip_verts[0].x,
+                                     filter->clip_verts[1].x);
+      const double maximum_x = fmax (filter->clip_verts[0].x,
+                                     filter->clip_verts[1].x);
+      const double minimum_y = fmin (filter->clip_verts[0].y,
+                                     filter->clip_verts[1].y);
+      const double maximum_y = fmax (filter->clip_verts[0].y,
+                                     filter->clip_verts[1].y);
+      static const uint8_t x_maximum[] = { 0u, 1u, 1u, 0u };
+      static const uint8_t y_maximum[] = { 0u, 0u, 1u, 1u };
+      *x = x_maximum[vertex_index] ? maximum_x : minimum_x;
+      *y = y_maximum[vertex_index] ? maximum_y : minimum_y;
+      return;
+    }
+  *x = filter->clip_verts[vertex_index].x;
+  *y = filter->clip_verts[vertex_index].y;
+}
+
 static int
 write_insert_clip_section (CacheWriter *writer, const Dwg_Data *dwg,
                            SectionEntry *entry)
@@ -6072,14 +6115,14 @@ write_insert_clip_section (CacheWriter *writer, const Dwg_Data *dwg,
         continue;
       if (!validate_insert_clip (writer, filter))
         return 0;
-      vertex_count = (uint32_t)filter->num_clip_verts;
+      vertex_count = serialized_insert_clip_vertex_count (filter);
       if (count >= MAX_INSERT_CLIP_RECORDS
           || first_vertex > MAX_INSERT_CLIP_VERTICES - vertex_count)
         {
           set_error (writer, "INSERT XCLIP source exceeds its bounded limit");
           return 0;
         }
-      flags = vertex_count == 2 ? 1u : 0u;
+      flags = 0u;
       if (!write_u64 (writer, (uint64_t)object->handle.value)
           || !write_u64 (writer, first_vertex)
           || !write_u32 (writer, vertex_count)
@@ -6109,28 +6152,33 @@ write_insert_clip_vertex_section (CacheWriter *writer,
       const Dwg_Object *object = &dwg->object[object_index];
       const Dwg_Object_SPATIAL_FILTER *filter
           = insert_spatial_filter (dwg, object);
+      uint32_t vertex_count;
       uint32_t vertex_index;
       if (!filter)
         continue;
       if (!validate_insert_clip (writer, filter))
         return 0;
-      if (count > MAX_INSERT_CLIP_VERTICES
-                      - (uint32_t)filter->num_clip_verts)
+      vertex_count = serialized_insert_clip_vertex_count (filter);
+      if (count > MAX_INSERT_CLIP_VERTICES - vertex_count)
         {
           set_error (writer, "INSERT XCLIP vertex pool exceeds its limit");
           return 0;
         }
       for (vertex_index = 0;
-           vertex_index < (uint32_t)filter->num_clip_verts;
+           vertex_index < vertex_count;
            vertex_index++)
         {
-          const double source_x = filter->clip_verts[vertex_index].x;
-          const double source_y = filter->clip_verts[vertex_index].y;
+          double source_x;
+          double source_y;
           const double *inverse = filter->inverse_transform;
-          const double local_x = inverse[0] * source_x
-                                 + inverse[1] * source_y + inverse[3];
-          const double local_y = inverse[4] * source_x
-                                 + inverse[5] * source_y + inverse[7];
+          double local_x;
+          double local_y;
+          insert_clip_source_vertex (
+              filter, vertex_index, &source_x, &source_y);
+          local_x = inverse[0] * source_x
+                    + inverse[1] * source_y + inverse[3];
+          local_y = inverse[4] * source_x
+                    + inverse[5] * source_y + inverse[7];
           if (!isfinite (local_x) || !isfinite (local_y))
             {
               set_error (
@@ -6142,7 +6190,7 @@ write_insert_clip_vertex_section (CacheWriter *writer,
               || !write_f64 (writer, local_y))
             return 0;
         }
-      count += (uint32_t)filter->num_clip_verts;
+      count += vertex_count;
     }
   return finish_fixed_section (
       writer, entry, SECTION_INSERT_CLIP_VERTICES,
@@ -11748,13 +11796,27 @@ static int
 hatch_curve_parameters (double start, double end, int is_ccw,
                         double *first, double *sweep)
 {
-  if (is_ccw)
+  /*
+   * LibreDWG exposes clockwise HATCH arc and ellipse parameters in the
+   * boundary edge's clockwise OCS convention.  Reflect those angles across
+   * the OCS X axis before evaluating them with the ordinary mathematical
+   * cos/sin basis below.  Merely reversing start and end mirrors the curve
+   * onto the opposite side of its center, disconnecting otherwise closed
+   * HATCH rings and leaving only their erroneous fallback boundaries visible.
+   */
+  if (!is_ccw)
     {
+      double magnitude;
+      start = -start;
+      end = -end;
+      if (!normalized_curve_sweep (end, start, &magnitude))
+        return 0;
       *first = start;
-      return normalized_curve_sweep (start, end, sweep);
+      *sweep = -magnitude;
+      return 1;
     }
-  *first = end;
-  return normalized_curve_sweep (end, start, sweep);
+  *first = start;
+  return normalized_curve_sweep (start, end, sweep);
 }
 
 static int

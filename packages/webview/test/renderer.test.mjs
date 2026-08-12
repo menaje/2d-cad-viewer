@@ -45,7 +45,10 @@ import {
 function makeFakeGl() {
   let nextId = 0;
   let unpackAlignment = 4;
+  let activeTextureUnit = 10;
   const calls = {
+    activeTexture: [],
+    bindTexture: [],
     bufferData: [],
     drawArraysInstanced: [],
     deletedBuffers: [],
@@ -69,6 +72,7 @@ function makeFakeGl() {
     FLOAT: 8,
     UNSIGNED_INT: 9,
     TEXTURE0: 10,
+    TEXTURE1: 44,
     TEXTURE3: 29,
     TEXTURE4: 33,
     TEXTURE5: 34,
@@ -121,10 +125,20 @@ function makeFakeGl() {
     createTexture: () => ({ id: ++nextId }),
     createVertexArray: () => ({ id: ++nextId }),
     getUniformLocation: (_program, name) => ({ name }),
-    activeTexture() {},
-    bindTexture() {},
+    activeTexture(unit) {
+      activeTextureUnit = unit;
+      calls.activeTexture.push(unit);
+    },
+    bindTexture(target, texture) {
+      calls.bindTexture.push({
+        unit: activeTextureUnit,
+        target,
+        texture,
+      });
+    },
     texParameteri() {},
     texImage2D(...arguments_) {
+      arguments_.unpackAlignment = unpackAlignment;
       calls.texImage2D.push(arguments_);
     },
     getParameter(parameter) {
@@ -609,6 +623,18 @@ test("switches between hybrid, continuous, and maximum-performance interaction r
   assert.equal(interactionCanvas.style.opacity, "0");
   assert.equal(snapshotContext.drawImages.length, 3);
 
+  const paletteChangeDraws = calls.drawArraysInstanced.length;
+  renderer.setAciPalette(new Uint8Array(256 * 4));
+  assert.equal(renderer.interactionFrameAvailable, false);
+  assert.equal(canvas.style.opacity, "");
+  assert.equal(interactionCanvas.style.opacity, "0");
+  const paletteRefresh = renderer.redraw(movedView, {
+    interactive: true,
+  });
+  assert.equal(paletteRefresh.interactionFrameReused, false);
+  assert.equal(paletteRefresh.interactionFrameCaptured, true);
+  assert.ok(calls.drawArraysInstanced.length > paletteChangeDraws);
+
   assert.equal(
     renderer.setInteractionRenderingMode("continuous"),
     "continuous",
@@ -725,6 +751,63 @@ test("uploads Canvas color and order maps for depth-tested overlay composition",
   renderer.dispose();
 });
 
+test("rebinds the INSERT clip texture after ordered overlay composition", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const instanceGraph = {
+    clipNodes: [
+      createClipNode(1, 0, [
+        [0, 0, 0],
+        [10, 0, 0],
+        [10, 10, 0],
+        [0, 10, 0],
+      ]),
+    ],
+  };
+  const camera = { origin: [5, 5, 0] };
+
+  renderer.bindClipTexture(
+    instanceGraph,
+    camera,
+    renderer.clipLocations,
+  );
+  renderer.drawOrderedOverlay(
+    {
+      canvas: { width: 20, height: 10 },
+      orderCanvas: { width: 20, height: 10 },
+    },
+    1,
+  );
+  const uploads = calls.texImage2D.length;
+  const bindings = calls.bindTexture.length;
+
+  renderer.bindClipTexture(
+    instanceGraph,
+    camera,
+    renderer.clipLocations,
+  );
+
+  assert.equal(calls.texImage2D.length, uploads);
+  assert.ok(
+    calls.bindTexture.slice(bindings).some(
+      ({ unit, target, texture }) =>
+        unit === gl.TEXTURE1 &&
+        target === gl.TEXTURE_2D &&
+        texture === renderer.clipTexture,
+    ),
+  );
+  renderer.dispose();
+});
+
 test("culls offscreen layout instances in a full-quality redraw", () => {
   const { gl, calls } = makeFakeGl();
   const canvas = {
@@ -782,7 +865,7 @@ test("culls offscreen layout instances in a full-quality redraw", () => {
   renderer.dispose();
 });
 
-test("uploads odd-width viewport visibility rows without WebGL padding", () => {
+test("uploads odd-width viewport style rows without WebGL padding", () => {
   const { gl, calls } = makeFakeGl();
   const canvas = {
     clientWidth: 200,
@@ -794,14 +877,14 @@ test("uploads odd-width viewport visibility rows without WebGL padding", () => {
     },
   };
   const renderer = new WebGlLineRenderer(canvas);
-  const layers = Array.from({ length: 70 }, () => ({
+  const layers = Array.from({ length: 43 }, () => ({
     color: 0,
     flags: 0,
     lineWeight: -3,
   }));
-  const allVisible = new Uint8Array(70).fill(1);
+  const allVisible = new Uint8Array(43).fill(1);
   const viewportVisible = new Uint8Array(allVisible);
-  viewportVisible[69] = 0;
+  viewportVisible[42] = 0;
 
   renderer.renderOverview({
     batches: [
@@ -834,25 +917,25 @@ test("uploads odd-width viewport visibility rows without WebGL padding", () => {
       arguments_[8].at(-1) === 0,
   );
   assert.ok(visibilityUpload);
-  assert.equal(visibilityUpload[3], 70);
+  assert.equal(visibilityUpload[3], 43);
   assert.equal(visibilityUpload[4], 2);
-  assert.equal(visibilityUpload[8].byteLength, 140);
+  assert.equal(visibilityUpload[8].byteLength, 86);
   const layerColorUpload = calls.texImage2D
     .filter(
       (arguments_) =>
-        arguments_[2] === gl.RGBA && arguments_[3] === 70,
+        arguments_[2] === gl.RGBA && arguments_[3] === 43,
     )
     .at(-1);
   const layerLineWeightUpload = calls.texImage2D
     .filter(
       (arguments_) =>
-        arguments_[2] === gl.R16I && arguments_[3] === 70,
+        arguments_[2] === gl.R16I && arguments_[3] === 43,
     )
     .at(-1);
   const layerLinetypeUpload = calls.texImage2D
     .filter(
       (arguments_) =>
-        arguments_[2] === gl.R16UI && arguments_[3] === 70,
+        arguments_[2] === gl.R16UI && arguments_[3] === 43,
     )
     .at(-1);
   const layerPlotStyleUpload = integerByteUploads.at(-1);
@@ -864,14 +947,14 @@ test("uploads odd-width viewport visibility rows without WebGL padding", () => {
   ]) {
     assert.equal(upload[4], 2);
   }
-  assert.equal(layerColorUpload[8].byteLength, 560);
-  assert.equal(layerLineWeightUpload[8].byteLength, 280);
-  assert.equal(layerLinetypeUpload[8].byteLength, 280);
-  assert.equal(layerPlotStyleUpload[8].byteLength, 140);
-  assert.deepEqual(
-    calls.pixelStorei.map(({ value }) => value),
-    [1, 4, 1, 4, 1, 4],
-  );
+  assert.equal(layerColorUpload[8].byteLength, 344);
+  assert.equal(layerLineWeightUpload[8].byteLength, 172);
+  assert.equal(layerLinetypeUpload[8].byteLength, 172);
+  assert.equal(layerPlotStyleUpload[8].byteLength, 86);
+  assert.equal(visibilityUpload.unpackAlignment, 1);
+  assert.equal(layerLineWeightUpload.unpackAlignment, 1);
+  assert.equal(layerLinetypeUpload.unpackAlignment, 1);
+  assert.equal(layerPlotStyleUpload.unpackAlignment, 1);
   renderer.dispose();
 });
 

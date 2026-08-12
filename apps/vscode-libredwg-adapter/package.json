@@ -2,7 +2,7 @@
   "name": "dwg-viewer-libredwg",
   "displayName": "DWG Viewer — Legacy Engine Test Package",
   "description": "Legacy GPL package retained for offline and extension-host qualification",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "menaje",
   "license": "GPL-3.0-or-later",
   "private": true,

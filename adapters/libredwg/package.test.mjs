@@ -434,6 +434,30 @@ test("stores SOLID quadrilaterals in perimeter order", async () => {
   assert.match(mapping[0], /corners\[3\]\[1\] = solid->corner3\.y;/u);
 });
 
+test("expands rectangular INSERT clips before transforming them", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /serialized_insert_clip_vertex_count[\s\S]*?filter->num_clip_verts == 2[\s\S]*?\? 4u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /insert_clip_source_vertex[\s\S]*?minimum_x[\s\S]*?maximum_y/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /insert_clip_source_vertex \([\s\S]*?local_x = inverse\[0\]/u,
+  );
+  assert.doesNotMatch(
+    sceneCacheSource,
+    /flags = vertex_count == 2 \? 1u : 0u/u,
+  );
+});
+
 test("uses denser bounded chords for HATCH curves without bloating standalone previews", async () => {
   const sceneCacheSource = await readFile(
     path.join(import.meta.dirname, "libredwg_scene_cache.c"),
@@ -471,6 +495,30 @@ test("uses denser bounded chords for HATCH curves without bloating standalone pr
   assert.match(
     sceneCacheSource,
     /hatch_fit_explicit_tangent \([\s\S]*?segment->start_tangent[\s\S]*?segment->end_tangent/u,
+  );
+});
+
+test("reflects clockwise HATCH curve angles into the OCS math basis", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+  const parameterNormalization = sceneCacheSource.match(
+    /hatch_curve_parameters \([\s\S]*?\n\}/u,
+  );
+
+  assert.ok(parameterNormalization, "HATCH curve normalization is missing");
+  assert.match(
+    parameterNormalization[0],
+    /if \(!is_ccw\)[\s\S]*?start = -start;[\s\S]*?end = -end;[\s\S]*?normalized_curve_sweep \(end, start, &magnitude\)/u,
+  );
+  assert.match(
+    parameterNormalization[0],
+    /\*first = start;[\s\S]*?\*sweep = -magnitude;[\s\S]*?return 1;/u,
+  );
+  assert.match(
+    parameterNormalization[0],
+    /\*first = start;[\s\S]*?normalized_curve_sweep \(start, end, sweep\)/u,
   );
 });
 

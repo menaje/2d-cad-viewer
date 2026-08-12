@@ -6,6 +6,8 @@ import {
   createClipNode,
 } from "../src/instance-graph.mjs";
 import {
+  multiplyMat4,
+  scalingMat4,
   transformPoint,
   translationMat4,
 } from "../src/math.mjs";
@@ -1047,7 +1049,7 @@ test("falls back to system Korean text within a hard glyph budget", async () => 
   );
 });
 
-test("renders visible block ATTDEF text and skips only invisible definitions", () => {
+test("suppresses block ATTDEF templates and renders constants and actual attributes", () => {
   const canvas = fakeCanvas();
   const baseRecord = {
     ownerHandle: 200n,
@@ -1096,8 +1098,35 @@ test("renders visible block ATTDEF text and skips only invisible definitions", (
       insertionPoint: [6, 0, 0],
       commonFlags: 1,
     },
+    {
+      ...baseRecord,
+      handle: 14n,
+      ownerHandle: 300n,
+      kind: 3,
+      insertionPoint: [103, 201, 0],
+    },
+    {
+      ...baseRecord,
+      handle: 15n,
+      ownerHandle: 100n,
+      insertionPoint: [107, 201, 0],
+    },
+    {
+      ...baseRecord,
+      handle: 16n,
+      ownerHandle: 400n,
+      insertionPoint: [109, 201, 0],
+    },
+    {
+      ...baseRecord,
+      handle: 17n,
+      ownerHandle: 300n,
+      kind: 3,
+      sourceFlags: 1,
+      insertionPoint: [111, 201, 0],
+    },
   ];
-  const values = ["A", "B", "C", "D"];
+  const values = ["A", "B", "C", "D", "E", "F", "G", "H"];
   const overlay = new CanvasTextOverlay(canvas, {
     textEntities: {
       length: records.length,
@@ -1126,6 +1155,12 @@ test("renders visible block ATTDEF text and skips only invisible definitions", (
         name: "TITLE",
         basePoint: [0, 0, 0],
       },
+      {
+        index: 2,
+        handle: 400n,
+        name: "*Paper_Space",
+        basePoint: [0, 0, 0],
+      },
     ],
     layers: [{ color: (2 << 30) | 7 }],
     instanceGraph: {
@@ -1133,13 +1168,28 @@ test("renders visible block ATTDEF text and skips only invisible definitions", (
         [
           1,
           {
-            data: translationMat4(104, 201, 0),
+            data: multiplyMat4(
+              translationMat4(104, 201, 0),
+              scalingMat4(-1, 1, 1),
+            ),
+            count: 1,
+            length: 1,
+          },
+        ],
+        [
+          2,
+          {
+            data: translationMat4(0, 0, 0),
             count: 1,
             length: 1,
           },
         ],
       ]),
       modelBlockIndices: new Set([0]),
+      traversalRoots: [
+        { blockIndex: 0, includeRootBatch: false },
+        { blockIndex: 2, includeRootBatch: true },
+      ],
     },
     glyphCache: { getGlyph: () => undefined },
     minimumPixelHeight: 0.1,
@@ -1147,11 +1197,11 @@ test("renders visible block ATTDEF text and skips only invisible definitions", (
 
   const metrics = overlay.redraw(camera, [true]);
 
-  assert.equal(metrics.visitedSourceTexts, 4);
-  assert.equal(metrics.visibleOccurrences, 2);
+  assert.equal(metrics.visitedSourceTexts, 8);
+  assert.equal(metrics.visibleOccurrences, 4);
   assert.deepEqual(
     canvas.calls.fillTextArguments.map(([value]) => value),
-    ["A", "B"],
+    ["B", "E", "F", "G"],
   );
 });
 

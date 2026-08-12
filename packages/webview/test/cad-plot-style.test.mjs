@@ -6,6 +6,7 @@ import {
   makePlotStylePalette,
   plotStyleDiagnostics,
   plotStyleShownInLayout,
+  resolveScreenPlotStyleEnabled,
 } from "../src/cad-plot-style.mjs";
 import { DEFAULT_ACI_PALETTE } from "../src/cad-color.mjs";
 
@@ -49,8 +50,14 @@ test("builds CTB lineweight overrides and diagnostics", () => {
   });
 });
 
-test("shows CTB on screen only when the layout stores Display Plot Styles", () => {
+test("reads the layout Display Plot Styles flag", () => {
   assert.equal(plotStyleShownInLayout({ plotFlags: 676 }), false);
   assert.equal(plotStyleShownInLayout({ plotFlags: 678 }), true);
   assert.equal(plotStyleShownInLayout(null), false);
+});
+
+test("keeps screen plot styles off until the user enables them", () => {
+  assert.equal(resolveScreenPlotStyleEnabled(undefined), false);
+  assert.equal(resolveScreenPlotStyleEnabled(false), false);
+  assert.equal(resolveScreenPlotStyleEnabled(true), true);
 });

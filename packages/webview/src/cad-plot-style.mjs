@@ -69,6 +69,10 @@ export function plotStyleShownInLayout(layout) {
   );
 }
 
+export function resolveScreenPlotStyleEnabled(preference) {
+  return preference === true;
+}
+
 export function makePlotStyleLineWeights(table) {
   if (!Array.isArray(table?.styles)) {
     throw new TypeError("plot style lineweight input is invalid");

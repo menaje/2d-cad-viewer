@@ -190,6 +190,10 @@ h1 {
   box-shadow: 0 1.2rem 4rem rgb(0 0 0 / 35%);
 }
 
+.viewport.plot-style-preview {
+  background: #fff;
+}
+
 .viewport.has-layout-tabs {
   --layout-tabs-height: 42px;
 }
@@ -1578,6 +1582,11 @@ body[data-host="vscode"] .viewport.has-layout-tabs {
   border-radius: 0;
   background: var(--vscode-editor-background, #0e1013);
   box-shadow: none;
+}
+
+body[data-host="vscode"] .viewport.plot-style-preview,
+body[data-host="vscode"] .viewport.has-layout-tabs.plot-style-preview {
+  background: #fff;
 }
 
 body[data-host="vscode"] canvas {

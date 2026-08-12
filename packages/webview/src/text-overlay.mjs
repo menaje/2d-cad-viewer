@@ -58,6 +58,8 @@ const MAXIMUM_CODE_POINTS_PER_ENTITY = 4_096;
 const MAXIMUM_MTEXT_COLUMNS = 64;
 const STACK_TEXT_SCALE = 0.7;
 const TEXT_FLAG_ANNOTATIVE = 1 << 2;
+const ATTRIBUTE_FLAG_INVISIBLE = 1 << 0;
+const ATTRIBUTE_FLAG_CONSTANT = 1 << 1;
 const DEFAULT_DRAWING_BACKGROUND = "rgb(14, 16, 19)";
 const LOCAL_OUTLINE_FONTS = new Map();
 const SHX_GLYPH_BOUNDS = new WeakMap();
@@ -844,6 +846,38 @@ function instancesForText(record, ownerBlockIndex, instanceGraph) {
   );
 }
 
+function textRootBlockIndices(instanceGraph) {
+  const indices = new Set(instanceGraph.modelBlockIndices ?? []);
+  for (const root of instanceGraph.traversalRoots ?? []) {
+    if (Number.isInteger(root?.blockIndex)) {
+      indices.add(root.blockIndex);
+    }
+  }
+  return indices;
+}
+
+function visibleTextRecord(record, ownerBlockIndex, rootBlockIndices) {
+  if ((record.commonFlags & 1) !== 0) {
+    return false;
+  }
+  if (
+    (record.kind === TextEntityKind.AttributeDefinition ||
+      record.kind === TextEntityKind.Attribute) &&
+    (record.sourceFlags & ATTRIBUTE_FLAG_INVISIBLE) !== 0
+  ) {
+    return false;
+  }
+  if (
+    record.kind === TextEntityKind.AttributeDefinition &&
+    ownerBlockIndex !== undefined &&
+    !rootBlockIndices.has(ownerBlockIndex) &&
+    (record.sourceFlags & ATTRIBUTE_FLAG_CONSTANT) === 0
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function visibleInInstanceViewport(
   instanceGraph,
   instances,
@@ -1218,6 +1252,7 @@ export class CanvasTextOverlay {
     this.blocks = blocks;
     this.layers = layers;
     this.instanceGraph = instanceGraph;
+    this.rootBlockIndices = textRootBlockIndices(instanceGraph);
     this.glyphCache = glyphCache;
     this.maximumSourceTexts = maximumSourceTexts;
     this.maximumOccurrences = maximumOccurrences;
@@ -1532,6 +1567,9 @@ export class CanvasTextOverlay {
       const ownerBlockIndex = this.blockIndexByHandle.get(
         record.ownerHandle,
       );
+      if (!visibleTextRecord(record, ownerBlockIndex, this.rootBlockIndices)) {
+        return null;
+      }
       const instances = instancesForText(
         record,
         ownerBlockIndex,
@@ -1792,6 +1830,15 @@ export class CanvasTextOverlay {
       const ownerBlockIndex = this.blockIndexByHandle.get(
         sourceRecord.ownerHandle,
       );
+      if (
+        !visibleTextRecord(
+          sourceRecord,
+          ownerBlockIndex,
+          this.rootBlockIndices,
+        )
+      ) {
+        continue;
+      }
       const instances = instancesForText(
         sourceRecord,
         ownerBlockIndex,
@@ -1875,18 +1922,13 @@ export class CanvasTextOverlay {
       ) {
         continue;
       }
-      if (
-        (record.commonFlags & 1) !== 0 ||
-        ((record.kind === TextEntityKind.AttributeDefinition ||
-          record.kind === TextEntityKind.Attribute) &&
-          (record.sourceFlags & 1) !== 0)
-      ) {
-        continue;
-      }
       if (!record.insertionPoint.every(Number.isFinite)) {
         continue;
       }
       const ownerBlockIndex = this.blockIndexByHandle.get(record.ownerHandle);
+      if (!visibleTextRecord(record, ownerBlockIndex, this.rootBlockIndices)) {
+        continue;
+      }
       const instances = instancesForText(
         record,
         ownerBlockIndex,

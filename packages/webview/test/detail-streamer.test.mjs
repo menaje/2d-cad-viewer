@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_VISIBLE_BYTES,
   DetailStreamer,
   selectVisibleDetailBatches,
 } from "../src/detail-streamer.mjs";
@@ -67,6 +68,29 @@ test("selects intersecting model and block detail without expanding geometry", (
   );
   assert.deepEqual([...selected[1].instanceIndices], [0]);
   assert.equal(selected.byteLength, 4 * GPU_LINE_VERTEX_RECORD_SIZE);
+});
+
+test("keeps every batch in a dense viewport below the 256 MiB detail guard", () => {
+  const maximumBatchVertices = Math.floor(
+    (512 * 1024) / GPU_LINE_VERTEX_RECORD_SIZE,
+  );
+  const batches = Array.from({ length: 400 }, (_, id) =>
+    detailBatch({ id, vertexCount: maximumBatchVertices }),
+  );
+  const selected = selectVisibleDetailBatches(
+    batches,
+    { instancesByBlock: new Map() },
+    {
+      origin: [0, 0, 0],
+      worldWidth: 20,
+      worldHeight: 20,
+    },
+  );
+
+  assert.equal(DEFAULT_VISIBLE_BYTES, 256 * 1024 * 1024);
+  assert.equal(selected.length, batches.length);
+  assert.ok(selected.byteLength > 192 * 1024 * 1024);
+  assert.ok(selected.byteLength < DEFAULT_VISIBLE_BYTES);
 });
 
 test("streams selected batches into a byte-budgeted renderer cache", async () => {
