@@ -132,6 +132,28 @@
           "scope": "window",
           "description": "Show an overview while full conversion continues. This improves first-frame latency but substantially increases concurrent memory."
         },
+        "dwgViewer.sceneCacheMode": {
+          "type": "string",
+          "enum": [
+            "session",
+            "persistent"
+          ],
+          "enumDescriptions": [
+            "Keep generated Scene Caches only while the drawing or workspace search is using them, then delete them.",
+            "Keep validated Scene Caches for faster subsequent opens. This can use several times the source DWG size on local disk."
+          ],
+          "default": "session",
+          "scope": "machine",
+          "description": "Choose whether generated drawing caches are retained between sessions. Changing this setting affects newly opened drawings."
+        },
+        "dwgViewer.sceneCacheMaximumSizeGiB": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 5,
+          "scope": "machine",
+          "description": "Maximum local disk space in GiB for persistent drawing caches. Oldest closed drawings are removed first; session mode does not retain them."
+        },
         "dwgViewer.renderResolution": {
           "type": "string",
           "enum": [

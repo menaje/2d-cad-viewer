@@ -16,7 +16,13 @@ import {
   ManagedEngineManager,
 } from "./managed-engine";
 import { CacheRangeChannel } from "./range-channel";
-import { SceneCacheManager } from "./scene-cache-manager";
+import {
+  DEFAULT_PERSISTENT_CACHE_BYTES,
+  normalizeSceneCacheMode,
+  normalizePersistentCacheBytes,
+  SceneCacheManager,
+  type SceneCacheMode,
+} from "./scene-cache-manager";
 import {
   isSceneEngineAbort,
   SceneEngineError,
@@ -93,6 +99,55 @@ function configuredInteractionRendering(
   return value === "continuous" || value === "maximumPerformance"
     ? value
     : "hybrid";
+}
+
+function configuredSceneCacheMode(
+  configuration: vscode.WorkspaceConfiguration,
+): SceneCacheMode {
+  return normalizeSceneCacheMode(
+    configuration.get<unknown>("sceneCacheMode", "session"),
+  );
+}
+
+function configuredPersistentCacheBytes(
+  configuration: vscode.WorkspaceConfiguration,
+): number {
+  const gibibytes = configuration.get<unknown>(
+    "sceneCacheMaximumSizeGiB",
+    5,
+  );
+  return normalizePersistentCacheBytes(
+    typeof gibibytes === "number" && Number.isSafeInteger(gibibytes)
+      ? gibibytes * 1024 * 1024 * 1024
+      : DEFAULT_PERSISTENT_CACHE_BYTES,
+  );
+}
+
+async function maintainSceneCacheStorage(
+  context: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
+  adapterPath: string,
+): Promise<void> {
+  const manager = new SceneCacheManager(
+    path.join(context.globalStorageUri.fsPath, "cache"),
+    new LibreDwgNativeSceneEngine(adapterPath),
+    {
+      mode: configuredSceneCacheMode(
+        vscode.workspace.getConfiguration("dwgViewer"),
+      ),
+      maximumPersistentBytes: configuredPersistentCacheBytes(
+        vscode.workspace.getConfiguration("dwgViewer"),
+      ),
+    },
+  );
+  try {
+    await manager.maintain();
+    output.appendLine("[SCENE_CACHE_STORAGE_MAINTAINED]");
+  } catch {
+    output.appendLine("[SCENE_CACHE_STORAGE_MAINTENANCE_DEFERRED]");
+  } finally {
+    await manager.dispose();
+  }
 }
 
 function configuredZoomSensitivity(
@@ -549,6 +604,12 @@ class DwgEditorProvider
     const progressivePreview = vscode.workspace
       .getConfiguration("dwgViewer", document.uri)
       .get<boolean>("progressivePreview", false);
+    const sceneCacheMode = configuredSceneCacheMode(
+      vscode.workspace.getConfiguration("dwgViewer", document.uri),
+    );
+    const maximumPersistentCacheBytes = configuredPersistentCacheBytes(
+      vscode.workspace.getConfiguration("dwgViewer", document.uri),
+    );
 
     const menuDisplaySettings = () => {
       const configuration = vscode.workspace.getConfiguration(
@@ -608,12 +669,14 @@ class DwgEditorProvider
     let generation = 0;
     let conversion: AbortController | undefined;
     const rangeChannels = new Map<string, CacheRangeChannel>();
+    const cacheReleases = new Map<string, () => Promise<void>>();
     const previewReleases = new Map<string, () => Promise<void>>();
     const previewFrameWaiters = new Map<string, () => void>();
     let fontChannel: ShxFontChannel | undefined;
     let plotStyleChannel: CtbPlotStyleChannel | undefined;
     let xrefController: XrefController | undefined;
     let imageReferenceChannel: ImageReferenceChannel | undefined;
+    let sceneCacheManager: SceneCacheManager | undefined;
     let activeCacheId: string | undefined;
     let activeCacheReused = false;
     let activeEngine: SceneEngineDescriptor | undefined;
@@ -728,9 +791,13 @@ class DwgEditorProvider
       activeCacheReadyMessage = undefined;
       pendingStateMessage = undefined;
       const channels = [...rangeChannels.values()];
-      const releases = [...previewReleases.values()];
+      const cacheReleaseCallbacks = [...cacheReleases.values()];
+      const previewReleaseCallbacks = [...previewReleases.values()];
       const previewWaiters = [...previewFrameWaiters.values()];
+      const manager = sceneCacheManager;
+      sceneCacheManager = undefined;
       rangeChannels.clear();
+      cacheReleases.clear();
       previewReleases.clear();
       previewFrameWaiters.clear();
       for (const settle of previewWaiters) {
@@ -747,7 +814,13 @@ class DwgEditorProvider
       await Promise.allSettled(
         channels.map((channel) => channel.dispose()),
       );
-      await Promise.allSettled(releases.map((release) => release()));
+      await Promise.allSettled(
+        previewReleaseCallbacks.map((release) => release()),
+      );
+      await Promise.allSettled(
+        cacheReleaseCallbacks.map((release) => release()),
+      );
+      await manager?.dispose();
     };
 
     const settlePreviewFrame = (cacheId: string): void => {
@@ -951,7 +1024,12 @@ class DwgEditorProvider
         const manager = new SceneCacheManager(
           path.join(this.context.globalStorageUri.fsPath, "cache"),
           engine,
+          {
+            mode: sceneCacheMode,
+            maximumPersistentBytes: maximumPersistentCacheBytes,
+          },
         );
+        sceneCacheManager = manager;
         this.output.appendLine(
           `[ENGINE_SELECTED] id=${engine.descriptor.engineId} version=${engine.descriptor.engineVersion} backend=${engine.descriptor.backendId}`,
         );
@@ -1075,6 +1153,7 @@ class DwgEditorProvider
             }
           },
         );
+        cacheReleases.set(prepared.cachePath, prepared.release);
         if (
           disposed ||
           controller.signal.aborted ||
@@ -1120,6 +1199,7 @@ class DwgEditorProvider
           postMessage: (message) =>
             webviewPanel.webview.postMessage(message),
           publishCache: async (xrefCache, sourcePath) => {
+            cacheReleases.set(xrefCache.cachePath, xrefCache.release);
             imageReferenceChannel?.registerSource(
               xrefCache.cacheId,
               sourcePath,
@@ -1811,9 +1891,14 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   if (context.extensionMode === vscode.ExtensionMode.Production) {
     void managedEngine.ensure().then(
-      (installation) => {
+      async (installation) => {
         output.appendLine(
           `[MANAGED_ENGINE_PREFETCHED] target=${installation.target} reused=${installation.reused} source=${installation.sourceUrl}`,
+        );
+        await maintainSceneCacheStorage(
+          context,
+          output,
+          installation.adapterPath,
         );
       },
       (error) => {

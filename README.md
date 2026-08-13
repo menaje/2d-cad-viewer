@@ -18,8 +18,9 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 - DWG 변환, 글꼴 처리, 외부참조 탐색과 화면 표시는 모두 로컬에서
   수행합니다.
 - 원본을 수정하지 않는 읽기 전용 방식입니다.
-- 한 번 변환한 도면은 안전한 로컬 캐시를 재사용해 다음 열기를
-  단축합니다.
+- 기본값은 변환 캐시를 도면을 연 세션에서만 사용하고 닫을 때
+  삭제합니다. **Scene Cache Mode**를 `persistent`로 선택하면 안전한 로컬
+  캐시를 재사용해 다음 열기를 단축할 수 있습니다.
 
 ### 국내 CAD 한글 도면을 고려했습니다
 
@@ -120,6 +121,10 @@ Explorer에서 `.dwg` 파일을 열면 됩니다.
   Labels**와 **Left Toolbar Labels**를 각각 `icons` 또는 `hover`로 선택
 - **렌더 해상도:** **Render Resolution**을 `auto`(권장), `quality`,
   `performance` 중에서 선택
+- **다음 열기 가속:** **Scene Cache Mode**를 기본 `session`으로 두면 도면을
+  닫을 때 캐시를 삭제하고, `persistent`로 선택하면 디스크를 더 사용하는
+  대신 같은 도면의 다음 열기를 단축. 영구 캐시는 기본 5GiB 안에서 오래된
+  도면부터 정리되며 **Scene Cache Maximum Size GiB**에서 상한 조절
 - **이동·확대 표시 방식:** **Interaction Rendering**을 `hybrid`(권장),
   `continuous`(새 영역을 매 프레임 표시), `maximumPerformance`(멈출 때까지
   완성 프레임만 이동) 중에서 선택

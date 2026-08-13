@@ -541,6 +541,7 @@ else report();
         argumentPrefix: [adapterScript],
         platform: "win32",
       }),
+      { mode: "persistent" },
     );
     const unsupportedPhases: SceneEngineProgressPhase[] = [];
     await assert.rejects(

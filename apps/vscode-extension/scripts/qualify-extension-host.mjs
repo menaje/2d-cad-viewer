@@ -493,6 +493,8 @@ function qualificationSettings(progressivePreview) {
     "update.mode": "none",
     "window.restoreWindows": "none",
     "dwgViewer.progressivePreview": progressivePreview,
+    "dwgViewer.sceneCacheMode": "session",
+    "dwgViewer.sceneCacheMaximumSizeGiB": 5,
     "workbench.editorAssociations": {
       "*.dwg": "dwgViewer.dwg",
       "*.DWG": "dwgViewer.dwg",

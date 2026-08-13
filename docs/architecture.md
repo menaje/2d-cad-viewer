@@ -385,6 +385,30 @@ real path. Other platforms retain their normalization-sensitive path identity
 because distinct byte names can identify distinct files there. This identity
 compatibility rule does not change the Scene Engine protocol or Scene Cache
 wire version.
+
+The VS Code host now separates cache identity from cache retention. Its default
+`session` mode writes full, preview and XREF Scene Caches into one private
+leased session directory, exposes them only through bounded range channels and
+deletes them after those channels close. Manager disposal waits for active
+conversions, while a path-free heartbeat makes crash leftovers eligible for a
+later bounded cleanup. Workspace text search releases each generated full
+cache immediately after its bounded text index has been extracted.
+
+The opt-in `persistent` mode stores cache files under a generation digest of
+the engine ID/version, backend ID/kind, implementation revision, Scene Engine
+contract and Scene Cache version. Opening a different engine generation
+removes inactive older generation directories; a fresh per-manager lease
+protects caches still used by another VS Code window. Returning to `session`
+mode removes every unleased persistent generation. The migration recognizes
+and removes only bounded legacy flat cache, preview and temporary filename
+patterns. When the last generation lease closes, cache/preview pairs are
+evicted oldest-first to the configured 1–100 GiB bound (5 GiB by default).
+Open range readers can temporarily exceed that bound but are never selected
+for eviction. Persistent text indexes use the same generation digest and are
+removed on engine change; session mode retains them only in memory. No private
+source path enters generation metadata, and Scene Cache v1.26, cache identity
+and protocol bytes are unchanged.
+
 Progress events are bound to the same engine/backend identity, while terminal
 failure and cancellation remain explicit. The WASM-shaped test implementation
 only qualifies this boundary; the rejected real probe is reproducible under

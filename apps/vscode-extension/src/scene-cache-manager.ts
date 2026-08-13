@@ -1,13 +1,17 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { Dirent } from "node:fs";
 import {
   chmod,
   link,
   mkdir,
   open,
+  opendir,
   realpath,
   rename,
   rm,
   stat,
+  utimes,
+  writeFile,
 } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -38,6 +42,161 @@ const sceneCacheVersionMatch = /\/(\d+)\.(\d+)$/u.exec(
 );
 const EXPECTED_SCENE_CACHE_MAJOR = Number(sceneCacheVersionMatch?.[1]);
 const EXPECTED_SCENE_CACHE_MINOR = Number(sceneCacheVersionMatch?.[2]);
+const CACHE_STORAGE_SCHEMA = "dwg-scene-cache-storage/1";
+const CACHE_GENERATIONS_DIRECTORY = "generations";
+const CACHE_SESSIONS_DIRECTORY = "sessions";
+const CACHE_LEASES_DIRECTORY = ".leases";
+const CACHE_GENERATION_PATTERN = /^[a-f0-9]{64}$/u;
+const CACHE_LEASE_PATTERN = /^[a-f0-9]{32}\.lease$/u;
+const CACHE_SESSION_PATTERN = /^[a-f0-9]{32}$/u;
+const LEGACY_CACHE_FILE_PATTERN =
+  /^[a-f0-9]{64}(?:\.dwg\.(?:cache|preview)|\.[a-f0-9]{16}\.(?:tmp|preview\.tmp(?:\.ready)?))$/u;
+const TEMPORARY_CACHE_FILE_PATTERN =
+  /^[a-f0-9]{64}\.[a-f0-9]{16}\.(?:tmp|preview\.tmp(?:\.ready)?)$/u;
+const DERIVED_CACHE_FILE_PATTERN = /^[a-f0-9]{64}\.json$/u;
+const PERSISTENT_CACHE_FILE_PATTERN =
+  /^([a-f0-9]{64})\.dwg\.(?:cache|preview)$/u;
+const MAX_STORAGE_ENTRIES = 4_096;
+const CACHE_LEASE_HEARTBEAT_MS = 30_000;
+const CACHE_LEASE_STALE_MS = 5 * 60_000;
+export const DEFAULT_PERSISTENT_CACHE_BYTES = 5 * 1024 * 1024 * 1024;
+export const MAX_PERSISTENT_CACHE_BYTES = 100 * 1024 * 1024 * 1024;
+
+export type SceneCacheMode = "session" | "persistent";
+
+export interface SceneCacheManagerOptions {
+  readonly mode?: SceneCacheMode;
+  readonly platform?: NodeJS.Platform;
+  readonly maximumPersistentBytes?: number;
+}
+
+export function normalizeSceneCacheMode(value: unknown): SceneCacheMode {
+  return value === "persistent" ? "persistent" : "session";
+}
+
+export function normalizePersistentCacheBytes(value: unknown): number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 1024 * 1024 * 1024 &&
+    value <= MAX_PERSISTENT_CACHE_BYTES
+  )
+    ? value
+    : DEFAULT_PERSISTENT_CACHE_BYTES;
+}
+
+export function computeCacheGenerationId(
+  engine: SceneEngineDescriptor,
+  engineRevision: string,
+): string {
+  return hashFields([
+    CACHE_STORAGE_SCHEMA,
+    engine.schema,
+    engine.cacheSchema,
+    engine.engineId,
+    engine.engineVersion,
+    engine.backendId,
+    engine.backendKind,
+    engineRevision,
+  ]);
+}
+
+async function boundedDirectoryEntries(directoryPath: string) {
+  const entries: Dirent[] = [];
+  let directory;
+  try {
+    directory = await opendir(directoryPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return entries;
+    }
+    throw error;
+  }
+  try {
+    for await (const entry of directory) {
+      if (entries.length >= MAX_STORAGE_ENTRIES) {
+        break;
+      }
+      entries.push(entry);
+    }
+  } finally {
+    await directory.close().catch(() => undefined);
+  }
+  return entries;
+}
+
+const storageMaintenance = new Map<string, Promise<void>>();
+
+async function serializeStorageMaintenance(
+  cacheRoot: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const key = path.resolve(cacheRoot);
+  const previous = storageMaintenance.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  storageMaintenance.set(key, current);
+  try {
+    await current;
+  } finally {
+    if (storageMaintenance.get(key) === current) {
+      storageMaintenance.delete(key);
+    }
+  }
+}
+
+export async function maintainDerivedCacheStorage(
+  storageRoot: string,
+  mode: SceneCacheMode,
+  currentGenerationId?: string,
+): Promise<string | undefined> {
+  if (
+    mode === "persistent" &&
+    (!currentGenerationId ||
+      !CACHE_GENERATION_PATTERN.test(currentGenerationId))
+  ) {
+    throw new TypeError(
+      "persistent derived cache storage requires a generation ID",
+    );
+  }
+  const resolvedRoot = path.resolve(storageRoot);
+  const generationsRoot = path.join(
+    resolvedRoot,
+    CACHE_GENERATIONS_DIRECTORY,
+  );
+  await serializeStorageMaintenance(resolvedRoot, async () => {
+    for (const entry of await boundedDirectoryEntries(resolvedRoot)) {
+      if (
+        DERIVED_CACHE_FILE_PATTERN.test(entry.name) &&
+        (entry.isFile() || entry.isSymbolicLink())
+      ) {
+        await rm(path.join(resolvedRoot, entry.name), { force: true }).catch(
+          () => undefined,
+        );
+      }
+    }
+    for (const entry of await boundedDirectoryEntries(generationsRoot)) {
+      if (
+        entry.isDirectory() &&
+        CACHE_GENERATION_PATTERN.test(entry.name) &&
+        entry.name !== currentGenerationId
+      ) {
+        await rm(path.join(generationsRoot, entry.name), {
+          recursive: true,
+          force: true,
+        }).catch(() => undefined);
+      }
+    }
+  });
+  if (mode === "session") {
+    return undefined;
+  }
+  const generationRoot = path.join(
+    generationsRoot,
+    currentGenerationId!,
+  );
+  await mkdir(generationRoot, { recursive: true, mode: 0o700 });
+  return generationRoot;
+}
 
 export interface CacheIdentity {
   sourcePath: string;
@@ -132,7 +291,9 @@ export interface PreparedCache {
   cachePath: string;
   size: number;
   reused: boolean;
+  storageGeneration: string;
   engine: SceneEngineDescriptor;
+  release(): Promise<void>;
 }
 
 export interface PreparedPreview {
@@ -153,11 +314,38 @@ export interface PrepareCacheOptions {
 }
 
 export class SceneCacheManager {
+  private readonly mode: SceneCacheMode;
+  private readonly platform: NodeJS.Platform;
+  private readonly maximumPersistentBytes: number;
+  private readonly leaseId = randomBytes(16).toString("hex");
+  private readonly activePreparations = new Set<Promise<PreparedCache>>();
+  private readonly storageRoots = new Map<string, Promise<string>>();
+  private readonly leasePaths = new Set<string>();
+  private readonly leaseTimers = new Map<string, NodeJS.Timeout>();
+  private readonly sessionId = randomBytes(16).toString("hex");
+  private sessionRoot: string | undefined;
+  private sessionStorage: Promise<string> | undefined;
+  private disposed = false;
+  private disposal: Promise<void> | undefined;
+
   constructor(
     private readonly cacheRoot: string,
     private readonly engine: SceneEngine,
-    private readonly platform: NodeJS.Platform = process.platform,
+    options: SceneCacheManagerOptions | NodeJS.Platform = {},
   ) {
+    this.platform =
+      typeof options === "string"
+        ? options
+        : (options.platform ?? process.platform);
+    this.mode =
+      typeof options === "string"
+        ? "persistent"
+        : normalizeSceneCacheMode(options.mode);
+    this.maximumPersistentBytes = normalizePersistentCacheBytes(
+      typeof options === "string"
+        ? undefined
+        : options.maximumPersistentBytes,
+    );
     if (
       engine.descriptor.schema !== SCENE_ENGINE_CONTRACT ||
       engine.descriptor.cacheSchema !== SCENE_CACHE_SCHEMA_VERSION
@@ -166,7 +354,79 @@ export class SceneCacheManager {
     }
   }
 
-  async prepare(
+  prepare(
+    sourcePath: string,
+    options: PrepareCacheOptions,
+  ): Promise<PreparedCache> {
+    if (this.disposed) {
+      return Promise.reject(
+        new SceneEngineError(
+          "CACHE_MANAGER_DISPOSED",
+          "도면 캐시 세션이 이미 종료되었습니다.",
+        ),
+      );
+    }
+    const operation = this.prepareInternal(sourcePath, options);
+    this.activePreparations.add(operation);
+    void operation.then(
+      () => this.activePreparations.delete(operation),
+      () => this.activePreparations.delete(operation),
+    );
+    return operation;
+  }
+
+  async maintain(): Promise<void> {
+    if (this.disposed) {
+      throw new SceneEngineError(
+        "CACHE_MANAGER_DISPOSED",
+        "도면 캐시 세션이 이미 종료되었습니다.",
+      );
+    }
+    const snapshot = await this.engine.snapshot();
+    await this.prepareStorage(snapshot.revision);
+  }
+
+  dispose(): Promise<void> {
+    if (this.disposal) {
+      return this.disposal;
+    }
+    this.disposed = true;
+    this.disposal = this.disposeInternal();
+    return this.disposal;
+  }
+
+  private async disposeInternal(): Promise<void> {
+    await Promise.allSettled([...this.activePreparations]);
+    for (const timer of this.leaseTimers.values()) {
+      clearInterval(timer);
+    }
+    this.leaseTimers.clear();
+    await Promise.allSettled(
+      [...this.leasePaths].map((leasePath) =>
+        rm(leasePath, { force: true }),
+      ),
+    );
+    this.leasePaths.clear();
+    if (this.mode === "persistent") {
+      await Promise.allSettled(
+        [...this.storageRoots.values()].map(async (storage) => {
+          const generationRoot = await storage;
+          await serializeStorageMaintenance(this.cacheRoot, async () => {
+            if (!(await this.hasFreshGenerationLease(generationRoot))) {
+              await this.prunePersistentGeneration(generationRoot);
+            }
+          });
+        }),
+      );
+    }
+    if (this.sessionRoot) {
+      await rm(this.sessionRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
+
+  private async prepareInternal(
     sourcePath: string,
     {
       force = false,
@@ -231,22 +491,41 @@ export class SceneCacheManager {
         conversionOptions: normalizedOptions,
       } satisfies CacheIdentity;
       const cacheId = computeCacheId(identity, this.platform);
+      const storageGeneration = computeCacheGenerationId(
+        this.engine.descriptor,
+        engineSnapshot.revision,
+      );
+      const activeCacheRoot = await this.prepareStorage(
+        engineSnapshot.revision,
+      );
       const legacyIds = legacyCacheIds(
         identity,
         this.platform,
         realSourcePath,
       );
       const cachePath = path.join(
-        this.cacheRoot,
-        `${cacheId}.dwg.cache`,
+        activeCacheRoot,
+        this.mode === "persistent"
+          ? `${cacheId}.dwg.cache`
+          : `${cacheId}.${randomBytes(8).toString("hex")}.dwg.cache`,
       );
 
-      if (force) {
+      if (force && this.mode === "persistent") {
         await rm(cachePath, { force: true });
-      } else {
+      } else if (this.mode === "persistent") {
         const existing =
-          (await this.readExistingCache(cacheId, cachePath)) ??
-          (await this.reuseLegacyCache(cacheId, cachePath, legacyIds));
+          (await this.readExistingCache(
+            storageGeneration,
+            cacheId,
+            cachePath,
+          )) ??
+          (await this.reuseLegacyCache(
+            activeCacheRoot,
+            storageGeneration,
+            cacheId,
+            cachePath,
+            legacyIds,
+          ));
         if (existing) {
           this.notify(onProgress, "cache-ready");
           return existing;
@@ -254,25 +533,28 @@ export class SceneCacheManager {
       }
 
       const temporaryPath = path.join(
-        this.cacheRoot,
+        activeCacheRoot,
         `${cacheId}.${randomBytes(8).toString("hex")}.tmp`,
       );
       const persistentPreviewPath =
         onPreview && this.engine.descriptor.capabilities.progressivePreview
           ? path.join(
-              this.cacheRoot,
-              `${cacheId}.dwg.preview`,
+              activeCacheRoot,
+              this.mode === "persistent"
+                ? `${cacheId}.dwg.preview`
+                : `${cacheId}.${randomBytes(8).toString("hex")}.dwg.preview`,
             )
           : undefined;
       let previewHandedOff = false;
       let previewPublication = Promise.resolve();
-      if (persistentPreviewPath) {
+      if (persistentPreviewPath && this.mode === "persistent") {
         const existingPreview =
           (await this.readExistingPreview(
             cacheId,
             persistentPreviewPath,
           )) ??
           (await this.reuseLegacyPreview(
+            activeCacheRoot,
             cacheId,
             persistentPreviewPath,
             legacyIds,
@@ -290,7 +572,7 @@ export class SceneCacheManager {
       const previewPath =
         persistentPreviewPath && !previewHandedOff
           ? path.join(
-              this.cacheRoot,
+              activeCacheRoot,
               `${cacheId}.${randomBytes(8).toString("hex")}.preview.tmp`,
             )
           : undefined;
@@ -382,6 +664,7 @@ export class SceneCacheManager {
           await rename(temporaryPath, cachePath);
         } catch (error) {
           const racedCache = await this.readExistingCache(
+            storageGeneration,
             cacheId,
             cachePath,
           );
@@ -398,7 +681,11 @@ export class SceneCacheManager {
         if (process.platform !== "win32") {
           await chmod(cachePath, 0o600);
         }
-        const prepared = await this.readExistingCache(cacheId, cachePath);
+        const prepared = await this.readExistingCache(
+          storageGeneration,
+          cacheId,
+          cachePath,
+        );
         if (!prepared) {
           throw new SceneEngineError(
             "CACHE_COMMIT_FAILED",
@@ -426,6 +713,316 @@ export class SceneCacheManager {
           : "failed",
       );
       throw error;
+    }
+  }
+
+  private prepareStorage(engineRevision: string): Promise<string> {
+    const generationId = computeCacheGenerationId(
+      this.engine.descriptor,
+      engineRevision,
+    );
+    const existing = this.storageRoots.get(generationId);
+    if (existing) {
+      return existing;
+    }
+    const storage = this.initializeStorage(generationId);
+    this.storageRoots.set(generationId, storage);
+    return storage;
+  }
+
+  private async initializeStorage(generationId: string): Promise<string> {
+    await mkdir(this.cacheRoot, { recursive: true, mode: 0o700 });
+    if (this.mode === "session") {
+      const sessionRoot = await this.ensureSessionRoot();
+      const generationRoot = path.join(sessionRoot, generationId);
+      await mkdir(generationRoot, { recursive: true, mode: 0o700 });
+      await serializeStorageMaintenance(this.cacheRoot, async () => {
+        await this.cleanupLegacyCacheFiles();
+        await this.cleanupAbandonedSessions();
+        await this.cleanupPersistentGenerations(undefined);
+      });
+      return generationRoot;
+    }
+
+    const generationRoot = path.join(
+      this.cacheRoot,
+      CACHE_GENERATIONS_DIRECTORY,
+      generationId,
+    );
+    const leasesRoot = path.join(
+      generationRoot,
+      CACHE_LEASES_DIRECTORY,
+    );
+    await mkdir(leasesRoot, { recursive: true, mode: 0o700 });
+    await serializeStorageMaintenance(this.cacheRoot, async () => {
+      await this.cleanupLegacyCacheFiles();
+      await this.cleanupAbandonedSessions();
+      await this.cleanupPersistentGenerations(generationId);
+      await this.cleanupStaleTemporaryFiles(generationRoot);
+      if (!(await this.hasFreshGenerationLease(generationRoot))) {
+        await this.prunePersistentGeneration(generationRoot);
+      }
+    });
+    await this.createLease(
+      path.join(leasesRoot, `${this.leaseId}.lease`),
+    );
+    return generationRoot;
+  }
+
+  private ensureSessionRoot(): Promise<string> {
+    if (this.sessionStorage) {
+      return this.sessionStorage;
+    }
+    this.sessionStorage = (async () => {
+      const sessionRoot = path.join(
+        this.cacheRoot,
+        CACHE_SESSIONS_DIRECTORY,
+        this.sessionId,
+      );
+      await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
+      this.sessionRoot = sessionRoot;
+      await this.createLease(path.join(sessionRoot, ".lease"));
+      return sessionRoot;
+    })();
+    return this.sessionStorage;
+  }
+
+  private async createLease(leasePath: string): Promise<void> {
+    await writeFile(
+      leasePath,
+      `${JSON.stringify({ schema: CACHE_STORAGE_SCHEMA, pid: process.pid })}\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
+    this.leasePaths.add(leasePath);
+    const timer = setInterval(() => {
+      const now = new Date();
+      void utimes(leasePath, now, now).catch(() => undefined);
+    }, CACHE_LEASE_HEARTBEAT_MS);
+    timer.unref();
+    this.leaseTimers.set(leasePath, timer);
+  }
+
+  private async cleanupLegacyCacheFiles(): Promise<void> {
+    for (const entry of await boundedDirectoryEntries(this.cacheRoot)) {
+      if (
+        LEGACY_CACHE_FILE_PATTERN.test(entry.name) &&
+        (entry.isFile() || entry.isSymbolicLink())
+      ) {
+        await rm(path.join(this.cacheRoot, entry.name), { force: true }).catch(
+          () => undefined,
+        );
+      }
+    }
+  }
+
+  private async cleanupAbandonedSessions(): Promise<void> {
+    const sessionsRoot = path.join(
+      this.cacheRoot,
+      CACHE_SESSIONS_DIRECTORY,
+    );
+    for (const entry of await boundedDirectoryEntries(sessionsRoot)) {
+      if (
+        !entry.isDirectory() ||
+        !CACHE_SESSION_PATTERN.test(entry.name) ||
+        entry.name === this.sessionId
+      ) {
+        continue;
+      }
+      const sessionRoot = path.join(sessionsRoot, entry.name);
+      if (await this.isFreshLease(path.join(sessionRoot, ".lease"))) {
+        continue;
+      }
+      await rm(sessionRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
+
+  private async cleanupPersistentGenerations(
+    currentGenerationId: string | undefined,
+  ): Promise<void> {
+    const generationsRoot = path.join(
+      this.cacheRoot,
+      CACHE_GENERATIONS_DIRECTORY,
+    );
+    for (const entry of await boundedDirectoryEntries(generationsRoot)) {
+      if (
+        !entry.isDirectory() ||
+        !CACHE_GENERATION_PATTERN.test(entry.name) ||
+        entry.name === currentGenerationId
+      ) {
+        continue;
+      }
+      const generationRoot = path.join(generationsRoot, entry.name);
+      if (await this.hasFreshGenerationLease(generationRoot)) {
+        continue;
+      }
+      await rm(generationRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
+
+  private async hasFreshGenerationLease(
+    generationRoot: string,
+  ): Promise<boolean> {
+    const leasesRoot = path.join(
+      generationRoot,
+      CACHE_LEASES_DIRECTORY,
+    );
+    let fresh = false;
+    for (const entry of await boundedDirectoryEntries(leasesRoot)) {
+      if (
+        !CACHE_LEASE_PATTERN.test(entry.name) ||
+        (!entry.isFile() && !entry.isSymbolicLink())
+      ) {
+        continue;
+      }
+      const leasePath = path.join(leasesRoot, entry.name);
+      if (await this.isFreshLease(leasePath)) {
+        fresh = true;
+      } else {
+        await rm(leasePath, { force: true }).catch(() => undefined);
+      }
+    }
+    return fresh;
+  }
+
+  private async isFreshLease(leasePath: string): Promise<boolean> {
+    try {
+      const metadata = await stat(leasePath);
+      if (!metadata.isFile()) {
+        return false;
+      }
+      if (Date.now() - metadata.mtimeMs <= CACHE_LEASE_STALE_MS) {
+        return true;
+      }
+      if (metadata.size <= 0 || metadata.size > 256) {
+        return false;
+      }
+      const handle = await open(leasePath, "r");
+      try {
+        const bytes = Buffer.alloc(metadata.size);
+        const { bytesRead } = await handle.read(
+          bytes,
+          0,
+          bytes.byteLength,
+          0,
+        );
+        let lease: { schema?: unknown; pid?: unknown };
+        try {
+          lease = JSON.parse(
+            bytes.subarray(0, bytesRead).toString("utf8"),
+          ) as { schema?: unknown; pid?: unknown };
+        } catch {
+          return false;
+        }
+        if (
+          lease.schema !== CACHE_STORAGE_SCHEMA ||
+          !Number.isSafeInteger(lease.pid) ||
+          (lease.pid as number) <= 0
+        ) {
+          return false;
+        }
+        try {
+          process.kill(lease.pid as number, 0);
+          return true;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === "EPERM";
+        }
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      return true;
+    }
+  }
+
+  private async cleanupStaleTemporaryFiles(
+    generationRoot: string,
+  ): Promise<void> {
+    const now = Date.now();
+    for (const entry of await boundedDirectoryEntries(generationRoot)) {
+      if (
+        !TEMPORARY_CACHE_FILE_PATTERN.test(entry.name) ||
+        (!entry.isFile() && !entry.isSymbolicLink())
+      ) {
+        continue;
+      }
+      const temporaryPath = path.join(generationRoot, entry.name);
+      try {
+        const metadata = await stat(temporaryPath);
+        if (now - metadata.mtimeMs > CACHE_LEASE_STALE_MS) {
+          await rm(temporaryPath, { force: true });
+        }
+      } catch {
+        // Cleanup is best-effort and cannot block drawing preparation.
+      }
+    }
+  }
+
+  private async prunePersistentGeneration(
+    generationRoot: string,
+  ): Promise<void> {
+    const entries = await boundedDirectoryEntries(generationRoot);
+    const groups = new Map<
+      string,
+      {
+        paths: string[];
+        bytes: bigint;
+        lastModifiedMs: number;
+      }
+    >();
+    let totalBytes = 0n;
+    for (const entry of entries) {
+      const match = PERSISTENT_CACHE_FILE_PATTERN.exec(entry.name);
+      if (
+        !match ||
+        (!entry.isFile() && !entry.isSymbolicLink())
+      ) {
+        continue;
+      }
+      const filePath = path.join(generationRoot, entry.name);
+      try {
+        const metadata = await stat(filePath, { bigint: true });
+        if (!metadata.isFile() || metadata.size < 0n) {
+          continue;
+        }
+        const group = groups.get(match[1]) ?? {
+          paths: [],
+          bytes: 0n,
+          lastModifiedMs: 0,
+        };
+        group.paths.push(filePath);
+        group.bytes += metadata.size;
+        group.lastModifiedMs = Math.max(
+          group.lastModifiedMs,
+          Number(metadata.mtimeMs),
+        );
+        groups.set(match[1], group);
+        totalBytes += metadata.size;
+      } catch {
+        // A raced reader or cleanup owns this entry now.
+      }
+    }
+    const maximumBytes = BigInt(this.maximumPersistentBytes);
+    if (totalBytes <= maximumBytes) {
+      return;
+    }
+    const oldestFirst = [...groups.values()].sort(
+      (left, right) => left.lastModifiedMs - right.lastModifiedMs,
+    );
+    for (const group of oldestFirst) {
+      if (totalBytes <= maximumBytes) {
+        break;
+      }
+      await Promise.allSettled(
+        group.paths.map((filePath) => rm(filePath, { force: true })),
+      );
+      totalBytes -= group.bytes;
     }
   }
 
@@ -478,11 +1075,33 @@ export class SceneCacheManager {
       size,
       reused,
       engine: this.engine.descriptor,
-      async release(): Promise<void> {
-        // Range channels are released by the consumer. The overview remains
-        // durable so an interrupted or forced full conversion can reuse it.
-      },
+      release: this.releaseFile(cachePath),
     };
+  }
+
+  private releaseFile(cachePath: string): () => Promise<void> {
+    if (this.mode === "persistent") {
+      return async () => {
+        // The consumer releases its range channel; the validated artifact
+        // remains available for a later drawing session.
+      };
+    }
+    let released = false;
+    return async () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      await rm(cachePath, { force: true }).catch(() => undefined);
+    };
+  }
+
+  private async markPersistentUse(cachePath: string): Promise<void> {
+    if (this.mode !== "persistent") {
+      return;
+    }
+    const now = new Date();
+    await utimes(cachePath, now, now).catch(() => undefined);
   }
 
   private async readExistingPreview(
@@ -508,6 +1127,7 @@ export class SceneCacheManager {
           "첫 화면 캐시가 지원 가능한 크기를 넘었습니다.",
         );
       }
+      await this.markPersistentUse(previewPath);
       return this.preparedPreview(
         cacheId,
         previewPath,
@@ -559,6 +1179,7 @@ export class SceneCacheManager {
   }
 
   private async readExistingCache(
+    storageGeneration: string,
     cacheId: string,
     cachePath: string,
   ): Promise<PreparedCache | undefined> {
@@ -581,12 +1202,15 @@ export class SceneCacheManager {
           "변환 캐시가 지원 가능한 크기를 넘었습니다.",
         );
       }
+      await this.markPersistentUse(cachePath);
       return {
         cacheId,
         cachePath,
         size: metadata.size,
         reused: true,
+        storageGeneration,
         engine: this.engine.descriptor,
+        release: this.releaseFile(cachePath),
       };
     } catch (error) {
       if (
@@ -600,16 +1224,19 @@ export class SceneCacheManager {
   }
 
   private async reuseLegacyCache(
+    activeCacheRoot: string,
+    storageGeneration: string,
     cacheId: string,
     cachePath: string,
     legacyIds: readonly string[],
   ): Promise<PreparedCache | undefined> {
     for (const legacyId of legacyIds) {
       const legacyPath = path.join(
-        this.cacheRoot,
+        activeCacheRoot,
         `${legacyId}.dwg.cache`,
       );
       const existing = await this.readExistingCache(
+        storageGeneration,
         legacyId,
         legacyPath,
       );
@@ -620,7 +1247,11 @@ export class SceneCacheManager {
         await link(legacyPath, cachePath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-          const raced = await this.readExistingCache(cacheId, cachePath);
+          const raced = await this.readExistingCache(
+            storageGeneration,
+            cacheId,
+            cachePath,
+          );
           if (raced) {
             return raced;
           }
@@ -631,7 +1262,11 @@ export class SceneCacheManager {
         }
         return { ...existing, cacheId };
       }
-      const migrated = await this.readExistingCache(cacheId, cachePath);
+      const migrated = await this.readExistingCache(
+        storageGeneration,
+        cacheId,
+        cachePath,
+      );
       if (migrated) {
         await rm(legacyPath, { force: true }).catch(() => undefined);
         return migrated;
@@ -641,13 +1276,14 @@ export class SceneCacheManager {
   }
 
   private async reuseLegacyPreview(
+    activeCacheRoot: string,
     cacheId: string,
     previewPath: string,
     legacyIds: readonly string[],
   ): Promise<PreparedPreview | undefined> {
     for (const legacyId of legacyIds) {
       const legacyPath = path.join(
-        this.cacheRoot,
+        activeCacheRoot,
         `${legacyId}.dwg.preview`,
       );
       const existing = await this.readExistingPreview(

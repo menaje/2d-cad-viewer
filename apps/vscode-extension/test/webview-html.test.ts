@@ -425,6 +425,37 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   );
   assert.deepEqual(
     manifest.contributes?.configuration?.properties?.[
+      "dwgViewer.sceneCacheMode"
+    ],
+    {
+      type: "string",
+      enum: ["session", "persistent"],
+      enumDescriptions: [
+        "Keep generated Scene Caches only while the drawing or workspace search is using them, then delete them.",
+        "Keep validated Scene Caches for faster subsequent opens. This can use several times the source DWG size on local disk.",
+      ],
+      default: "session",
+      scope: "machine",
+      description:
+        "Choose whether generated drawing caches are retained between sessions. Changing this setting affects newly opened drawings.",
+    },
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.[
+      "dwgViewer.sceneCacheMaximumSizeGiB"
+    ],
+    {
+      type: "integer",
+      minimum: 1,
+      maximum: 100,
+      default: 5,
+      scope: "machine",
+      description:
+        "Maximum local disk space in GiB for persistent drawing caches. Oldest closed drawings are removed first; session mode does not retain them.",
+    },
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.[
       "dwgViewer.interactionRendering"
     ],
     {

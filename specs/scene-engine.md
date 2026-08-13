@@ -131,6 +131,31 @@ without conversion. This filename-identity compatibility rule does not change
 the Scene Engine protocol or Scene Cache wire version. Other platforms retain
 their existing normalization-sensitive identity.
 
+Cache retention is a host storage policy rather than an engine capability.
+The VS Code product defaults `dwgViewer.sceneCacheMode` to `session`: every
+full cache, progressive preview and XREF cache receives an idempotent release
+operation and is deleted only after its range readers close. Workspace text
+search likewise releases each full cache after extracting its bounded index.
+Manager disposal waits for active preparations before removing the private
+session directory, and a lease heartbeat lets a later process remove only
+abandoned session directories.
+
+Users may opt into `persistent` retention for repeat-open performance. Durable
+files are grouped under a path-free storage-generation digest over the Scene
+Engine contract, Scene Cache version, engine ID/version, backend ID/kind and
+implementation revision. A different generation is removed once it has no
+fresh lease; this covers engine upgrades and changed converter executables
+without deleting a cache still read by another VS Code window. Selecting
+`session` removes every unleased durable generation. The first storage-layout
+migration also removes bounded legacy flat cache, preview and temporary names.
+After the last lease closes, full-cache and preview pairs are ordered by their
+most recent modification and the oldest pairs are removed until they fit the
+configured persistent byte budget. The product default is 5 GiB and the
+machine setting accepts 1–100 GiB. Files remain protected for their complete
+range-reader lifetime even when the budget has been exceeded temporarily.
+These storage rules do not change the cache identity, Scene Engine protocol or
+Scene Cache v1.26 bytes.
+
 ## WASM admission
 
 The common TypeScript path can already exercise a progressive

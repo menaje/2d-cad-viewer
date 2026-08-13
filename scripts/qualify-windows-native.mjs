@@ -108,33 +108,39 @@ async function qualifySource({
     }),
   );
   const phases = [];
-  const prepared = await manager.prepare(sourcePath, {
-    signal: new AbortController().signal,
-    onProgress(event) {
-      phases.push(event.phase);
-    },
-  });
-  const [metadata, cache] = await Promise.all([
-    stat(prepared.cachePath),
-    readFile(prepared.cachePath),
-  ]);
-  assert.equal(metadata.isFile(), true);
-  assert.equal(metadata.size, prepared.size);
-  assert.ok(metadata.size >= 64);
-  assert.deepEqual(phases, [
-    "checking",
-    "parsing",
-    "validating",
-    "cache-ready",
-  ]);
-  await assertCleanCacheRoot(cacheRoot);
-  return {
-    label,
-    status: "pass",
-    cacheBytes: metadata.size,
-    cacheSha256: sha256(cache),
-    phases,
-  };
+  let prepared;
+  try {
+    prepared = await manager.prepare(sourcePath, {
+      signal: new AbortController().signal,
+      onProgress(event) {
+        phases.push(event.phase);
+      },
+    });
+    const [metadata, cache] = await Promise.all([
+      stat(prepared.cachePath),
+      readFile(prepared.cachePath),
+    ]);
+    assert.equal(metadata.isFile(), true);
+    assert.equal(metadata.size, prepared.size);
+    assert.ok(metadata.size >= 64);
+    assert.deepEqual(phases, [
+      "checking",
+      "parsing",
+      "validating",
+      "cache-ready",
+    ]);
+    return {
+      label,
+      status: "pass",
+      cacheBytes: metadata.size,
+      cacheSha256: sha256(cache),
+      phases,
+    };
+  } finally {
+    await prepared?.release();
+    await manager.dispose();
+    await assertCleanCacheRoot(cacheRoot);
+  }
 }
 
 async function qualifyCancellation({
@@ -151,19 +157,23 @@ async function qualifyCancellation({
   );
   const controller = new AbortController();
   let abortScheduled = false;
-  await assert.rejects(
-    manager.prepare(sourcePath, {
-      signal: controller.signal,
-      onProgress({ phase }) {
-        if (phase === "parsing" && !abortScheduled) {
-          abortScheduled = true;
-          setTimeout(() => controller.abort(), 0).unref();
-        }
-      },
-    }),
-    (error) => isSceneEngineAbort(error),
-  );
-  assert.equal(abortScheduled, true);
+  try {
+    await assert.rejects(
+      manager.prepare(sourcePath, {
+        signal: controller.signal,
+        onProgress({ phase }) {
+          if (phase === "parsing" && !abortScheduled) {
+            abortScheduled = true;
+            setTimeout(() => controller.abort(), 0).unref();
+          }
+        },
+      }),
+      (error) => isSceneEngineAbort(error),
+    );
+    assert.equal(abortScheduled, true);
+  } finally {
+    await manager.dispose();
+  }
   await assertCleanCacheRoot(cacheRoot);
   return {
     label: "cancel-cleanup",
