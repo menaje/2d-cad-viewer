@@ -770,7 +770,7 @@ export function buildPrimitiveMeshes(
     // hairline fallback while retaining the fill for close zoom levels.
     if (
       geometry.allDrawableEdgesWide &&
-      geometry.maximumWidth > MAX_NATIVE_HAIRLINE_WIDTH
+      geometry.maximumDrawableWidth > MAX_NATIVE_HAIRLINE_WIDTH
     ) {
       lineReplacementHandles.push(polyline.handle);
     }

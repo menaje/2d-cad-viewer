@@ -537,6 +537,46 @@ test("keeps the native hairline for a sub-precision polyline width", async () =>
   assert.equal(result.lineReplacementHandleWords.length, 0);
 });
 
+test("ignores degenerate edge widths when preserving a native hairline", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const handle = 906n;
+  const result = buildPrimitiveMeshes(
+    withPolyline(
+      source,
+      {
+        handle,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        firstVertex: 0,
+        vertexCount: 3,
+        polylineKind: 1,
+        polylineFlags: 0,
+        elevation: 0,
+        normal: [0, 0, 1],
+        defaultStartWidth: 0,
+        defaultEndWidth: 0,
+        constantWidth: 0,
+      },
+      [
+        { position: [0, 0, 0], bulge: 0, startWidth: 2, endWidth: 2, flags: 0 },
+        { position: [0, 0, 0], bulge: 0, startWidth: 1 / 32_000, endWidth: 1 / 32_000, flags: 0 },
+        { position: [10, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+      ],
+    ),
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: true },
+  );
+
+  assert.equal(result.metrics.renderedFilledWidePolylines, 1);
+  assert.equal(primitivePointsForHandle(result.solidFills, handle).length, 6);
+  assert.equal(result.lineReplacementHandleWords.length, 0);
+});
+
 test("renders wide polyline boundaries when FILLMODE is disabled", async () => {
   const { source, metadata, instanceGraph } = await primitiveFixture();
   const handle = 901n;

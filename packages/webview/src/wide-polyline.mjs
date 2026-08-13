@@ -231,7 +231,7 @@ export function buildWidePolylineGeometry(
   let sampledSegments = 0;
   let drawableEdges = 0;
   let wideEdges = 0;
-  let maximumWidth = 0;
+  let maximumDrawableWidth = 0;
   let invalidWidths = false;
   for (let index = 0; index < edgeCount; index += 1) {
     const start = vertices[index];
@@ -243,7 +243,6 @@ export function buildWidePolylineGeometry(
       continue;
     }
     const wide = Math.max(...widths) > WIDTH_EPSILON;
-    maximumWidth = Math.max(maximumWidth, ...widths);
     const chord = Math.hypot(
       end.position[0] - start.position[0],
       end.position[1] - start.position[1],
@@ -256,6 +255,7 @@ export function buildWidePolylineGeometry(
       continue;
     }
     drawableEdges += 1;
+    maximumDrawableWidth = Math.max(maximumDrawableWidth, ...widths);
     if (!wide) {
       edges[index] = { wide: false, degenerate: false };
       continue;
@@ -290,7 +290,7 @@ export function buildWidePolylineGeometry(
       fillVertices: Object.freeze([]),
       outlineVertices: Object.freeze([]),
       allDrawableEdgesWide: false,
-      maximumWidth,
+      maximumDrawableWidth,
       mixedWidth: false,
       sampledSegments,
     });
@@ -361,7 +361,7 @@ export function buildWidePolylineGeometry(
     outlineVertices: Object.freeze(outlineVertices),
     allDrawableEdgesWide:
       !invalidWidths && drawableEdges > 0 && wideEdges === drawableEdges,
-    maximumWidth,
+    maximumDrawableWidth,
     mixedWidth: wideEdges > 0 && wideEdges < drawableEdges,
     sampledSegments,
   });
