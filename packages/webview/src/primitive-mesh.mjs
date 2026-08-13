@@ -24,6 +24,7 @@ export const MAX_PRIMITIVE_GPU_BYTES =
 
 const MAX_BATCH_VERTICES = 24_576;
 const MAX_POSITION_ERROR = 1e-3;
+const MAX_NATIVE_HAIRLINE_WIDTH = MAX_POSITION_ERROR;
 const GPU_STYLE_INVISIBLE = 1 << 16;
 const WIPEOUT_BACKGROUND_COLOR =
   ((3 << 30) | (14 << 16) | (16 << 8) | 19) >>> 0;
@@ -764,7 +765,13 @@ export function buildPrimitiveMeshes(
       metrics.renderedOutlineWidePolylines += 1;
       metrics.widePolylineOutlineVertices += points.length;
     }
-    if (geometry.allDrawableEdgesWide) {
+    // Filled quads narrower than the primitive position-error budget can
+    // rasterize to zero pixels at normal zoom. Keep the native CAD line as a
+    // hairline fallback while retaining the fill for close zoom levels.
+    if (
+      geometry.allDrawableEdgesWide &&
+      geometry.maximumWidth > MAX_NATIVE_HAIRLINE_WIDTH
+    ) {
       lineReplacementHandles.push(polyline.handle);
     }
   }
