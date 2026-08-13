@@ -53,7 +53,7 @@ also present in qualification evidence.
 | `TILEMODE`, `CTAB` and `CLAYOUT` | The drawing's saved model/paper state chooses the initial tab. When paper space is active, the viewer resolves the layout whose associated block is exactly `*PAPER_SPACE`; it does not assume the first paper tab is current. AutoCAD retains that block name for the most recently active paper layout even while Model is active. The adapter reads the canonical BLOCK entity name rather than a possibly duplicated LibreDWG BLOCK_HEADER name. | Implemented for LAYOUT-bearing drawings. Annotation-matrix schema v3 rejects a converted save unless its named paper layout is the current `*PAPER_SPACE` layout. A missing or ambiguous marker fails closed to Model and is observable in first-frame metrics. Pre-R13 paper space without LAYOUT objects remains an explicit legacy boundary; a native multi-layout same-DWG capture remains an external gate. |
 | `FILLMODE` | Preserved in the drawing record. It gates HATCH solid/gradient/pattern/background results, SOLID/TRACE and wide-polyline interiors. The boundary remains visible when the corresponding entity has one. | Implemented; the public corpus contains only `1`, so the `0/1` AutoCAD pair remains an external gate. |
 | `ATTMODE` / `ATTDISP` | `0` hides ATTRIB and ATTDEF, `1` follows each entity's invisible flag and `2` forces attribute display except structural ATTDEF templates. | Implemented; the public corpus contains only `1`, so `0/1/2` reference pixels remain an external gate. |
-| Entity visibility and layer state | Common entity visibility (DXF group 60) is preserved across native geometry, Canvas overlays, XREFs and draw-order masking. Layer off/frozen suppresses screen display; locked and no-plot do not suppress an ordinary screen view. INSERT-layer visibility still gates every occurrence. | Implemented. `OBJECTISOLATIONMODE=1` fixture authoring must persist the resulting entity visibility in the DWG; the viewer does not infer the author's user setting. |
+| Entity visibility and layer state | Common entity visibility (DXF group 60) is preserved across native geometry, Canvas overlays, XREFs and draw-order masking. Layer off/frozen suppresses screen display; locked and no-plot do not suppress an ordinary screen view. Enabling the layout CTB preview with **Plot style on** (`출력 켬`) excludes no-plot layers from WebGL, Canvas overlays, picking and measurement; turning it off restores ordinary screen visibility without changing the layer-panel state. INSERT-layer visibility still gates every occurrence. | Implemented. `OBJECTISOLATIONMODE=1` fixture authoring must persist the resulting entity visibility in the DWG; the viewer does not infer the author's user setting. |
 | `CANNOSCALE` and `ANNOALLVISIBLE` | Versioned variable-dictionary text is converted before matching `CANNOSCALE`; model and every serialized viewport, including the primary paper viewport, carry an annotation scale. Bounded MTEXT/TEXT/ATTDEF/ATTRIB contexts are selected against that scale, and a missing representation is omitted when all-scales display is off. Scene Cache v1.25 preserves the model value and reads each paper layout's independent value from AutoCAD's `AcadAnnoAV` LAYOUT application data. A layout without that data uses Autodesk's documented initial value 1, not an inferred off state. | Implemented with fail-closed validation for duplicate, malformed or non-boolean layout data. The AutoCAD-generated 2×2 same-DWG matrix remains an external pixel and round-trip gate. Other annotative families remain outside the current representation table. |
 | `QTEXTMODE` | Scene Cache v1.25 preserves the saved boolean. When enabled, the Canvas text path omits glyphs, backgrounds and frames and draws the bounded text-entity box while preserving owner, layer, draw order and clipping. | Implemented for TEXT, MTEXT, ATTDEF and ATTRIB; the AutoCAD-created 0/1 native-pixel pair remains an external gate. |
 | `SPLFRAME` | Scene Cache v1.25 preserves the saved boolean. When enabled, invisible 3DFACE edges are restored. Autodesk's current definition also exposes HELIX control polygons, unsmoothed mesh objects and polyface edges. | Implemented for qualified 3DFACE records. HELIX, smoothed mesh reconstruction and polyface topology remain explicit 3D/mesh boundaries; a spline-fit 2D POLYLINE frame is not invented from this variable. The AutoCAD-created 0/1 native-pixel pair remains an external gate. |
@@ -336,6 +336,28 @@ enforcement, the exact viewer and companion VSIX bytes and SHA-256 values, and
 the pinned Autodesk annotation-scaling/multileader sample used by the Browser
 model/layout review.
 Supplying only a report or substituting a different package fails closed.
+
+### Repository-generated saved-state matrix
+
+The platform-neutral gate constructs 20 deterministic Scene Cache v1.26 cases
+without a private DWG or write-enabled product dependency. It covers
+`FILLMODE` 0/1, `ATTMODE` 0/1/2, the model/layout `ANNOALLVISIBLE` 2x2 matrix,
+six `FRAME`/`IMAGEFRAME` fallback combinations, saved Model/Paper layout
+restoration and loaded/unloaded/unresolved XREF states. Every case records its
+repository-generated source identity, source entity count, serialized count,
+deferred-reason partition and normalized display decision:
+
+```bash
+pnpm run check:display-state-matrix
+node scripts/qualify-display-state-matrix.mjs \
+  --output /absolute/new/path/display-state-matrix.json
+```
+
+The report refuses an existing destination and hashes the ordered normalized
+cases, so repeated execution can detect a state or inventory change without
+committing a drawing or raster. This closes the local fixture and deterministic
+inventory/display-result gates. It does not replace the separate Browser plus
+exact packaged Windows VS Code inventory gate below.
 
 ### Official Autodesk viewer handoff
 

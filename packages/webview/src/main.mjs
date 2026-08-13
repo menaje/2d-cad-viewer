@@ -5964,9 +5964,9 @@ async function handleExternalCacheReady(message) {
         },
       });
       const detailReader = {
-        async readBatchVertices(batch) {
+        async readBatchVertices(batch, options) {
           const vertices =
-            await loaded.scene.reader.readBatchVertices(batch);
+            await loaded.scene.reader.readBatchVertices(batch, options);
           remapLineVertexLayers(
             vertices.buffer,
             layerMap,
@@ -6276,7 +6276,8 @@ function installInteraction(
     instanceGraph,
     getCamera: () =>
       activeInteraction?.snapshot().render.camera ?? render.camera,
-    getLayerVisibility: () => scene.renderer.getLayerVisibility(),
+    getLayerVisibility: () =>
+      scene.renderer.getDisplayLayerVisibility(),
     onFit: () => activeInteraction?.reset(),
     findOverlayCandidates({ x, y, snapKinds, tolerancePixels }) {
       return [

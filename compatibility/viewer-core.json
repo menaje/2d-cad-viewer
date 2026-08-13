@@ -1,7 +1,7 @@
 {
   "schema": "menaje-viewer-core-compatibility/1",
   "status": "public-preview",
-  "asOf": "2026-08-04",
+  "asOf": "2026-08-13",
   "viewerCore": {
     "package": "@menaje/viewer-core",
     "version": "0.1.2",
@@ -111,6 +111,33 @@
     "command": "pnpm run qualify:viewer-boundary",
     "evidence": "compatibility/evidence/viewer-boundary-0.1.2-2026-08-04.json",
     "externalConsumers": "consumer-owned"
+  },
+  "developmentQualification": {
+    "status": "passed",
+    "publishedInDistribution": false,
+    "sourceVersion": "0.1.2",
+    "feature": "interaction-detail-pause-resume-with-cancellable-stale-load-rejection",
+    "command": "pnpm run qualify:viewer-boundary",
+    "artifacts": {
+      "viewerCore": {
+        "file": "menaje-viewer-core-0.1.2.tgz",
+        "sha256": "a693fca1bc78867b7bc7e905ddd12c5b745ae43e2bdf917dd286bb95f699ca79",
+        "bytes": 51089,
+        "contentSha256": "258af9a9dab99e6a404984296d704188925c6a93d4066fa86c057153c4ffc2f8"
+      },
+      "renderProtocol": {
+        "file": "menaje-viewer-render-protocol-0.1.2.tgz",
+        "sha256": "6534ec7d021e06d3ea616ae15fb995ece57a7c3292fc37e892a28db8e2a91d42",
+        "bytes": 16424,
+        "contentSha256": "6b02978d161a61f4ed8b3453b941c13a2c6a7f2f58bb8477e980a0ab34e0d1d2"
+      },
+      "viewerUi": {
+        "file": "menaje-viewer-ui-0.1.2.tgz",
+        "sha256": "faf22084601e68c5375bd283a4a97090791a071bbab5ef2394c8eaa57086e69a",
+        "bytes": 13825,
+        "contentSha256": "3fd12009d442c14251f712651f9decb37e10db1f9f249711b0c6c4f7ea8d10a5"
+      }
+    }
   },
   "consumers": {
     "bimExplorer": {

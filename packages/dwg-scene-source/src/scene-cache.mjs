@@ -4642,13 +4642,49 @@ export class SceneCacheReader {
     });
   }
 
+  async readCurveLinetypeScales() {
+    return this.memoize("curve-linetype-scales", async () => {
+      if (this.header.minor < 23) {
+        return Object.freeze(new Map());
+      }
+      const section = this.getSection(SectionKind.CurveLinetypeScales);
+      validateRecordSection(section, CURVE_LINETYPE_SCALE_RECORD_SIZE);
+      const buffer = await this.readWholeMetadataSection(section);
+      const view = new DataView(buffer);
+      const scales = new Map();
+      for (let index = 0; index < section.recordCount; index += 1) {
+        const offset = index * section.recordSize;
+        const handle = view.getBigUint64(offset, true);
+        const scale = view.getFloat64(offset + 8, true);
+        if (
+          handle === 0n ||
+          !Number.isFinite(scale) ||
+          scale <= 0 ||
+          scales.has(handle)
+        ) {
+          throw new Error(`curve linetype scale ${index} is invalid`);
+        }
+        scales.set(handle, scale);
+      }
+      return Object.freeze(scales);
+    });
+  }
+
   async readPrimitiveSource() {
-    const [points, solids, faces, wipeouts, polylineSource] = await Promise.all([
+    const [
+      points,
+      solids,
+      faces,
+      wipeouts,
+      polylineSource,
+      curveLinetypeScales,
+    ] = await Promise.all([
       this.readPointEntities(),
       this.readSolidEntities(),
       this.readFaceEntities(),
       this.readWipeoutEntities(),
       this.readPolylineSource(),
+      this.readCurveLinetypeScales(),
     ]);
     return Object.freeze({
       points,
@@ -4657,6 +4693,7 @@ export class SceneCacheReader {
       wipeouts,
       polylines: polylineSource.polylines,
       polylineVertices: polylineSource.polylineVertices,
+      curveLinetypeScales,
     });
   }
 
@@ -5394,7 +5431,10 @@ export class SceneCacheReader {
 
   async readBatchVertices(
     batch,
-    { maximumBytes = MAX_DETAIL_BATCH_BYTES } = {},
+    {
+      maximumBytes = MAX_DETAIL_BATCH_BYTES,
+      signal,
+    } = {},
   ) {
     const section = this.getSection(SectionKind.GpuLineVertices);
     const byteLength = checkedMultiply(
@@ -5418,7 +5458,7 @@ export class SceneCacheReader {
       "GPU batch file offset",
     );
     const buffer = requireArrayBuffer(
-      await this.source.read(offset, byteLength),
+      await this.source.read(offset, byteLength, { signal }),
       byteLength,
       `GPU batch ${batch.id} vertices`,
     );

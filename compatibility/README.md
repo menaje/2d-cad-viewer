@@ -8,8 +8,11 @@ Host–Webview message 없이 사용할 수 있는 WebGL presentation과 DWG Sce
 Cache source package의 버전, 공개 mount, exact artifact digest와 publication
 승인을 별도로 기록한다. 제품 bootstrap은 이 공개 계약에 포함되지 않는다.
 `developmentQualification`은 아직 새 package tag로 배포하지 않은 소스의
-추가 public API와 검증을 기록한다. 이 항목은 기존 `distribution`의 immutable
-0.1.1 artifact digest를 바꾸거나 새 버전이 배포됐다는 뜻이 아니다.
+추가 public API와 검증을 기록한다. 개발 소스의 재현 가능한 artifact digest는
+이 항목에 별도로 고정하며, 기존 `distribution`의 immutable artifact digest를
+바꾸거나 새 버전이 배포됐다는 뜻이 아니다. Viewer Core의 현재 개발 항목은
+상호작용 중 detail read 중단·최신 camera 재선택 lifecycle이며, Viewer WebGL의
+현재 개발 항목은 revision comparison mount다.
 
 - `public-preview`는 package/API가 공개 배포됐지만 아직 `0.x` compatibility
   window에 있다는 뜻이다.
@@ -46,7 +49,9 @@ Scene Cache package version을 검증한다. 따라서 버전 문자열을 relea
 `pnpm run qualify:viewer-boundary`는 세 public tarball을 두 번 pack해 같은
 gzip platform metadata를 정규화한 runner 간 byte 동일성과 platform-neutral
 package content SHA-256을 확인하고, 실제 archive의 raw SHA-256/size가
-producer pin과 일치하는지 검증한다. 빈 임시 consumer에는
+producer pin과 일치하는지 검증한다. `developmentQualification`이 있으면 현재
+소스는 그 미배포 digest를 검증하고, 과거 `distribution`과 고정 evidence는
+변경하지 않는다. 빈 임시 consumer에는
 artifact만 설치해
 RenderSource/Service fixture와 standalone runtime을 실행한다. Browser와
 VS Code가 같은 Webview entrypoint를 bundle하는지도 확인한다. 이 저장소가

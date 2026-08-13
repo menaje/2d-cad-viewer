@@ -1122,13 +1122,14 @@ test("reads bounded POINT and SOLID source lazily", async () => {
   assert.equal(primitives.faces.length, 5);
   assert.equal(primitives.polylines.length, 0);
   assert.equal(primitives.polylineVertices.length, 0);
+  assert.equal(primitives.curveLinetypeScales.size, 0);
   assert.deepEqual(primitives.points.get(0).location, [11, 2, 0]);
   assert.equal(primitives.points.get(0).displayMode, 66);
   assert.equal(primitives.points.get(0).displaySize, -3);
   assert.equal(primitives.solids.get(0).fillMode, true);
   assert.deepEqual(primitives.solids.get(0).corners[3], [0, 3, 0]);
   assert.equal(primitives.solids.get(1).fillMode, false);
-  assert.equal(source.requests.length - requestsAfterOpen, 5);
+  assert.equal(source.requests.length - requestsAfterOpen, 6);
 });
 
 test("reads bounded 3DFACE source lazily", async () => {
@@ -1152,7 +1153,7 @@ test("reads bounded 3DFACE source lazily", async () => {
     primitives.faces.get(4).corners[3],
     primitives.faces.get(4).corners[2],
   );
-  assert.equal(source.requests.length - requestsAfterOpen, 5);
+  assert.equal(source.requests.length - requestsAfterOpen, 6);
 });
 
 test("reads bounded WIPEOUT source lazily", async () => {
@@ -1194,7 +1195,7 @@ test("reads bounded WIPEOUT source lazily", async () => {
   assert.equal(primitives.wipeouts.get(1).ownerHandle, 101n);
   assert.deepEqual(primitives.wipeouts.get(1).size, [8, 6]);
   assert.equal(primitives.wipeouts.get(2).clippingEnabled, false);
-  assert.equal(source.requests.length - requestsBeforePrimitives, 5);
+  assert.equal(source.requests.length - requestsBeforePrimitives, 6);
 });
 
 test("rejects invalid metadata in a WIPEOUT record", async () => {

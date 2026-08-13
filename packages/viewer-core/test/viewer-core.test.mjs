@@ -470,6 +470,34 @@ test("keeps package versions and producer compatibility manifest aligned", async
       "compatibility/evidence/viewer-boundary-0.1.2-2026-08-04.json",
     externalConsumers: "consumer-owned",
   });
+  assert.deepEqual(
+    {
+      status: manifest.developmentQualification.status,
+      publishedInDistribution:
+        manifest.developmentQualification.publishedInDistribution,
+      sourceVersion:
+        manifest.developmentQualification.sourceVersion,
+      feature: manifest.developmentQualification.feature,
+      command: manifest.developmentQualification.command,
+    },
+    {
+      status: "passed",
+      publishedInDistribution: false,
+      sourceVersion: ViewerCoreVersion,
+      feature:
+        "interaction-detail-pause-resume-with-cancellable-stale-load-rejection",
+      command: "pnpm run qualify:viewer-boundary",
+    },
+  );
+  for (const artifact of Object.values(
+    manifest.developmentQualification.artifacts,
+  )) {
+    assert.match(artifact.file, /^menaje-viewer-.+\.tgz$/u);
+    assert.match(artifact.sha256, /^[a-f0-9]{64}$/u);
+    assert.match(artifact.contentSha256, /^[a-f0-9]{64}$/u);
+    assert.ok(Number.isSafeInteger(artifact.bytes));
+    assert.ok(artifact.bytes > 0);
+  }
   assert.equal(
     manifest.sources.mockRenderDelta,
     "delta-conformance",

@@ -991,6 +991,13 @@ The remaining kind-50 fields and every kind-51 viewport field retain their
 v1.23 layout, including viewport annotation scale, frozen-layer ranges and
 clip-boundary references.
 
+The kind-51 group-68 status/order field is transient for an inactive paper
+layout: AutoCAD reports every viewport in that layout as not on until the
+layout becomes current. The Viewer therefore uses positive values only for
+stack ordering. Persistent display suppression comes from viewport status bit
+`0x20000`; a zero group-68 value without that bit does not hide a viewport when
+the user selects its layout.
+
 LINE and normalized polyline segments are emitted as interleaved, GPU-ready
 line vertices. Scene Cache v1.3 also emits bounded first-pass chords for ARC,
 CIRCLE, ELLIPSE, polyline bulges and NURBS SPLINE entities. Model-space

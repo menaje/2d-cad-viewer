@@ -343,6 +343,7 @@ function makeLayerSection() {
 
 function makeBlockSection({
   minorVersion,
+  paperBlockName,
   xrefLoaded,
   xrefResolved,
 }) {
@@ -355,7 +356,7 @@ function makeBlockSection({
     },
     {
       handle: 101,
-      name: "BLOCK_A",
+      name: paperBlockName,
       xrefPath: "",
       basePoint: [10, 0, 0],
     },
@@ -1760,6 +1761,7 @@ export function makeFixtureCache({
   embeddedImageHeight = 2,
   layoutPlotStyle = "monochrome.ctb",
   layoutAnnotationAllVisible = true,
+  paperBlockName = "BLOCK_A",
 } = {}) {
   const encodeTwoBitSetting = (value) =>
     value === null ? 3 : value;
@@ -1806,6 +1808,7 @@ export function makeFixtureCache({
     makeLayerSection(),
     makeBlockSection({
       minorVersion,
+      paperBlockName,
       xrefLoaded,
       xrefResolved,
     }),

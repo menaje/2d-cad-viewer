@@ -18,6 +18,8 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 pkg_config=${PKG_CONFIG:-pkg-config}
 cc=${CC:-cc}
 strip=${STRIP:-strip}
+build_cflags=${CFLAGS:--O3 -DNDEBUG}
+build_ldflags=${LDFLAGS:-}
 
 [ ! -e "$output" ] || {
   echo "refusing to overwrite adapter output: $output" >&2
@@ -58,14 +60,16 @@ esac
   exit 1
 }
 
-# pkg-config output is intentionally split into compiler arguments.
+# Build flags and pkg-config output are intentionally split into compiler
+# arguments. The defaults remain the release profile; explicit CFLAGS/LDFLAGS
+# let the local sanitizer qualification link the same adapter boundary.
 # shellcheck disable=SC2086
-"$cc" -std=c11 -O3 -DNDEBUG -Wall -Wextra -Wpedantic \
+"$cc" -std=c11 $build_cflags -Wall -Wextra -Wpedantic \
   "-DDWG_VIEWER_LIBREDWG_VERSION=\"$engine_version\"" \
   '-DDWG_VIEWER_LIBREDWG_LINKAGE="static"' \
   $cflags $platform_cflags \
   "$script_dir/libredwg_adapter.c" \
   "$script_dir/libredwg_scene_cache.c" \
-  "$static_library" -lm $platform_ldflags -o "$output"
+  "$static_library" -lm $platform_ldflags $build_ldflags -o "$output"
 
 "$strip" "$output"

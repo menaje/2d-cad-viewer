@@ -157,9 +157,33 @@ test("bounds the expanded Windows PE dependency audit", async () => {
   assert.match(packageSource, /timeout: 30_000,/u);
 });
 
-test("keeps package and source preparation pins synchronized", async () => {
-  const [prepareScript, buildScript, nativeEngineSource] = await Promise.all([
+test("centralizes source preparation behind target profiles", async () => {
+  const [
+    prepareScript,
+    commonPrepareScript,
+    linuxProfile,
+    macosProfile,
+    windowsProfile,
+    buildScript,
+    nativeEngineSource,
+  ] = await Promise.all([
     readFile(path.join(import.meta.dirname, "prepare.sh"), "utf8"),
+    readFile(
+      path.join(import.meta.dirname, "scripts", "prepare-common.sh"),
+      "utf8",
+    ),
+    readFile(
+      path.join(import.meta.dirname, "scripts", "platform", "linux.sh"),
+      "utf8",
+    ),
+    readFile(
+      path.join(import.meta.dirname, "scripts", "platform", "macos.sh"),
+      "utf8",
+    ),
+    readFile(
+      path.join(import.meta.dirname, "scripts", "platform", "windows.sh"),
+      "utf8",
+    ),
     readFile(path.join(import.meta.dirname, "build.sh"), "utf8"),
     readFile(
       path.join(
@@ -175,26 +199,39 @@ test("keeps package and source preparation pins synchronized", async () => {
     ),
   ]);
   assert.match(
-    prepareScript,
+    commonPrepareScript,
     new RegExp(`LIBREDWG_VERSION=${LIBREDWG_VERSION.replace(".", "\\.")}`, "u"),
   );
   assert.match(
-    prepareScript,
+    commonPrepareScript,
     new RegExp(`LIBREDWG_SHA256=${LIBREDWG_SOURCE_SHA256}`, "u"),
   );
-  assert.match(prepareScript, /--disable-shared/u);
-  assert.match(prepareScript, /--enable-static/u);
-  assert.match(prepareScript, /Darwin-x86_64/u);
+  assert.match(commonPrepareScript, /--disable-shared/u);
+  assert.match(commonPrepareScript, /--enable-static/u);
+  assert.match(prepareScript, /platform_profile=linux/u);
+  assert.match(prepareScript, /platform_profile=macos/u);
+  assert.match(prepareScript, /platform_profile=windows/u);
+  assert.match(prepareScript, /scripts\/prepare-common\.sh/u);
+  assert.match(commonPrepareScript, /dwg_viewer_platform_configure/u);
+  assert.match(linuxProfile, /PKG_CONFIG=/u);
+  assert.match(windowsProfile, /x86_64\|amd64/u);
+  assert.match(macosProfile, /x86_64\|arm64/u);
   assert.match(
-    prepareScript,
+    macosProfile,
     /CFLAGS=\$\{CFLAGS:--O3 -DNDEBUG\}/u,
   );
+  assert.doesNotMatch(linuxProfile, /-O3|-DNDEBUG/u);
+  assert.doesNotMatch(windowsProfile, /-O3|-DNDEBUG/u);
   assert.match(
     buildScript,
     new RegExp(`LIBREDWG_VERSION=${LIBREDWG_VERSION.replace(".", "\\.")}`, "u"),
   );
   assert.match(buildScript, /--exact-version="\$LIBREDWG_VERSION"/u);
   assert.match(buildScript, /static_library=.*libredwg\.a/u);
+  assert.match(buildScript, /build_cflags=\$\{CFLAGS:--O3 -DNDEBUG\}/u);
+  assert.match(buildScript, /build_ldflags=\$\{LDFLAGS:-\}/u);
+  assert.match(buildScript, /\$build_cflags -Wall/u);
+  assert.match(buildScript, /\$platform_ldflags \$build_ldflags/u);
   assert.match(buildScript, /"\$static_library" -lm/u);
   assert.match(buildScript, /MINGW\*.*MSYS\*.*CYGWIN\*/u);
   assert.match(buildScript, /-static -static-libgcc/u);
@@ -344,7 +381,7 @@ test("buffers packed scalar writes and flushes every publication boundary", asyn
   );
   assert.match(
     sceneCacheSource,
-    /#if defined\(__APPLE__\) && defined\(__x86_64__\)[\s\S]*?DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER/u,
+    /#if defined\(__APPLE__\)[\s\S]*?defined\(__x86_64__\)[\s\S]*?defined\(__aarch64__\)[\s\S]*?defined\(__arm64__\)[\s\S]*?DWG_VIEWER_MACOS_BUFFERED_WRITER/u,
   );
   assert.match(
     sceneCacheSource,
@@ -708,7 +745,10 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
     seekableStdinPatchSource,
   ] = await Promise.all([
       readFile(path.join(import.meta.dirname, "package.mjs"), "utf8"),
-      readFile(path.join(import.meta.dirname, "prepare.sh"), "utf8"),
+      readFile(
+        path.join(import.meta.dirname, "scripts", "prepare-common.sh"),
+        "utf8",
+      ),
       readFile(
         path.join(import.meta.dirname, "wasm", "build.sh"),
         "utf8",
@@ -731,6 +771,10 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
     ]);
 
   assert.match(packageSource, /"libredwg-acds-sab\.patch"/u);
+  assert.match(packageSource, /"scripts\/prepare-common\.sh"/u);
+  assert.match(packageSource, /"scripts\/platform\/linux\.sh"/u);
+  assert.match(packageSource, /"scripts\/platform\/macos\.sh"/u);
+  assert.match(packageSource, /"scripts\/platform\/windows\.sh"/u);
   assert.match(
     packageSource,
     /"libredwg-r2007-high-compression\.patch"/u,
@@ -917,7 +961,7 @@ test("preserves qualified MLINE fills and fails closed on fill cuts", async () =
   );
 });
 
-test("preserves HATCH background TrueColor from its named application data", async () => {
+test("preserves concrete HATCH background TrueColor and rejects None", async () => {
   const sceneCacheSource = await readFile(
     path.join(import.meta.dirname, "libredwg_scene_cache.c"),
     "utf8",
@@ -926,8 +970,9 @@ test("preserves HATCH background TrueColor from its named application data", asy
   assert.match(sceneCacheSource, /HATCHBACKGROUNDCOLOR/u);
   assert.match(
     sceneCacheSource,
-    /eed->data->code != 71u[\s\S]*?0x00ffffffu/u,
+    /eed->data->code != 71u[\s\S]*?eed_71\.rl >> 24\) != 0xc2u[\s\S]*?0x00ffffffu/u,
   );
+  assert.match(sceneCacheSource, /0xc8 means None/u);
   assert.match(sceneCacheSource, /HATCH_FLAG_BACKGROUND_COLOR/u);
   assert.match(sceneCacheSource, /write_u32 \(writer, background_color\)/u);
 });

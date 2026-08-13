@@ -70,6 +70,10 @@ test("parses bounded Windows native performance options", () => {
     parseArguments([...required, "--max-median-wall-ms", "1ms"]),
     undefined,
   );
+  assert.equal(
+    parseArguments([...required, "--runs", "3runs"]),
+    undefined,
+  );
 });
 
 test("summarizes integer measurements with the upper middle value", () => {

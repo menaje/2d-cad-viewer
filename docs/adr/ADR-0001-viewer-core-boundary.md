@@ -114,6 +114,13 @@ protocol compatibility window를 기록하고, consumer는 자신의 lockfile과
 compatibility manifest에서 exact artifact를 pin한다. 0.x 범위를 벗어나는
 호환 주장은 cross-repository fixture 없이 하지 않는다.
 
+상호작용 중 detail streaming pause/resume lifecycle은 0.1.2 이후 개발 소스로
+별도 qualification한다. 이 소스 artifact는 두 번 pack한 digest와 artifact-only
+consumer fixture를 통과하지만 `publishedInDistribution: false`이며, immutable
+`viewer-core-v0.1.2` artifact를 교체하거나 새 package가 배포됐다는 뜻이
+아니다. 새 tag와 package publication은 별도 version 및 promotion 승인이
+있을 때만 수행한다.
+
 ## Extraction 순서
 
 1. 계약 package, producer compatibility manifest와 mock conformance

@@ -39,6 +39,9 @@ artifacts in the `viewer-core-v0.1.2` GitHub release and through GitHub
 Packages. Their producer compatibility record, exact artifact digests, protocol
 window, and consumer manifests are recorded in
 [`compatibility/viewer-core.json`](../compatibility/viewer-core.json).
+The interaction-time detail pause/resume changes are qualified as an
+unpublished development artifact in that manifest; they do not replace the
+immutable `viewer-core-v0.1.2` release bytes.
 The canonical Scene Cache reader and bounded range sources now live in
 `packages/dwg-scene-source`; the legacy Webview paths are compatibility
 re-exports. The public `@menaje/dwg-scene-source` package exposes that
@@ -57,6 +60,18 @@ batch kinds. `ViewerRendererController` validates redraw/camera/detail-target
 capabilities and coordinates root/XREF detail disposal.
 `DetailStreamingController` owns concurrency, byte-budgeted GPU caching,
 stale-work rejection, review geometry publication and redraw coalescing.
+Active pan, wheel zoom and window zoom now pause that controller before the
+interaction frame is drawn. The same lifecycle is applied to the root and
+every mounted XREF streamer. A pause retains already mounted bounded cache
+entries, invalidates the old selection revision and sends an `AbortSignal` to
+each in-flight range read. Sources that cannot interrupt an already-running
+read may still finish it, but the revision check prevents its payload from
+mounting a GPU resource or requesting a redraw. Camera changes are coalesced
+while paused; the first settled update selects only from the latest camera and
+resumes the existing distance-priority queue. Snapshots expose pause/resume,
+coalesced update, load start, cancellation, stale completion/mount, GPU upload
+and settled-detail latency counters without assigning a platform-wide
+performance claim to them.
 `ViewerSelectionController` binds projected picks to the active
 session/revision/snapshot and publishes monotonic `selection.changed` Host
 events. Service-backed sources can additionally use revision-bound
@@ -508,6 +523,23 @@ decoder. Reducing that graph is therefore a common engine/upstream task, not a
 Windows transport optimization. ETW/WPA is still required to attribute exact
 allocation stacks and system file-cache costs.
 
+The reproducible synthetic large-DWG gate and the current macOS arm64
+allocation/prototype decision are documented in
+[`libredwg-parser-memory.md`](libredwg-parser-memory.md). The local reference
+interning prototype reduced parse-boundary peak RSS by only about 6% and
+regressed median wall time by about 4%, so it is not part of the adapter patch
+stack. A second object-vector-growth prototype reduced final unused slot bytes
+from about 5.7 MB to 0.2 MB but left parse peak RSS unchanged and regressed
+median parse time by about 14%, so it was also removed. The source file and
+generic decompressed-section chains are already freed before `dwg_read_file`
+returns; selective decode, early payload release and lazy ACIS spans would need
+an upstream two-stage decoder with durable checked backing storage. A macOS
+arm64 ASan/UBSan sweep passed one valid public fixture and 24 deterministic
+malformed variants without a sanitizer diagnostic, unexpected signal or
+timeout; a separate forced-cancellation case removed its possible partial
+output.
+Unmeasured targets remain pending rather than inheriting these results.
+
 A physical Windows x64 qualification of the Scene Cache v1.26 writer used one
 anonymous 51,723,767-byte drawing, automatic eight-worker conversion, one
 warmup, and three measured processes per location. The mapped drive was a real
@@ -548,15 +580,32 @@ stdio. Median peak RSS remained in the same approximately 1.19 GB parser
 memory class.
 
 The pinned LibreDWG parser had previously retained its configure default of
-`-g -O2` even though the adapter writer used `-O3 -DNDEBUG`. Restricting the
-parser flag change to Intel macOS x64 shortened the progressive path's median
-parse time from 3,608 ms to 3,391 ms (-6.0%) and its preview-ready marker from
-5,190 ms to 5,012 ms (-3.4%) across three alternating pairs. Baseline and
+`-g -O2` even though the adapter writer used `-O3 -DNDEBUG`. In the Intel-only
+qualification, changing the parser profile shortened the progressive path's
+median parse time from 3,608 ms to 3,391 ms (-6.0%) and its preview-ready marker
+from 5,190 ms to 5,012 ms (-3.4%) across three alternating pairs. Baseline and
 candidate full caches and persistent previews were byte-identical. These are
 warm-page-cache, path-free measurements rather than cold-disk claims; the
 repeat tool records that distinction and never emits the private source path
-or artifact digest. Scene Cache v1.26, the engine protocol, atomic publication
-and all non-Intel-macOS writer paths remain unchanged.
+or artifact digest.
+
+The same two macOS-only settings are now enabled on Apple Silicon arm64 after a
+current-source paired comparison over 159 inputs (25,488,871 bytes total,
+maximum 2,179,277 bytes), with three measured runs per input. The combined
+`-O3 -DNDEBUG` parser profile and bounded writer changed the median per-input
+wall, parse, write, and adapter-total times by -8.651%, -9.178%, -16.477%, and
+-14.205%, respectively; median peak RSS increased 1.443%. All 159 caches were
+byte-identical across O2/O3 and buffer-off/on variants. This evidence covers
+small and medium inputs under a warm source page cache. The optimization-specific
+24,680,147-byte reference-drawing rerun remains a physical-platform gate, so no
+large-input arm64 threshold is inferred from the smaller corpus.
+
+The build boundary now reflects that ownership explicitly. `prepare.sh`
+dispatches to a Linux, macOS, or Windows profile, one common implementation owns
+source pins and patches, and only the macOS profile selects the optimized parser
+flags. The Scene Cache version, engine protocol, and atomic publication contract
+remain unchanged; Linux and Windows retain their previous writer and parser
+paths.
 
 The hosted viewer reports `dwg-visual-complete/1` after the full first frame,
 root text and raster setup, host font requests, embedded-image decoding, and

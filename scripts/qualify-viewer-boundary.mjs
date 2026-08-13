@@ -236,7 +236,7 @@ async function packageContentSha256(
   return digest.digest("hex");
 }
 
-async function packArtifacts(destination, manifest) {
+async function packArtifacts(destination, artifactManifest) {
   await mkdir(destination, { recursive: true });
   for (const definition of packageDefinitions) {
     run(executable("pnpm"), [
@@ -250,8 +250,7 @@ async function packArtifacts(destination, manifest) {
 
   const artifacts = {};
   for (const definition of packageDefinitions) {
-    const expected =
-      manifest.distribution.artifacts[definition.artifactKey];
+    const expected = artifactManifest[definition.artifactKey];
     const artifactPath = path.join(destination, expected.file);
     await normalizeNpmPackageArchive(artifactPath);
     assert.match(expected.sha256, /^[a-f0-9]{64}$/u);
@@ -302,18 +301,38 @@ async function packArtifacts(destination, manifest) {
   return Object.freeze(artifacts);
 }
 
-async function assertReproducible(first, second, manifest) {
+async function assertReproducible(first, second, artifactManifest) {
   for (const definition of packageDefinitions) {
-    const file =
-      manifest.distribution.artifacts[
-        definition.artifactKey
-      ].file;
+    const file = artifactManifest[definition.artifactKey].file;
     const [left, right] = await Promise.all([
       readFile(path.join(first, file)),
       readFile(path.join(second, file)),
     ]);
     assert.equal(Buffer.compare(left, right), 0);
   }
+}
+
+function reportArtifacts(artifacts, developmentActive) {
+  if (!developmentActive) {
+    return Object.freeze(artifacts);
+  }
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(artifacts).map(([key, artifact]) => [
+        key,
+        Object.freeze({
+          file: artifact.file,
+          sha256: artifact.publishedSha256,
+          bytes: artifact.publishedBytes,
+          contentSha256: artifact.contentSha256,
+          entries: artifact.entries,
+          runnerRepackByteIdentical:
+            artifact.runnerRepackByteIdentical,
+          publishedInDistribution: false,
+        }),
+      ]),
+    ),
+  );
 }
 
 const consumerProbe = String.raw`
@@ -404,7 +423,7 @@ console.log(JSON.stringify({
 async function qualifyArtifactConsumer(
   directory,
   artifactsDirectory,
-  manifest,
+  artifactManifest,
 ) {
   await mkdir(directory, { recursive: true });
   await writeFile(
@@ -419,9 +438,7 @@ async function qualifyArtifactConsumer(
   const artifactPaths = packageDefinitions.map((definition) =>
     path.join(
       artifactsDirectory,
-      manifest.distribution.artifacts[
-        definition.artifactKey
-      ].file,
+      artifactManifest[definition.artifactKey].file,
     ),
   );
   run(
@@ -538,6 +555,31 @@ assert.equal(
   manifest.qualification.externalConsumers,
   "consumer-owned",
 );
+const developmentQualification =
+  manifest.developmentQualification ?? null;
+const developmentActive = developmentQualification !== null;
+if (developmentActive) {
+  assert.equal(developmentQualification.status, "passed");
+  assert.equal(
+    developmentQualification.publishedInDistribution,
+    false,
+  );
+  assert.equal(
+    developmentQualification.sourceVersion,
+    manifest.viewerCore.version,
+  );
+  assert.equal(
+    developmentQualification.command,
+    "pnpm run qualify:viewer-boundary",
+  );
+  assert.match(
+    developmentQualification.feature,
+    /^[a-z0-9][a-z0-9-]+$/u,
+  );
+}
+const artifactManifest = developmentActive
+  ? developmentQualification.artifacts
+  : manifest.distribution.artifacts;
 
 const temporaryRoot = await mkdtemp(
   path.join(tmpdir(), "dwg-viewer-boundary-"),
@@ -555,24 +597,26 @@ try {
   }
   const artifacts = await packArtifacts(
     firstArtifacts,
-    manifest,
+    artifactManifest,
   );
-  await packArtifacts(repeatedArtifacts, manifest);
+  await packArtifacts(repeatedArtifacts, artifactManifest);
   await assertReproducible(
     firstArtifacts,
     repeatedArtifacts,
-    manifest,
+    artifactManifest,
   );
   const artifactOnlyConsumer = await qualifyArtifactConsumer(
     path.join(temporaryRoot, "consumer"),
     firstArtifacts,
-    manifest,
+    artifactManifest,
   );
   const productEntrypoints = await validateProductEntrypoints();
 
   const report = Object.freeze({
     schema: "dwg-viewer-boundary-qualification/1",
-    status: "passed-viewer-owned-boundary",
+    status: developmentActive
+      ? "passed-viewer-owned-development-boundary"
+      : "passed-viewer-owned-boundary",
     asOf: manifest.asOf,
     scope: Object.freeze({
       repository: "menaje/2d-cad-viewer",
@@ -587,13 +631,21 @@ try {
       automaticStablePromotion:
         manifest.distribution.automaticStablePromotion,
     }),
+    developmentQualification: developmentActive
+      ? Object.freeze({
+          status: developmentQualification.status,
+          publishedInDistribution: false,
+          sourceVersion: developmentQualification.sourceVersion,
+          feature: developmentQualification.feature,
+        })
+      : null,
     publicPackages: Object.freeze(publicPackages),
-    artifacts: Object.freeze(artifacts),
+    artifacts: reportArtifacts(artifacts, developmentActive),
     artifactOnlyConsumer: Object.freeze(artifactOnlyConsumer),
     productEntrypoints,
   });
 
-  if (!emitOnly) {
+  if (!emitOnly && !developmentActive) {
     assert.deepEqual(await readJson(evidencePath), report);
   }
   console.log(JSON.stringify(report, null, 2));

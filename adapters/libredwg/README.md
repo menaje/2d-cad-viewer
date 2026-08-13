@@ -211,7 +211,10 @@ The reproducible path downloads checksum-pinned LibreDWG and pkgconf sources,
 applies the repository's reviewed ACDS SAT/SAB, R2007 high-compression and
 seekable-stdin bulk-read patches, builds a stripped adapter with LibreDWG
 linked statically under a new private directory, and writes the adapter to a
-new path. It never installs a system package:
+new path. It never installs a system package. `prepare.sh` is the stable
+dispatcher: shared acquisition, checksum, patch, configure, build, and publish
+logic lives in `scripts/prepare-common.sh`, while Linux, macOS, and Windows
+profiles under `scripts/platform/` own only target validation and flags:
 
 ```bash
 adapters/libredwg/prepare.sh \
@@ -219,10 +222,10 @@ adapters/libredwg/prepare.sh \
   /private/tmp/libredwg-adapter
 ```
 
-On Intel macOS x64, the portable preparation step builds the pinned LibreDWG
-parser with `-O3 -DNDEBUG` unless the caller supplies an explicit `CFLAGS`.
-Other targets retain their existing compiler defaults. The adapter writer
-itself remains `-O3 -DNDEBUG` on every native target.
+On both Intel macOS x64 and Apple Silicon arm64, the macOS profile builds the
+pinned LibreDWG parser with `-O3 -DNDEBUG` unless the caller supplies explicit
+`CFLAGS`. Linux and Windows retain their existing compiler defaults. The
+adapter writer itself remains `-O3 -DNDEBUG` on every native target.
 
 Both paths must not already exist. A C11 compiler, `make`, `strip`, `tar` and
 a SHA-256 utility are required. `curl` is needed only when LibreDWG or a
@@ -362,11 +365,11 @@ deterministically from bounded private files. The GPU section group fuses
 batch-directory and packed-vertex generation into one traversal and buffers
 each batch before writing.
 
-On Intel macOS x64, each section writer also combines packed scalar fields in
-one bounded 64 KiB buffer before calling stdio. Every position check, seek and
-final publication flushes that buffer first. Section workers still own
+On macOS x64 and arm64, each section writer also combines packed scalar fields
+in one bounded 64 KiB buffer before calling stdio. Every position check, seek
+and final publication flushes that buffer first. Section workers still own
 separate files, the direct-output worker still completes before finalization,
-and Windows, Linux and Apple Silicon retain their previous writer path.
+and Windows and Linux retain their previous writer path.
 
 The remaining group staging is intentional. A physical-Windows A/B made the
 118,534,328-byte entity-geometry body write directly to the final cache. It
@@ -382,9 +385,9 @@ sub-stages, each section-group duration, parse-boundary and final current/peak
 working set and private bytes, plus Windows process I/O operations and bytes
 under `performance`.
 
-Use the path-free Intel macOS repeat benchmark with a new work directory and
-report path. Each run starts without a Scene Cache; a warmup controls source
-page-cache state without relabeling it as a cold-disk measurement:
+Use the path-free macOS x64/arm64 repeat benchmark with a new work directory
+and report path. Each run starts without a Scene Cache; a warmup controls
+source page-cache state without relabeling it as a cold-disk measurement:
 
 ```bash
 node scripts/benchmark-macos-native.mjs \
@@ -401,6 +404,40 @@ node scripts/benchmark-macos-native.mjs \
 Use `--mode progressive` to add preview-ready and preview-write timing. Reports
 contain no source path or artifact digest, enforce deterministic full/preview
 outputs internally and refuse to overwrite an existing report.
+
+The macOS and Windows repeat tools share bounded option parsing, output
+capture, deterministic report fingerprints, integer summaries, DWG validation,
+and exclusive report publication from `scripts/native-performance/core.mjs`.
+Their process launchers remain separate: Windows qualifies its inherited native
+file handle and Windows-only memory/I/O counters, while macOS qualifies direct
+file and progressive-preview behavior. Linux continues to use the common
+`dwg-converter benchmark` path because it has no separate input-transport
+contract; its compiler defaults remain isolated in the Linux build profile.
+
+The Linux adapter workflow also creates a genuinely large synthetic R2000 DWG
+from 100,000 generated `LINE` entities. It requires at least 5,000,000 input
+bytes, complete serialization with no deferrals, and two byte-identical Scene
+Caches plus identical normalized reports. The fixture-only write-enabled tool
+is built from the same checksum-pinned LibreDWG 0.14 archive and is never
+shipped. Generator, qualification and macOS allocation-probe commands are in
+[`tests/fixtures/README.md`](../../tests/fixtures/README.md); the current parser
+memory decision is in
+[`docs/libredwg-parser-memory.md`](../../docs/libredwg-parser-memory.md).
+That decision now includes exact object-vector slack and logical allocation
+families, source/decompressed-buffer lifetime, ACIS duplicate-payload
+attribution, two rejected structural prototypes and a deterministic macOS
+ASan/UBSan malformed-input sweep. Neither prototype met the fork-admission
+threshold, so no parser-memory patch is present in the product stack.
+
+On Apple Silicon arm64, a current-source paired comparison covered 159 inputs
+(25,488,871 bytes total, maximum 2,179,277 bytes), with three measured runs per
+input. Enabling both the macOS parser profile and 64 KiB writer buffer changed
+the median per-input wall time by -8.651%, parse time by -9.178%, write time by
+-16.477%, and adapter total time by -14.205%; median peak RSS increased 1.443%.
+All cache outputs were byte-identical across the compared O2/O3 and
+buffer-off/on variants. This is warm-page-cache small/medium-input evidence,
+not a replacement for rerunning the optimization-specific gate on the
+24,680,147-byte reference drawing.
 
 LibreDWG exposes block markers, polyline vertices and attached attributes as
 separate raw entities. The adapter keeps raw counts under `drawing.raw_*` and

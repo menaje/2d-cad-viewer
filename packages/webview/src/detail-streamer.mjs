@@ -268,8 +268,8 @@ export class DetailStreamer extends DetailStreamingController {
             { maximumBytes },
           );
         },
-        loadCandidate(candidate) {
-          return reader.readBatchVertices(candidate.batch);
+        loadCandidate(candidate, { signal } = {}) {
+          return reader.readBatchVertices(candidate.batch, { signal });
         },
         mountCandidate(candidate, vertices) {
           return renderer.addDetailBatch(

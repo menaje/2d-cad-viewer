@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   parseArguments,
   summarizeIntegers,
+  supportsTarget,
 } from "./benchmark-macos-native.mjs";
 
 const required = [
@@ -20,7 +21,7 @@ const required = [
   "mounted-network",
 ];
 
-test("parses bounded Intel macOS performance options", () => {
+test("parses bounded macOS performance options", () => {
   assert.deepEqual(parseArguments(required), {
     adapterPath: "/private/tmp/libredwg-adapter",
     fixturePath: "/Volumes/corpus/fixture.dwg",
@@ -68,6 +69,13 @@ test("parses bounded Intel macOS performance options", () => {
       maxPeakRssBytes: 1300000000,
     },
   );
+});
+
+test("admits both native macOS architectures", () => {
+  assert.equal(supportsTarget("darwin", "x64"), true);
+  assert.equal(supportsTarget("darwin", "arm64"), true);
+  assert.equal(supportsTarget("linux", "arm64"), false);
+  assert.equal(supportsTarget("darwin", "ia32"), false);
 });
 
 test("rejects unbounded or mismatched macOS performance options", () => {

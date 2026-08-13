@@ -2,26 +2,37 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
-  access,
   mkdir,
   open,
   rm,
   rmdir,
   stat,
 } from "node:fs/promises";
-import { createReadStream } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import {
+  absolutePath,
+  ADAPTER_PROTOCOL,
+  appendBounded,
+  boundedInteger,
+  MAX_STDERR_BYTES,
+  MAX_STDOUT_BYTES,
+  mustNotExist,
+  parseFlagPairs,
+  reportFingerprint,
+  sha256File,
+  summarizeIntegers,
+  writeNewJson,
+} from "./native-performance/core.mjs";
+
+export { summarizeIntegers };
 
 const REPORT_SCHEMA = "dwg-windows-native-performance/1";
-const ADAPTER_PROTOCOL = "dwg-engine-adapter/1";
-const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
-const MAX_STDERR_BYTES = 64 * 1024;
 const LOCATION_KINDS = new Set([
   "local-disk",
   "mapped-network-drive",
@@ -29,17 +40,9 @@ const LOCATION_KINDS = new Set([
 ]);
 
 export function parseArguments(values) {
-  if (values.length % 2 !== 0) {
+  const raw = parseFlagPairs(values);
+  if (!raw) {
     return undefined;
-  }
-  const raw = {};
-  for (let index = 0; index < values.length; index += 2) {
-    const flag = values[index];
-    const value = values[index + 1];
-    if (!flag?.startsWith("--") || !value || raw[flag] !== undefined) {
-      return undefined;
-    }
-    raw[flag] = value;
   }
   for (const flag of [
     "--adapter",
@@ -67,35 +70,34 @@ export function parseArguments(values) {
   if (Object.keys(raw).some((flag) => !allowed.has(flag))) {
     return undefined;
   }
-  const runs = Number.parseInt(raw["--runs"] ?? "3", 10);
-  const warmups = Number.parseInt(raw["--warmups"] ?? "1", 10);
+  const runs = boundedInteger(raw["--runs"] ?? "3", 1, 20);
+  const warmups = boundedInteger(raw["--warmups"] ?? "1", 0, 3);
   const workers = raw["--workers"] === undefined
     ? undefined
-    : Number.parseInt(raw["--workers"], 10);
+    : boundedInteger(raw["--workers"], 1, 8);
   const maxMedianWallMs = raw["--max-median-wall-ms"] === undefined
     ? undefined
-    : Number.parseInt(raw["--max-median-wall-ms"], 10);
+    : boundedInteger(
+        raw["--max-median-wall-ms"],
+        1,
+        Number.MAX_SAFE_INTEGER,
+      );
   const maxPeakPrivateBytes =
     raw["--max-peak-private-bytes"] === undefined
       ? undefined
-      : Number.parseInt(raw["--max-peak-private-bytes"], 10);
+      : boundedInteger(
+          raw["--max-peak-private-bytes"],
+          1,
+          Number.MAX_SAFE_INTEGER,
+        );
   if (
-    !Number.isSafeInteger(runs) ||
-    runs < 1 ||
-    runs > 20 ||
-    !Number.isSafeInteger(warmups) ||
-    warmups < 0 ||
-    warmups > 3 ||
-    (workers !== undefined &&
-      (!Number.isSafeInteger(workers) || workers < 1 || workers > 8)) ||
-    (maxMedianWallMs !== undefined &&
-      (!/^\d+$/u.test(raw["--max-median-wall-ms"]) ||
-        !Number.isSafeInteger(maxMedianWallMs) ||
-        maxMedianWallMs < 1)) ||
-    (maxPeakPrivateBytes !== undefined &&
-      (!/^\d+$/u.test(raw["--max-peak-private-bytes"]) ||
-        !Number.isSafeInteger(maxPeakPrivateBytes) ||
-        maxPeakPrivateBytes < 1)) ||
+    runs === undefined ||
+    warmups === undefined ||
+    (raw["--workers"] !== undefined && workers === undefined) ||
+    (raw["--max-median-wall-ms"] !== undefined &&
+      maxMedianWallMs === undefined) ||
+    (raw["--max-peak-private-bytes"] !== undefined &&
+      maxPeakPrivateBytes === undefined) ||
     !LOCATION_KINDS.has(raw["--location-kind"])
   ) {
     return undefined;
@@ -112,34 +114,6 @@ export function parseArguments(values) {
     maxMedianWallMs,
     maxPeakPrivateBytes,
   };
-}
-
-function absolutePath(value, label) {
-  if (!path.isAbsolute(value)) {
-    throw new Error(`${label} must be absolute`);
-  }
-  return path.resolve(value);
-}
-
-async function mustNotExist(filePath, label) {
-  try {
-    await access(filePath);
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      return;
-    }
-    throw error;
-  }
-  throw new Error(`${label} already exists`);
-}
-
-function appendBounded(chunks, value, state, maximum, label) {
-  const bytes = Buffer.from(value);
-  if (state.bytes + bytes.length > maximum) {
-    throw new Error(`${label} exceeded its bounded capture`);
-  }
-  chunks.push(bytes);
-  state.bytes += bytes.length;
 }
 
 async function openInput(inputPath) {
@@ -167,27 +141,6 @@ async function openInput(inputPath) {
     await handle.close().catch(() => undefined);
     throw error;
   }
-}
-
-async function sha256File(filePath) {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk);
-  }
-  return hash.digest("hex");
-}
-
-function reportFingerprint(report) {
-  return createHash("sha256")
-    .update(JSON.stringify({
-      cache: report.cache,
-      coverage: report.coverage,
-      tables: report.tables,
-      gpuLines: report.gpu_lines,
-      hatchFills: report.hatch_fills,
-      diagnostics: report.diagnostics,
-    }))
-    .digest("hex");
 }
 
 async function runAdapter({
@@ -297,30 +250,6 @@ async function runAdapter({
     reportFingerprint: reportFingerprint(report),
     performance: report.performance,
   };
-}
-
-export function summarizeIntegers(values) {
-  if (
-    values.length === 0 ||
-    values.some((value) => !Number.isSafeInteger(value) || value < 0)
-  ) {
-    throw new TypeError("summary values must be non-negative safe integers");
-  }
-  const sorted = [...values].sort((left, right) => left - right);
-  return {
-    minimum: sorted[0],
-    median: sorted[Math.floor(sorted.length / 2)],
-    maximum: sorted.at(-1),
-  };
-}
-
-async function writeNewJson(filePath, value) {
-  const handle = await open(filePath, "wx", 0o600);
-  try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
-  } finally {
-    await handle.close();
-  }
 }
 
 async function main() {

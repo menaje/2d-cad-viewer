@@ -1719,6 +1719,42 @@ test("redraws overview and independently uploaded detail vertex ranges", () => {
   renderer.dispose();
 });
 
+test("plot preview hides no-plot layers without changing screen visibility", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  renderer.setLayers([
+    { color: 0, flags: 1 << 3 },
+    { color: 0, flags: 0 },
+  ]);
+
+  assert.deepEqual(renderer.getLayerVisibility(), [true, true]);
+  assert.deepEqual(renderer.getDisplayLayerVisibility(), [true, true]);
+
+  const lineWeights = new Int16Array(256);
+  lineWeights.fill(-1);
+  renderer.setPlotStyle(renderer.aciPalette, lineWeights);
+
+  assert.deepEqual(renderer.getLayerVisibility(), [true, true]);
+  assert.deepEqual(renderer.getDisplayLayerVisibility(), [true, false]);
+
+  renderer.setLayerVisibility(1, true);
+  assert.deepEqual(renderer.getDisplayLayerVisibility(), [true, false]);
+
+  renderer.clearPlotStyle(renderer.aciPalette);
+  assert.deepEqual(renderer.getLayerVisibility(), [true, true]);
+  assert.deepEqual(renderer.getDisplayLayerVisibility(), [true, true]);
+  renderer.dispose();
+});
+
 test("wide polyline meshes suppress only their matching native centerlines", () => {
   const { gl, calls } = makeFakeGl();
   const canvas = {
@@ -1731,6 +1767,13 @@ test("wide polyline meshes suppress only their matching native centerlines", () 
     },
   };
   const renderer = new WebGlLineRenderer(canvas);
+  assert.ok(
+    calls.shaderSources.some(
+      (source) =>
+        source.includes("widePolylineLinetypeVisible") &&
+        source.includes("uniform usampler2D u_layerLinetypes"),
+    ),
+  );
   const overviewBatch = {
     ...batch({
       id: 0,

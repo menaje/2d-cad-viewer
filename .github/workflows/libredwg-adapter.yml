@@ -15,10 +15,18 @@ on:
       - "apps/vscode-extension/package.json"
       - "packages/webview/**"
       - "scripts/qualify-windows-native.mjs"
+      - "scripts/native-performance/**"
+      - "scripts/benchmark-macos-native.mjs"
+      - "scripts/benchmark-macos-native.test.mjs"
       - "scripts/benchmark-windows-native.mjs"
       - "scripts/benchmark-windows-native.test.mjs"
       - "scripts/qualify-windows-vscode-ui.mjs"
       - "scripts/qualify-windows-vscode-ui.test.mjs"
+      - "scripts/qualify-generated-large-dwg.mjs"
+      - "scripts/qualify-generated-large-dwg.test.mjs"
+      - "tests/fixtures/build-libredwg-dxf2dwg.sh"
+      - "tests/fixtures/generate-large-line-dxf.mjs"
+      - "tests/fixtures/generate-large-line-dxf.test.mjs"
       - ".github/workflows/libredwg-adapter.yml"
       - "LICENSE"
       - "package.json"
@@ -35,10 +43,18 @@ on:
       - "apps/vscode-extension/package.json"
       - "packages/webview/**"
       - "scripts/qualify-windows-native.mjs"
+      - "scripts/native-performance/**"
+      - "scripts/benchmark-macos-native.mjs"
+      - "scripts/benchmark-macos-native.test.mjs"
       - "scripts/benchmark-windows-native.mjs"
       - "scripts/benchmark-windows-native.test.mjs"
       - "scripts/qualify-windows-vscode-ui.mjs"
       - "scripts/qualify-windows-vscode-ui.test.mjs"
+      - "scripts/qualify-generated-large-dwg.mjs"
+      - "scripts/qualify-generated-large-dwg.test.mjs"
+      - "tests/fixtures/build-libredwg-dxf2dwg.sh"
+      - "tests/fixtures/generate-large-line-dxf.mjs"
+      - "tests/fixtures/generate-large-line-dxf.test.mjs"
       - ".github/workflows/libredwg-adapter.yml"
       - "LICENSE"
       - "package.json"
@@ -111,6 +127,22 @@ jobs:
           DWG_VIEWER_ADAPTER_PROTOCOL=dwg-engine-adapter/1 \
           DWG_VIEWER_BENCHMARK_PHASE=doctor \
             "$RUNNER_TEMP/libredwg-adapter" doctor
+
+      - name: Qualify a generated genuinely large DWG
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          tests/fixtures/build-libredwg-dxf2dwg.sh \
+            "$RUNNER_TEMP/dwg-libredwg-build/libredwg-0.14.tar.xz" \
+            "$RUNNER_TEMP/dxf2dwg-build" \
+            "$RUNNER_TEMP/dxf2dwg"
+          node scripts/qualify-generated-large-dwg.mjs \
+            --adapter "$RUNNER_TEMP/libredwg-adapter" \
+            --dxf2dwg "$RUNNER_TEMP/dxf2dwg" \
+            --work-root "$RUNNER_TEMP/generated-large-dwg" \
+            --report "$RUNNER_TEMP/generated-large-dwg.json" \
+            --entities 100000 \
+            --minimum-dwg-bytes 5000000
 
       - name: Create and reproduce GPL source-complete package
         if: runner.os != 'Windows'
@@ -326,6 +358,15 @@ jobs:
           path: ${{ runner.temp }}/windows-native-qualification.json
           archive: false
           if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v7
+        if: always() && matrix.target == 'linux-x64'
+        with:
+          name: dwg-viewer-generated-large-dwg-qualification
+          retention-days: 7
+          path: ${{ runner.temp }}/generated-large-dwg.json
+          archive: false
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v7
         if: always() && runner.os == 'Windows'

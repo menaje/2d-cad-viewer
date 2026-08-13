@@ -304,7 +304,7 @@ test("excludes off and invisible model viewports from an active layout", () => {
     ...layout,
     viewports: [
       layout.viewports[0],
-      { ...viewport, handle: 401n, on: 0 },
+      { ...viewport, handle: 401n, on: 0, status: 0x20000 },
       { ...viewport, handle: 402n, id: 3, on: 1, flags: 1 },
       {
         ...viewport,
@@ -350,7 +350,7 @@ test("orders active model viewports so stacking order one is composed last", () 
   );
 });
 
-test("fails closed when inactive layout viewport status is explicitly off", () => {
+test("renders inactive-layout viewports whose persistent off bit is clear", () => {
   const inactiveLayout = {
     ...layout,
     name: "저장된 비활성 배치",
@@ -380,8 +380,11 @@ test("fails closed when inactive layout viewport status is explicitly off", () =
 
   const plan = buildLayoutRootPlan(blocks, [{}, {}], inactiveLayout);
   assert.equal(plan.paperViewport.handle, 301n);
-  assert.deepEqual(plan.modelViewports, []);
-  assert.equal(plan.rootContexts.length, 1);
+  assert.deepEqual(
+    plan.modelViewports.map(({ handle }) => handle),
+    [302n, 303n],
+  );
+  assert.equal(plan.rootContexts.length, 3);
 });
 
 test("infers an id-zero paper viewport instead of the active model viewport", () => {
@@ -419,8 +422,11 @@ test("infers an id-zero paper viewport instead of the active model viewport", ()
   );
   const plan = buildLayoutRootPlan(blocks, [{}, {}], missingIdsLayout);
   assert.equal(plan.paperViewport.handle, 501n);
-  assert.deepEqual(plan.modelViewports, []);
-  assert.equal(plan.rootContexts.length, 1);
+  assert.deepEqual(
+    plan.modelViewports.map(({ handle }) => handle),
+    [502n],
+  );
+  assert.equal(plan.rootContexts.length, 2);
 });
 
 test("fails closed with explicit diagnostics for unsupported 3D viewport modes", () => {

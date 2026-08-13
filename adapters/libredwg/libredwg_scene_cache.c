@@ -92,8 +92,9 @@ extern void dwg_resolve_objectrefs_silent (Dwg_Data *restrict dwg);
   (MAX_GPU_OVERVIEW_BYTES / (2u * GPU_LINE_VERTEX_RECORD_SIZE))
 #define SPATIAL_SORT_RUN_SEGMENTS 8192u
 #define SPATIAL_MERGE_BUFFER_RECORDS 64u
-#if defined(__APPLE__) && defined(__x86_64__)
-#define DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER 1
+#if defined(__APPLE__) \
+    && (defined(__x86_64__) || defined(__aarch64__) || defined(__arm64__))
+#define DWG_VIEWER_MACOS_BUFFERED_WRITER 1
 #define CACHE_WRITE_BUFFER_BYTES (64u * 1024u)
 #endif
 #define MAX_CONVERSION_WORKERS 8u
@@ -395,7 +396,7 @@ typedef struct
   FILE *file;
   char *error;
   size_t error_size;
-#if defined(DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER)
+#if defined(DWG_VIEWER_MACOS_BUFFERED_WRITER)
   size_t buffered;
   uint8_t buffer[CACHE_WRITE_BUFFER_BYTES];
 #endif
@@ -915,7 +916,7 @@ set_error (CacheWriter *writer, const char *message)
 static int
 flush_writer (CacheWriter *writer)
 {
-#if defined(DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER)
+#if defined(DWG_VIEWER_MACOS_BUFFERED_WRITER)
   if (writer->failed)
     return 0;
   if (writer->buffered
@@ -1011,7 +1012,7 @@ conversion_worker_count (void)
 static int
 write_bytes (CacheWriter *writer, const void *value, size_t size)
 {
-#if defined(DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER)
+#if defined(DWG_VIEWER_MACOS_BUFFERED_WRITER)
   const uint8_t *bytes = (const uint8_t *)value;
   if (writer->failed)
     return 0;
@@ -1908,6 +1909,7 @@ linetype_special_code (const Dwg_Data *dwg, uint64_t handle,
 
 static uint32_t
 equivalent_linetype_code (const CacheTables *tables,
+                          const char *candidate_name,
                           const Dwg_Object_LTYPE *candidate)
 {
   size_t index;
@@ -1916,7 +1918,14 @@ equivalent_linetype_code (const CacheTables *tables,
       const LinetypeEntry *entry = &tables->linetypes[index];
       const Dwg_Object_LTYPE *existing
           = entry->object->tio.object->tio.LTYPE;
-      if (entry->code >= 3u
+      /*
+       * Layer records retain the source linetype name and the Viewer resolves
+       * ByLayer styles through that name. Keep differently named aliases on
+       * distinct codes even when their simple dash patterns are identical;
+       * otherwise the omitted alias silently falls back to Continuous.
+       */
+      if (entry->code >= 3u && entry->name && candidate_name
+          && strcmp (entry->name, candidate_name) == 0
           && simple_linetypes_equal (existing, candidate))
         return entry->code;
     }
@@ -1962,6 +1971,7 @@ register_linetype (const Dwg_Data *dwg, CacheTables *tables,
   uint64_t handle;
   uint32_t code;
   Dwg_Object_LTYPE *linetype;
+  char *name;
   if (object_index == SIZE_MAX || !processed || processed[object_index]
       || object->fixedtype != DWG_TYPE_LTYPE || !object->tio.object
       || !(linetype = object->tio.object->tio.LTYPE))
@@ -1974,7 +1984,12 @@ register_linetype (const Dwg_Data *dwg, CacheTables *tables,
     }
   else
     {
-      code = equivalent_linetype_code (tables, linetype);
+      name = copy_utf8_field (dwg->header.codepage, linetype, "LTYPE",
+                              "name", "Continuous");
+      if (!name)
+        return 0;
+      code = equivalent_linetype_code (tables, name, linetype);
+      free (name);
       if (code == UINT32_MAX)
         {
           if (tables->linetype_count < MAX_LINETYPE_DEFINITIONS
@@ -14650,6 +14665,18 @@ hatch_background_color (const Dwg_Data *dwg, const Dwg_Object *object,
       free (name);
       if (!matches)
         continue;
+      /*
+       * HATCHBACKGROUNDCOLOR stores a packed AcCmEntityColor, not a bare
+       * 0xRRGGBB value. 0xc2 is the concrete direct-RGB method used by the
+       * DWG reader. In particular, 0xc8 means None; masking that method byte
+       * would turn the absence of a background into opaque black.
+       *
+       * Scene Cache HATCH backgrounds intentionally carry concrete
+       * TrueColor only. Other indirect/internal methods fail closed rather
+       * than being rendered as an invented RGB value.
+       */
+      if (((uint32_t)eed->data->u.eed_71.rl >> 24) != 0xc2u)
+        return 0;
       *encoded_color
           = (3u << 30)
             | ((uint32_t)eed->data->u.eed_71.rl & 0x00ffffffu)

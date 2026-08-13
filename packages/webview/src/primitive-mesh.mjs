@@ -25,6 +25,7 @@ export const MAX_PRIMITIVE_GPU_BYTES =
 const MAX_BATCH_VERTICES = 24_576;
 const MAX_POSITION_ERROR = 1e-3;
 const MAX_NATIVE_HAIRLINE_WIDTH = MAX_POSITION_ERROR;
+const GPU_STYLE_WIDE_POLYLINE_FILL = 1 << 4;
 const GPU_STYLE_INVISIBLE = 1 << 16;
 const WIPEOUT_BACKGROUND_COLOR =
   ((3 << 30) | (14 << 16) | (16 << 8) | 19) >>> 0;
@@ -305,7 +306,15 @@ function writePackedPrimitives(
       firstVertex,
       Math.min(firstVertex + maximumChunkVertices, points.length),
     );
-    if (!builder.write(owner, chunk, attributes, handle)) {
+    if (
+      !builder.write(
+        owner,
+        chunk,
+        (view, offset, index) =>
+          attributes(view, offset, firstVertex + index),
+        handle,
+      )
+    ) {
       return false;
     }
   }
@@ -354,6 +363,41 @@ function solidFillAttributes(entity, maskOrder) {
     view.setUint32(offset + 16, entity.color >>> 0, true);
     view.setUint32(offset + 20, entity.color >>> 0, true);
     view.setFloat32(offset + 24, 0, true);
+    view.setUint32(offset + 28, style >>> 0, true);
+  };
+}
+
+function widePolylineFillAttributes(
+  entity,
+  maskOrder,
+  patternDistances,
+  linetypeScale,
+) {
+  const linetypeCode =
+    Number.isInteger(entity.linetypeCode) &&
+    entity.linetypeCode >= 0 &&
+    entity.linetypeCode <= 2047
+      ? entity.linetypeCode
+      : 0;
+  const scale =
+    Number.isFinite(linetypeScale) && linetypeScale > 0
+      ? linetypeScale
+      : 1;
+  const style = encodeMaskBucket(
+    GPU_STYLE_WIDE_POLYLINE_FILL |
+      (linetypeCode << 5) |
+      (entity.commonFlags & 1 ? GPU_STYLE_INVISIBLE : 0),
+    maskBucketFor(maskOrder, entity.ownerHandle, entity.handle),
+  );
+  return (view, offset, index) => {
+    const patternDistance = patternDistances[index] / scale;
+    if (!Number.isFinite(patternDistance) || patternDistance < 0) {
+      throw new RangeError("wide polyline pattern distance is invalid");
+    }
+    view.setUint32(offset + 12, entity.layerIndex, true);
+    view.setUint32(offset + 16, entity.color >>> 0, true);
+    view.setUint32(offset + 20, entity.color >>> 0, true);
+    view.setFloat32(offset + 24, patternDistance, true);
     view.setUint32(offset + 28, style >>> 0, true);
   };
 }
@@ -743,7 +787,12 @@ export function buildPrimitiveMeshes(
     }
     const mesh = fillMode ? solidFillMesh : surfaceOutlineMesh;
     const attributes = fillMode
-      ? solidFillAttributes(polyline, maskOrder)
+      ? widePolylineFillAttributes(
+          polyline,
+          maskOrder,
+          geometry.fillPatternDistances,
+          source.curveLinetypeScales?.get(polyline.handle) ?? 1,
+        )
       : solidOutlineAttributes(polyline, maskOrder);
     if (
       !writePackedPrimitives(

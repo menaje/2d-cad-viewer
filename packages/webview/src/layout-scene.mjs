@@ -352,6 +352,8 @@ export function buildLayoutRootPlan(
       visibilityRow: 0,
     }),
   ];
+  // Group-68 on/order is zero for every viewport in an inactive layout.
+  // The persistent status bit remains authoritative when that layout opens.
   const eligibleModelViewports = layout.viewports
     .filter((viewport) => {
       const on = Number.isInteger(viewport.on) ? viewport.on : 1;
@@ -361,7 +363,7 @@ export function buildLayoutRootPlan(
       return (
         viewport !== paperViewport &&
         (viewport.flags & 1) === 0 &&
-        on > 0 &&
+        on >= 0 &&
         (status & VIEWPORT_OFF) === 0 &&
         viewport.width > 0 &&
         viewport.height > 0 &&

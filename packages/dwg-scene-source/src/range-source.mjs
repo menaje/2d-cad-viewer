@@ -1,6 +1,16 @@
 // Canonical bounded range sources shared by the DWG adapter and Webview.
 const MAX_SAFE_OFFSET = Number.MAX_SAFE_INTEGER;
 
+function throwIfAborted(signal) {
+  signal?.throwIfAborted?.();
+  if (signal?.aborted) {
+    throw (
+      signal.reason ??
+      new DOMException("range read was aborted", "AbortError")
+    );
+  }
+}
+
 function validateRange(offset, length, size) {
   if (!Number.isSafeInteger(offset) || offset < 0) {
     throw new RangeError(`invalid range offset: ${offset}`);
@@ -27,9 +37,12 @@ export class BlobRangeSource {
     this.size = blob.size;
   }
 
-  async read(offset, length) {
+  async read(offset, length, { signal } = {}) {
+    throwIfAborted(signal);
     const end = validateRange(offset, length, this.size);
-    return this.blob.slice(offset, end).arrayBuffer();
+    const buffer = await this.blob.slice(offset, end).arrayBuffer();
+    throwIfAborted(signal);
+    return buffer;
   }
 }
 
@@ -43,7 +56,8 @@ export class HttpRangeSource {
     this.fetchImpl = fetchImpl;
   }
 
-  async read(offset, length) {
+  async read(offset, length, { signal } = {}) {
+    throwIfAborted(signal);
     if (length === 0) {
       validateRange(offset, length, this.size);
       return new ArrayBuffer(0);
@@ -51,6 +65,7 @@ export class HttpRangeSource {
     const end = validateRange(offset, length, this.size);
     const response = await this.fetchImpl(this.url, {
       headers: { Range: `bytes=${offset}-${end - 1}` },
+      signal,
     });
     if (response.status !== 206) {
       throw new Error(
@@ -116,7 +131,8 @@ export class MemoryRangeSource {
     this.size = buffer.byteLength;
   }
 
-  async read(offset, length) {
+  async read(offset, length, { signal } = {}) {
+    throwIfAborted(signal);
     const end = validateRange(offset, length, this.size);
     return this.buffer.slice(offset, end);
   }
