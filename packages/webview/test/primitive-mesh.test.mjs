@@ -174,6 +174,45 @@ test("builds instanced POINT markers and FILLMODE-aware SOLID meshes", async () 
   assert.equal(result.solidOutlines.batches[0].blockIndex, 1);
 });
 
+test("keeps small SOLID fills at large world coordinates", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const origin = [2_000_000, -2_000_000, 0];
+  const translated = {
+    ...source,
+    solids: entityTable([
+      {
+        handle: 0x1234n,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        fillMode: true,
+        corners: [
+          origin,
+          [origin[0] + 1.5, origin[1], 0],
+          [origin[0] + 1.5, origin[1] + 1.5, 0],
+          [origin[0], origin[1] + 1.5, 0],
+        ],
+        normal: [0, 0, 1],
+        thickness: 0,
+      },
+    ]),
+  };
+
+  const result = buildPrimitiveMeshes(
+    translated,
+    metadata.blocks,
+    instanceGraph,
+  );
+
+  assert.equal(result.metrics.sourceSolids, 1);
+  assert.equal(result.metrics.renderedFilledSolids, 1);
+  assert.equal(result.metrics.skippedDegenerateTriangles, 0);
+  assert.equal(result.metrics.solidFillVertices, 6);
+});
+
 test("renders visible 3DFACE edges in the shared surface buffer", async () => {
   const { source, metadata, instanceGraph } = await primitiveFixture();
   const result = buildPrimitiveMeshes(

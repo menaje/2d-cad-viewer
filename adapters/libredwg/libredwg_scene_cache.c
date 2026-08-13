@@ -15242,19 +15242,21 @@ solid_triangle_is_usable (const double first[3], const double second[3],
   double left[3];
   double right[3];
   double cross[3];
-  double scale = 1.0;
+  double left_length;
+  double right_length;
+  double scale;
   size_t axis;
   for (axis = 0; axis < 3; axis++)
     {
       left[axis] = second[axis] - first[axis];
       right[axis] = third[axis] - first[axis];
-      scale = fmax (scale, fabs (first[axis]));
-      scale = fmax (scale, fabs (second[axis]));
-      scale = fmax (scale, fabs (third[axis]));
     }
   cross[0] = left[1] * right[2] - left[2] * right[1];
   cross[1] = left[2] * right[0] - left[0] * right[2];
   cross[2] = left[0] * right[1] - left[1] * right[0];
+  left_length = hypot (hypot (left[0], left[1]), left[2]);
+  right_length = hypot (hypot (right[0], right[1]), right[2]);
+  scale = fmax (1.0, fmax (left_length, right_length));
   return hypot (hypot (cross[0], cross[1]), cross[2])
          > scale * scale * 1.0e-12;
 }

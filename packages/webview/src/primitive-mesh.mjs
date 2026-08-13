@@ -84,12 +84,11 @@ function triangleIsUsable(points) {
   const crossX = firstY * secondZ - firstZ * secondY;
   const crossY = firstZ * secondX - firstX * secondZ;
   const crossZ = firstX * secondY - firstY * secondX;
-  let scale = 1;
-  for (const point of points) {
-    for (const coordinate of point) {
-      scale = Math.max(scale, Math.abs(coordinate));
-    }
-  }
+  const scale = Math.max(
+    1,
+    Math.hypot(firstX, firstY, firstZ),
+    Math.hypot(secondX, secondY, secondZ),
+  );
   return Math.hypot(crossX, crossY, crossZ) > scale * scale * 1e-12;
 }
 
