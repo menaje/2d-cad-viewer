@@ -388,6 +388,49 @@ function sharedBlockInstances(handles = [0x2an, 0x2bn]) {
   });
 }
 
+test("omits block occurrences hidden by an ancestor INSERT", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const instances = Object.freeze({
+    ...sharedBlockInstances(),
+    visibilityNodeIds: new Uint32Array([0, 1]),
+    visibilityValues: new Uint8Array([1, 0]),
+  });
+  const renderer = new WebGlLineRenderer(canvas);
+  const blockBatch = {
+    ...batch({
+      id: 0,
+      kind: GpuLineBatchKind.BlockDefinition,
+      lodLevel: 0,
+      firstVertex: 0,
+    }),
+    blockIndex: 1,
+  };
+
+  renderer.renderOverview({
+    batches: [blockBatch],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: {
+      instancesByBlock: new Map([[1, instances]]),
+      insertsByOwner: new Map(),
+    },
+    vertices: lineVerticesForHandles([0x99n]),
+  });
+
+  assert.deepEqual(calls.drawArraysInstanced, [
+    { mode: gl.LINES, first: 0, count: 2, instances: 1 },
+  ]);
+  renderer.dispose();
+});
+
 test("limits fitted bounds and packs camera-relative INSERT clips", () => {
   const clipNodes = [
     createClipNode(1, 0, [

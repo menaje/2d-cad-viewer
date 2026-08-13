@@ -33,6 +33,7 @@ import {
   viewportLayerColor,
   viewportStyleRow,
 } from "./viewport-layer-state.mjs";
+import { instanceIsVisible } from "./instance-visibility.mjs";
 
 const NO_LAYER = 0xffffffff;
 const BY_LAYER_ENTITY_COLOR = 1 << 24;
@@ -802,6 +803,9 @@ export function calculateRasterImageBounds({
       occurrences < maximumOccurrences;
       instanceIndex += 1
     ) {
+      if (!instanceIsVisible(instances, instanceIndex)) {
+        continue;
+      }
       occurrences += 1;
       const matrixOffset = instanceIndex * 16;
       const matrix =
@@ -1280,6 +1284,9 @@ export class CanvasRasterImageOverlay {
         instanceIndex < endInstanceIndex;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         const style = renderDeltaInstanceStyle(
           this.renderDeltaStyleIndex,
           instances,

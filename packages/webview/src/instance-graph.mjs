@@ -13,6 +13,11 @@ import {
   cadOpacityCode,
   decodeCadOpacity,
 } from "./cad-color.mjs";
+import {
+  initialLayerVisibility,
+  InstanceVisibilityBuilder,
+  refreshInstanceVisibility,
+} from "./instance-visibility.mjs";
 
 const DEFAULT_MAX_DEPTH = 64;
 const DEFAULT_MAX_INSTANCES = 1_000_000;
@@ -20,6 +25,7 @@ const MATRIX_VALUES = 16;
 const MAX_MATRICES_PER_CHUNK = 256;
 const NO_LAYER_OVERRIDE = 0xffffffff;
 const DEFAULT_BYBLOCK_COLOR = (2 << 30) | 7;
+const ROOT_VISIBILITY_VALUES = new Uint8Array([1]);
 export const CoordinateSpaceKind = Object.freeze({
   Paper: 0,
   Model: 1,
@@ -41,6 +47,8 @@ const ROOT_INSTANCES = Object.freeze({
   linetypeCodes: new Uint16Array([2]),
   linetypeInherited: new Uint8Array([1]),
   visibilityRows: new Uint32Array([0]),
+  visibilityNodeIds: new Uint32Array([0]),
+  visibilityValues: ROOT_VISIBILITY_VALUES,
   handles: new BigUint64Array([0n]),
   count: 1,
   length: 1,
@@ -69,6 +77,7 @@ class MatrixCollectionBuilder {
     this.linetypeCodeChunks = [];
     this.linetypeInheritedChunks = [];
     this.visibilityRowChunks = [];
+    this.visibilityNodeIdChunks = [];
     this.handleChunks = [];
     this.chunkCapacities = [];
     this.chunkCounts = [];
@@ -93,6 +102,7 @@ class MatrixCollectionBuilder {
     measurementMatrix = matrix,
     coordinateSpace = CoordinateSpaceKind.Model,
     handle = 0n,
+    visibilityNodeId = 0,
   ) {
     const instanceIndex = this.count;
     let chunkIndex = this.chunks.length - 1;
@@ -164,6 +174,9 @@ class MatrixCollectionBuilder {
       this.visibilityRowChunks[chunkIndex] = new Uint32Array(
         chunkCapacity,
       );
+      this.visibilityNodeIdChunks[chunkIndex] = new Uint32Array(
+        chunkCapacity,
+      );
       this.handleChunks[chunkIndex] = new BigUint64Array(
         chunkCapacity,
       );
@@ -194,6 +207,8 @@ class MatrixCollectionBuilder {
     this.linetypeInheritedChunks[chunkIndex][indexInChunk] =
       linetypeInherited ? 1 : 0;
     this.visibilityRowChunks[chunkIndex][indexInChunk] = visibilityRow;
+    this.visibilityNodeIdChunks[chunkIndex][indexInChunk] =
+      visibilityNodeId;
     this.handleChunks[chunkIndex][indexInChunk] =
       typeof handle === "bigint" && handle >= 0n ? handle : 0n;
     this.chunkCounts[chunkIndex] = indexInChunk + 1;
@@ -201,7 +216,7 @@ class MatrixCollectionBuilder {
     return instanceIndex;
   }
 
-  finish() {
+  finish(visibilityValues = ROOT_VISIBILITY_VALUES) {
     const exactSingleChunk =
       this.chunks.length === 1 &&
       this.count === this.chunkCapacities[0];
@@ -254,6 +269,9 @@ class MatrixCollectionBuilder {
       : new Uint8Array(this.count);
     const visibilityRows = exactSingleChunk
       ? this.visibilityRowChunks[0]
+      : new Uint32Array(this.count);
+    const visibilityNodeIds = exactSingleChunk
+      ? this.visibilityNodeIdChunks[0]
       : new Uint32Array(this.count);
     const handles = exactSingleChunk
       ? this.handleChunks[0]
@@ -332,6 +350,10 @@ class MatrixCollectionBuilder {
         this.visibilityRowChunks[index].subarray(0, instanceLength),
         instanceDestination,
       );
+      visibilityNodeIds.set(
+        this.visibilityNodeIdChunks[index].subarray(0, instanceLength),
+        instanceDestination,
+      );
       handles.set(
         this.handleChunks[index].subarray(0, instanceLength),
         instanceDestination,
@@ -357,6 +379,9 @@ class MatrixCollectionBuilder {
       linetypeCodes,
       linetypeInherited,
       visibilityRows,
+      visibilityNodeIds,
+      visibilityValues,
+      visibilitySelection: { instanceIndices: null },
       handles,
     };
     if (maskBases) {
@@ -388,6 +413,7 @@ export function createClipNode(
     frame = false,
     color = DEFAULT_BYBLOCK_COLOR,
     layerIndex = NO_LAYER_OVERRIDE,
+    visibilityNodeId = 0,
   } = {},
 ) {
   const minimum = [Infinity, Infinity];
@@ -410,6 +436,10 @@ export function createClipNode(
       Number.isInteger(layerIndex) && layerIndex >= 0
         ? layerIndex
         : NO_LAYER_OVERRIDE,
+    visibilityNodeId:
+      Number.isSafeInteger(visibilityNodeId) && visibilityNodeId >= 0
+        ? visibilityNodeId
+        : 0,
     points: Object.freeze(
       points.map((point) => Object.freeze([...point])),
     ),
@@ -786,6 +816,7 @@ export function buildInstanceGraph(
   }
 
   const instanceBuilders = new Map();
+  const visibilityBuilder = new InstanceVisibilityBuilder();
   const traversalRoots = [];
   const localMatrixScratch = [];
   const worldMatrixScratch = [];
@@ -812,6 +843,7 @@ export function buildInstanceGraph(
     measurementMatrix,
     coordinateSpace,
     handle,
+    visibilityNodeId,
   ) => {
     let builder = instanceBuilders.get(blockIndex);
     if (!builder) {
@@ -839,6 +871,7 @@ export function buildInstanceGraph(
       measurementMatrix,
       coordinateSpace,
       handle,
+      visibilityNodeId,
     );
     instanceCount += 1;
     if (instanceCount >= maximumInstances) {
@@ -866,6 +899,7 @@ export function buildInstanceGraph(
     parentLinetypeCode,
     parentLinetypeInherited,
     parentVisibilityRow,
+    parentVisibilityNodeId,
     path,
     depth,
   ) => {
@@ -1009,6 +1043,15 @@ export function buildInstanceGraph(
           stopped = true;
           break;
         }
+        const visibilityNodeId = visibilityBuilder.add(
+          parentVisibilityNodeId,
+          layerIndex,
+          parentVisibilityRow,
+          {
+            inherited: layerInherited,
+            visible: ((insert.flags ?? 0) & 1) === 0,
+          },
+        );
         let clipId = parentClipId;
         const clip = insertClipByHandle.get(insert.handle);
         if (clip) {
@@ -1037,6 +1080,7 @@ export function buildInstanceGraph(
                   frame: true,
                   color,
                   layerIndex,
+                  visibilityNodeId,
                 },
               ),
             );
@@ -1061,6 +1105,7 @@ export function buildInstanceGraph(
           measurement,
           parentCoordinateSpace,
           insert.handle,
+          visibilityNodeId,
         );
 
         const nested = insertsByOwner.get(target.index);
@@ -1087,6 +1132,7 @@ export function buildInstanceGraph(
             linetypeCode,
             linetypeInherited,
             parentVisibilityRow,
+            visibilityNodeId,
             path,
             depth + 1,
           );
@@ -1137,6 +1183,7 @@ export function buildInstanceGraph(
       measurementMatrix,
       coordinateSpace,
       0n,
+      0,
     ];
     const modelInstanceIndex = context.modelSpace
       ? modelInstanceBuilder.add(...rootValues)
@@ -1176,6 +1223,7 @@ export function buildInstanceGraph(
         2,
         true,
         visibilityRow,
+        0,
         rootPath,
         1,
       );
@@ -1188,15 +1236,18 @@ export function buildInstanceGraph(
     }
   }
 
+  const visibilityGraph = visibilityBuilder.finish();
   const instancesByBlock = new Map(
     [...instanceBuilders].map(([blockIndex, builder]) => [
       blockIndex,
-      builder.finish(),
+      builder.finish(visibilityGraph.values),
     ]),
   );
-  const modelInstances = modelInstanceBuilder.finish();
+  const modelInstances = modelInstanceBuilder.finish(
+    visibilityGraph.values,
+  );
 
-  return Object.freeze({
+  const result = Object.freeze({
     instancesByBlock,
     insertsByOwner,
     traversalRoots: Object.freeze(traversalRoots),
@@ -1210,6 +1261,7 @@ export function buildInstanceGraph(
     modelBlockIndices,
     modelInstances,
     rootInstances: modelInstances,
+    visibilityGraph,
     clipNodes: Object.freeze(clipNodes),
     layerVisibilityRows: visibilityRows,
     paperToModelScalesByVisibilityRow: viewportPaperToModelScales,
@@ -1231,6 +1283,8 @@ export function buildInstanceGraph(
       diagnostics.cycles === 0 &&
       diagnostics.depthLimit === 0,
   });
+  refreshInstanceVisibility(result, initialLayerVisibility(layers));
+  return result;
 }
 
 export function applyMaskOrderToInstanceGraph(

@@ -4,6 +4,10 @@ import {
 } from "./math.mjs";
 import { composeExternalInstanceGraph } from "./external-reference.mjs";
 import { HatchFlags, HatchStyle } from "./scene-cache.mjs";
+import {
+  instanceIsVisible,
+  refreshInstanceVisibility,
+} from "./instance-visibility.mjs";
 
 const MATRIX_VALUES = 16;
 const NO_LAYER = 0xffffffff;
@@ -505,6 +509,8 @@ export function buildFilledObjectReviewData(
         commonFlags: entity.commonFlags,
         coordinateSpace:
           instances.coordinateSpaceIds?.[instanceIndex] ?? 1,
+        instances,
+        instanceIndex,
         clipId: instances.clipIds?.[instanceIndex] ?? 0,
         firstRing,
         ringCount: transformed.length,
@@ -672,6 +678,7 @@ export function buildFilledObjectReviewData(
     ringCounts: new Uint32Array(ringCounts),
     ringDepths: new Uint16Array(ringDepths),
     clipNodes: cloneClipNodes(instanceGraph),
+    instanceGraph,
     metrics: Object.freeze(metrics),
     truncated,
   });
@@ -1117,6 +1124,10 @@ export class FilledObjectSelectionIndex {
     const toleranceX = tolerancePixels / pixelsPerWorldX;
     const toleranceY = tolerancePixels / pixelsPerWorldY;
     const layerVisibility = this.getLayerVisibility();
+    refreshInstanceVisibility(
+      this.data.instanceGraph,
+      layerVisibility,
+    );
     let best = null;
     for (const recordIndex of this.grid.query([
       point[0] - toleranceX,
@@ -1126,6 +1137,7 @@ export class FilledObjectSelectionIndex {
     ])) {
       const record = this.records[recordIndex];
       if (
+        !instanceIsVisible(record.instances, record.instanceIndex) ||
         (record.layerIndex < layerVisibility.length &&
           !layerVisibility[record.layerIndex]) ||
         !pointInsideClipChain(

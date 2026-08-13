@@ -30,6 +30,10 @@ import {
   viewportStyleRow,
 } from "./viewport-layer-state.mjs";
 import {
+  instanceIsVisible,
+  visibilityNodeIsVisible,
+} from "./instance-visibility.mjs";
+import {
   cadMTextParagraphStart,
   DEFAULT_MTEXT_PARAGRAPH,
   DEFAULT_MTEXT_FORMAT,
@@ -1690,6 +1694,9 @@ export class CanvasTextOverlay {
         instanceIndex < instances.count;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         if (
           renderDeltaInstanceStyle(
             this.renderDeltaStyleIndex,
@@ -2066,6 +2073,9 @@ export class CanvasTextOverlay {
         instanceIndex < endInstanceIndex;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         const style = renderDeltaInstanceStyle(
           this.renderDeltaStyleIndex,
           instances,
@@ -2479,6 +2489,9 @@ export class CanvasTextOverlay {
         instanceIndex < instances.count;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         const style = renderDeltaInstanceStyle(
           this.renderDeltaStyleIndex,
           instances,
@@ -2622,6 +2635,10 @@ export class CanvasTextOverlay {
       const node = nodes[index];
       if (
         !node?.frame ||
+        !visibilityNodeIsVisible(
+          this.instanceGraph,
+          node.visibilityNodeId,
+        ) ||
         (node.layerIndex !== 0xffffffff &&
           layerVisibility[node.layerIndex] === false)
       ) {

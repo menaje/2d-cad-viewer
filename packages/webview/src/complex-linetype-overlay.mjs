@@ -17,6 +17,7 @@ import {
   viewportLayerLinetype,
   viewportStyleRow,
 } from "./viewport-layer-state.mjs";
+import { instanceIsVisible } from "./instance-visibility.mjs";
 
 const VERTEX_STRIDE = 36;
 const NO_LAYER_OVERRIDE = 0xffffffff;
@@ -599,6 +600,9 @@ export class ComplexLinetypeOverlay {
         instanceIndex < instances.count;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         const matrixOffset = instanceIndex * 16;
         if (
           !instanceIntersectsCamera(

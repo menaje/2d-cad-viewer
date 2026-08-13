@@ -33,6 +33,10 @@ import {
 } from "./mask-order.mjs";
 import { effectiveClipBounds } from "./instance-graph.mjs";
 import {
+  instanceIsVisible,
+  refreshInstanceVisibility,
+} from "./instance-visibility.mjs";
+import {
   RENDER_IDENTITY_RANGE_WORDS,
   validateRenderIdentityRanges,
 } from "./render-identity-ranges.mjs";
@@ -1413,6 +1417,9 @@ function selectInteractiveInstanceIndices(
   const pixelsPerWorldX = camera.width / camera.worldWidth;
   const pixelsPerWorldY = camera.height / camera.worldHeight;
   for (let index = 0; index < instances.count; index += 1) {
+    if (!instanceIsVisible(instances, index)) {
+      continue;
+    }
     if (
       renderDeltaInstanceStyle(styleIndex, instances, index)
         ?.visible === false
@@ -1502,6 +1509,36 @@ function visibleRenderDeltaInstanceIndices(
         instanceIndex,
       )?.visible !== false
     ) {
+      visible.push(instanceIndex);
+    }
+  }
+  if (visible.length === total) {
+    return instanceIndices;
+  }
+  return visible.length > 0
+    ? Uint32Array.from(visible)
+    : EMPTY_INSTANCE_INDICES;
+}
+
+function visibleSourceInstanceIndices(instanceIndices, instances) {
+  if (!(instances?.visibilityNodeIds instanceof Uint32Array)) {
+    return instanceIndices;
+  }
+  const selection = instances.visibilitySelection;
+  if (selection) {
+    const cached = selection.instanceIndices;
+    if (instanceIndices === null || instanceIndices === undefined) {
+      return cached ?? instanceIndices;
+    }
+    if (cached === null) {
+      return instanceIndices;
+    }
+  }
+  const total = instanceIndices?.length ?? instances.count;
+  const visible = [];
+  for (let index = 0; index < total; index += 1) {
+    const instanceIndex = instanceIndices?.[index] ?? index;
+    if (instanceIsVisible(instances, instanceIndex)) {
       visible.push(instanceIndex);
     }
   }
@@ -2229,6 +2266,9 @@ function calculateOverviewBounds(batches, instanceGraph) {
     }
     const instances = instancesForBatch(batch, instanceGraph);
     for (let index = 0; index < instances.count; index += 1) {
+      if (!instanceIsVisible(instances, index)) {
+        continue;
+      }
       includeClippedTransformedBounds(
         bounds,
         batch.bounds,
@@ -2262,6 +2302,9 @@ function calculatePackedSceneBounds(batches, instanceGraph) {
   for (const batch of batches) {
     const instances = instancesForBatch(batch, instanceGraph);
     for (let index = 0; index < instances.count; index += 1) {
+      if (!instanceIsVisible(instances, index)) {
+        continue;
+      }
       includeClippedTransformedBounds(
         bounds,
         batch.bounds,
@@ -3391,9 +3434,28 @@ export class WebGlLineRenderer {
     this.layerVisibility = layers.map((layer, index) =>
       previousVisibility?.[index] ?? (layer.flags & 0b11) === 0,
     );
+    this.refreshInstanceVisibilityState();
     this.uploadLayerTexture();
     this.uploadLineWeightTexture();
     this.uploadLayerPlotStyleIndexTexture();
+  }
+
+  refreshInstanceVisibilityState() {
+    const graphs = new Set();
+    if (this.viewportInstanceGraph) {
+      graphs.add(this.viewportInstanceGraph);
+    }
+    if (this.overviewScene?.instanceGraph) {
+      graphs.add(this.overviewScene.instanceGraph);
+    }
+    for (const scene of this.externalScenes?.values?.() ?? []) {
+      if (scene.instanceGraph) {
+        graphs.add(scene.instanceGraph);
+      }
+    }
+    for (const graph of graphs) {
+      refreshInstanceVisibility(graph, this.layerVisibility);
+    }
   }
 
   setDisplayLayerPresentation(
@@ -3470,6 +3532,10 @@ export class WebGlLineRenderer {
 
   setViewportLayerVisibility(instanceGraph) {
     this.viewportInstanceGraph = instanceGraph ?? null;
+    refreshInstanceVisibility(
+      this.viewportInstanceGraph,
+      this.layerVisibility,
+    );
     const sourceRows = instanceGraph?.layerVisibilityRows;
     const rows =
       Array.isArray(sourceRows) && sourceRows.length > 0
@@ -4020,11 +4086,13 @@ export class WebGlLineRenderer {
       throw new RangeError(`invalid layer index ${layerIndex}`);
     }
     this.layerVisibility[layerIndex] = Boolean(visible);
+    this.refreshInstanceVisibilityState();
     this.uploadLayerTexture();
   }
 
   setAllLayersVisible(visible) {
     this.layerVisibility.fill(Boolean(visible));
+    this.refreshInstanceVisibilityState();
     this.uploadLayerTexture();
   }
 
@@ -4038,6 +4106,7 @@ export class WebGlLineRenderer {
     for (let index = 0; index < visibility.length; index += 1) {
       this.layerVisibility[index] = Boolean(visibility[index]);
     }
+    this.refreshInstanceVisibilityState();
     this.uploadLayerTexture();
   }
 
@@ -6374,6 +6443,7 @@ export class WebGlLineRenderer {
       throw new Error("cannot switch a view before rendering an overview");
     }
     this.clearCurveRefinement();
+    refreshInstanceVisibility(instanceGraph, this.layerVisibility);
     const drawableBounds = calculateOverviewBounds(
       this.overviewScene.batches,
       instanceGraph,
@@ -6559,6 +6629,7 @@ export class WebGlLineRenderer {
         clearLineMaskBuckets(vertices.buffer);
       }
     }
+    refreshInstanceVisibility(instanceGraph, this.layerVisibility);
     const bounds = calculateOverviewBounds(batches, instanceGraph);
     const hasOverview = vertices.byteLength > 0;
     if (hasOverview && !boundsAreFinite(bounds)) {
@@ -7560,9 +7631,11 @@ export class WebGlLineRenderer {
     const instances = instancesForBatch(batch, instanceGraph);
     const styleIndex =
       this.renderDeltaStyleIndexesByGraph.get(instanceGraph);
+    const sourceVisibleInstanceIndices =
+      visibleSourceInstanceIndices(instanceIndices, instances);
     const visibleInstanceIndices =
       visibleRenderDeltaInstanceIndices(
-        instanceIndices,
+        sourceVisibleInstanceIndices,
         instances,
         styleIndex,
       );

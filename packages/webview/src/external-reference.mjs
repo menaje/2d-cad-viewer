@@ -4,6 +4,11 @@ import {
   transformPoint,
 } from "./math.mjs";
 import { createClipNode } from "./instance-graph.mjs?v=1.26.0";
+import {
+  initialLayerVisibility,
+  InstanceVisibilityBuilder,
+  refreshInstanceVisibility,
+} from "./instance-visibility.mjs";
 
 const MATRIX_VALUES = 16;
 const MODEL_BLOCK_INDEX = -1;
@@ -14,6 +19,127 @@ const LINETYPE_MASK = 0x7ff << 5;
 const BY_LAYER_LINE_WEIGHT_CODE = 2;
 const EXTERNAL_DEPENDENT_LAYER_FLAG = 1 << 4;
 const RELOADABLE_LAYER_FLAGS = 0x0f;
+
+function visibilityGraphIsValid(graph) {
+  return (
+    graph?.parentIds instanceof Uint32Array &&
+    graph.layerIndices instanceof Uint32Array &&
+    graph.layerInherited instanceof Uint8Array &&
+    graph.visibilityRows instanceof Uint32Array &&
+    graph.sourceVisible instanceof Uint8Array
+  );
+}
+
+function mappedLayerIndex(layerIndex, layerMap) {
+  if (
+    layerIndex === NO_LAYER_OVERRIDE ||
+    !(layerMap instanceof Uint32Array) ||
+    layerMap.length === 0
+  ) {
+    return layerIndex;
+  }
+  return layerIndex < layerMap.length ? layerMap[layerIndex] : layerMap[0];
+}
+
+function externalVisibilityComposer(
+  parentInstanceGraph,
+  childInstanceGraph,
+  outer,
+  layerMap,
+) {
+  const builder = new InstanceVisibilityBuilder();
+  const parentGraph = parentInstanceGraph.visibilityGraph;
+  const childGraph = childInstanceGraph.visibilityGraph;
+  const parentNodesValid = visibilityGraphIsValid(parentGraph);
+  const childNodesValid = visibilityGraphIsValid(childGraph);
+  const importedParentNodes = new Map([[0, 0]]);
+  const composedChildNodes = new Array(outer.count);
+
+  const parentNode = (sourceNodeId) => {
+    if (
+      !parentNodesValid ||
+      !Number.isInteger(sourceNodeId) ||
+      sourceNodeId <= 0
+    ) {
+      return 0;
+    }
+    const cached = importedParentNodes.get(sourceNodeId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (sourceNodeId >= parentGraph.parentIds.length) {
+      return 0;
+    }
+    const parentId = parentNode(parentGraph.parentIds[sourceNodeId]);
+    const nodeId = builder.add(
+      parentId,
+      parentGraph.layerIndices[sourceNodeId],
+      parentGraph.visibilityRows[sourceNodeId],
+      {
+        inherited: parentGraph.layerInherited[sourceNodeId] !== 0,
+        visible: parentGraph.sourceVisible[sourceNodeId] !== 0,
+      },
+    );
+    importedParentNodes.set(sourceNodeId, nodeId);
+    return nodeId;
+  };
+
+  const outerNode = (outerIndex) =>
+    parentNode(outer.visibilityNodeIds?.[outerIndex] ?? 0);
+
+  const nodeFor = (outerIndex, childNodeId) => {
+    const outerRootNode = outerNode(outerIndex);
+    if (
+      !childNodesValid ||
+      !Number.isInteger(childNodeId) ||
+      childNodeId <= 0
+    ) {
+      return outerRootNode;
+    }
+    const nodesForOuter =
+      composedChildNodes[outerIndex] ??=
+        new Map();
+    const cached = nodesForOuter.get(childNodeId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (childNodeId >= childGraph.parentIds.length) {
+      return outerRootNode;
+    }
+    const childParentId = childGraph.parentIds[childNodeId];
+    const parentId =
+      childParentId === 0
+        ? outerRootNode
+        : nodeFor(outerIndex, childParentId);
+    const inheritsLayer = childGraph.layerInherited[childNodeId] !== 0;
+    const outerLayer =
+      outer.layerIndices?.[outerIndex] ?? NO_LAYER_OVERRIDE;
+    const childLayer = childGraph.layerIndices[childNodeId];
+    const layerIndex =
+      inheritsLayer && outerLayer !== NO_LAYER_OVERRIDE
+        ? outerLayer
+        : mappedLayerIndex(childLayer, layerMap);
+    const nodeId = builder.add(
+      parentId,
+      layerIndex,
+      outer.visibilityRows?.[outerIndex] ?? 0,
+      {
+        inherited:
+          inheritsLayer &&
+          outer.layerInherited?.[outerIndex] === 1,
+        visible: childGraph.sourceVisible[childNodeId] !== 0,
+      },
+    );
+    nodesForOuter.set(childNodeId, nodeId);
+    return nodeId;
+  };
+
+  return Object.freeze({
+    parentNode,
+    nodeFor,
+    finish: () => builder.finish(),
+  });
+}
 
 export function blockExternalReferenceIsDisplayable(block) {
   return Boolean(
@@ -91,6 +217,7 @@ function composeCollections(
   linetypeMap,
   maskBucketScale,
   externalReferenceOverrides,
+  visibilityNodeFor,
 ) {
   const count = outer.count * inner.count;
   const data = new Float64Array(count * MATRIX_VALUES);
@@ -109,6 +236,7 @@ function composeCollections(
   const linetypeCodes = new Uint16Array(count);
   const linetypeInherited = new Uint8Array(count);
   const visibilityRows = new Uint32Array(count);
+  const visibilityNodeIds = new Uint32Array(count);
   const handles = new BigUint64Array(count);
   const clipCache = new Map();
   let cursor = 0;
@@ -173,6 +301,10 @@ function composeCollections(
                     node.layerIndex < layerMap.length
                       ? layerMap[node.layerIndex]
                       : node.layerIndex,
+                  visibilityNodeId: visibilityNodeFor(
+                    outerIndex,
+                    node.visibilityNodeId ?? 0,
+                  ),
                 },
               ),
             );
@@ -248,6 +380,10 @@ function composeCollections(
           : 0;
       visibilityRows[cursor] =
         outer.visibilityRows?.[outerIndex] ?? 0;
+      visibilityNodeIds[cursor] = visibilityNodeFor(
+        outerIndex,
+        inner.visibilityNodeIds?.[innerIndex] ?? 0,
+      );
       handles[cursor] =
         inner.handles?.[innerIndex] ??
         outer.handles?.[outerIndex] ??
@@ -255,7 +391,7 @@ function composeCollections(
       cursor += 1;
     }
   }
-  return Object.freeze({
+  return {
     data,
     measurementData,
     coordinateSpaceIds,
@@ -272,10 +408,11 @@ function composeCollections(
     linetypeCodes,
     linetypeInherited,
     visibilityRows,
+    visibilityNodeIds,
     handles,
     count,
     length: count,
-  });
+  };
 }
 
 export function composeExternalInstanceGraph(
@@ -352,10 +489,23 @@ export function composeExternalInstanceGraph(
       }),
     });
   }
+  const visibilityComposer = externalVisibilityComposer(
+    parentInstanceGraph,
+    childInstanceGraph,
+    outer,
+    layerMap,
+  );
   const instancesByBlock = new Map();
-  const clipNodes = [...(parentInstanceGraph.clipNodes ?? [])];
+  const clipNodes = (parentInstanceGraph.clipNodes ?? []).map((node) =>
+    Object.freeze({
+      ...node,
+      visibilityNodeId: visibilityComposer.parentNode(
+        node.visibilityNodeId ?? 0,
+      ),
+    }),
+  );
   const localClipNodeStartIndex = clipNodes.length;
-  const modelInstances = Object.freeze({
+  let modelInstances = {
     data: outer.data,
     measurementData: outer.measurementData ?? outer.data,
     coordinateSpaceIds:
@@ -386,11 +536,15 @@ export function composeExternalInstanceGraph(
       outer.linetypeInherited ?? new Uint8Array(outer.count),
     visibilityRows:
       outer.visibilityRows ?? new Uint32Array(outer.count),
+    visibilityNodeIds: Uint32Array.from(
+      { length: outer.count },
+      (_, outerIndex) => visibilityComposer.nodeFor(outerIndex, 0),
+    ),
     handles:
       outer.handles ?? new BigUint64Array(outer.count),
     count: outer.count,
     length: outer.count,
-  });
+  };
   instancesByBlock.set(
     MODEL_BLOCK_INDEX,
     modelInstances,
@@ -409,10 +563,26 @@ export function composeExternalInstanceGraph(
       linetypeMap,
       maskBucketScale,
       externalReferenceOverrides,
+      visibilityComposer.nodeFor,
     );
     instancesByBlock.set(blockIndex, composed);
     instanceCount += composed.count;
   }
+  const visibilityGraph = visibilityComposer.finish();
+  const finalizedCollections = new Map();
+  for (const [blockIndex, instances] of instancesByBlock) {
+    let finalized = finalizedCollections.get(instances);
+    if (!finalized) {
+      finalized = Object.freeze({
+        ...instances,
+        visibilityValues: visibilityGraph.values,
+        visibilitySelection: { instanceIndices: null },
+      });
+      finalizedCollections.set(instances, finalized);
+    }
+    instancesByBlock.set(blockIndex, finalized);
+  }
+  modelInstances = instancesByBlock.get(MODEL_BLOCK_INDEX);
   const traversalRoots = [];
   for (let outerIndex = 0; outerIndex < outer.count; outerIndex += 1) {
     for (const root of childInstanceGraph.traversalRoots ?? []) {
@@ -461,7 +631,7 @@ export function composeExternalInstanceGraph(
       (batch) =>
         (instancesByBlock.get(batch.blockIndex)?.count ?? 0) > 0,
     );
-  return Object.freeze({
+  const result = Object.freeze({
     batches: Object.freeze(batches),
     instanceGraph: Object.freeze({
       instancesByBlock,
@@ -487,6 +657,7 @@ export function composeExternalInstanceGraph(
         childInstanceGraph.modelBlockIndices ?? [],
       ),
       rootInstances: modelInstances,
+      visibilityGraph,
       clipNodes: Object.freeze(clipNodes),
       localClipNodeStartIndex,
       layerVisibilityRows:
@@ -517,6 +688,11 @@ export function composeExternalInstanceGraph(
         parentInstanceGraph.layerZeroIndex ?? NO_LAYER_OVERRIDE,
     }),
   });
+  refreshInstanceVisibility(
+    result.instanceGraph,
+    initialLayerVisibility(parentInstanceGraph.layers),
+  );
+  return result;
 }
 
 export function buildExternalLayerMap(

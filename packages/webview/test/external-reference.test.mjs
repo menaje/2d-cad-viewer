@@ -15,7 +15,14 @@ import {
 } from "../src/external-reference.mjs";
 
 import { GpuLineBatchKind } from "../src/scene-cache.mjs";
-import { createClipNode } from "../src/instance-graph.mjs";
+import {
+  buildInstanceGraph,
+  createClipNode,
+} from "../src/instance-graph.mjs";
+import {
+  instanceIsVisible,
+  refreshInstanceVisibility,
+} from "../src/instance-visibility.mjs";
 import {
   identityMat4,
   translationMat4,
@@ -159,6 +166,81 @@ test("resolves child root ByBlock and Layer 0 inheritance through an XREF", () =
   assert.equal(nested.colors[0], ((2 << 30) | 6) >>> 0);
   assert.equal(nested.layerIndices[0], 4);
   assert.ok(Math.abs(nested.opacities[0] - 0.4) < 1e-6);
+});
+
+test("preserves parent and nested INSERT visibility through an XREF", () => {
+  const insert = ({ handle, ownerHandle, blockIndex, layerIndex }) => ({
+    handle,
+    ownerHandle,
+    blockIndex,
+    layerIndex,
+    flags: 0,
+    color: 0,
+    lineWeight: -1,
+    linetypeCode: 0,
+    columnCount: 1,
+    rowCount: 1,
+    insertPoint: [0, 0, 0],
+    scale: [1, 1, 1],
+    rotation: 0,
+    normal: [0, 0, 1],
+    columnSpacing: 0,
+    rowSpacing: 0,
+  });
+  const parentLayers = [
+    { name: "0", color: (2 << 30) | 7, flags: 0 },
+    { name: "HIDDEN-XREF", color: (2 << 30) | 1, flags: 1 },
+    { name: "XREF|VISIBLE-CHILD", color: (2 << 30) | 2, flags: 0 },
+  ];
+  const parent = buildInstanceGraph(
+    [
+      { index: 0, handle: 100n, name: "*Model_Space", basePoint: [0, 0, 0] },
+      { index: 1, handle: 101n, name: "XREF", basePoint: [0, 0, 0] },
+    ],
+    [
+      insert({
+        handle: 201n,
+        ownerHandle: 100n,
+        blockIndex: 1,
+        layerIndex: 1,
+      }),
+    ],
+    { layers: parentLayers },
+  );
+  const child = buildInstanceGraph(
+    [
+      { index: 0, handle: 300n, name: "*Model_Space", basePoint: [0, 0, 0] },
+      { index: 1, handle: 301n, name: "CHILD", basePoint: [0, 0, 0] },
+    ],
+    [
+      insert({
+        handle: 401n,
+        ownerHandle: 300n,
+        blockIndex: 1,
+        layerIndex: 1,
+      }),
+    ],
+    {
+      layers: [
+        { name: "0", color: (2 << 30) | 7, flags: 0 },
+        { name: "VISIBLE-CHILD", color: (2 << 30) | 2, flags: 0 },
+      ],
+    },
+  );
+  const composed = composeExternalInstanceGraph(
+    parent,
+    1,
+    child,
+    [],
+    new Uint32Array([0, 2]),
+  );
+  const childInstances = composed.instanceGraph.instancesByBlock.get(1);
+
+  assert.equal(instanceIsVisible(childInstances, 0), false);
+  refreshInstanceVisibility(composed.instanceGraph, [true, true, true]);
+  assert.equal(instanceIsVisible(childInstances, 0), true);
+  refreshInstanceVisibility(composed.instanceGraph, [true, true, false]);
+  assert.equal(instanceIsVisible(childInstances, 0), false);
 });
 
 test("ignores nested XREF instance opacity when XREFOVERRIDE is enabled", () => {

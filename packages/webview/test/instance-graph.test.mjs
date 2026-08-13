@@ -3,6 +3,10 @@ import test from "node:test";
 
 import { buildInstanceGraph } from "../src/instance-graph.mjs";
 import {
+  instanceIsVisible,
+  refreshInstanceVisibility,
+} from "../src/instance-visibility.mjs";
+import {
   batchRelativeInstanceMatrix,
   packedBoundsIntersect2D,
   rotationZMat4,
@@ -155,6 +159,85 @@ test("inherits ByBlock color and Layer 0 from the containing INSERT", () => {
   assert.equal(nested.linetypeCodes[0], 3);
   assert.equal(nested.linetypeInherited[0], 0);
   assert.equal(graph.layerZeroIndex, 0);
+});
+
+test("intersects nested INSERT layer and entity visibility", () => {
+  const blocks = [
+    { index: 0, handle: 100n, name: "*Model_Space", basePoint: [0, 0, 0] },
+    { index: 1, handle: 101n, name: "OUTER", basePoint: [0, 0, 0] },
+    { index: 2, handle: 102n, name: "CHILD", basePoint: [0, 0, 0] },
+    { index: 3, handle: 103n, name: "SIBLING", basePoint: [0, 0, 0] },
+  ];
+  const layers = [
+    { name: "0", color: (2 << 30) | 7, flags: 0 },
+    { name: "HIDDEN-PARENT", color: (2 << 30) | 1, flags: 1 },
+    { name: "VISIBLE-CHILD", color: (2 << 30) | 2, flags: 0 },
+  ];
+  const insert = ({
+    handle,
+    ownerHandle,
+    blockIndex,
+    layerIndex,
+    flags = 0,
+  }) => ({
+    handle,
+    ownerHandle,
+    blockIndex,
+    layerIndex,
+    flags,
+    color: 0,
+    lineWeight: -1,
+    linetypeCode: 0,
+    columnCount: 1,
+    rowCount: 1,
+    insertPoint: [0, 0, 0],
+    scale: [1, 1, 1],
+    rotation: 0,
+    normal: [0, 0, 1],
+    columnSpacing: 0,
+    rowSpacing: 0,
+  });
+  const graph = buildInstanceGraph(
+    blocks,
+    [
+      insert({
+        handle: 201n,
+        ownerHandle: 100n,
+        blockIndex: 1,
+        layerIndex: 1,
+      }),
+      insert({
+        handle: 202n,
+        ownerHandle: 101n,
+        blockIndex: 2,
+        layerIndex: 2,
+      }),
+      insert({
+        handle: 203n,
+        ownerHandle: 100n,
+        blockIndex: 3,
+        layerIndex: 2,
+        flags: 1,
+      }),
+    ],
+    { layers },
+  );
+  const outer = graph.instancesByBlock.get(1);
+  const child = graph.instancesByBlock.get(2);
+  const sibling = graph.instancesByBlock.get(3);
+
+  assert.equal(instanceIsVisible(outer, 0), false);
+  assert.equal(instanceIsVisible(child, 0), false);
+  assert.equal(instanceIsVisible(sibling, 0), false);
+
+  refreshInstanceVisibility(graph, [true, true, true]);
+  assert.equal(instanceIsVisible(outer, 0), true);
+  assert.equal(instanceIsVisible(child, 0), true);
+  assert.equal(instanceIsVisible(sibling, 0), false);
+
+  refreshInstanceVisibility(graph, [true, true, false]);
+  assert.equal(instanceIsVisible(outer, 0), true);
+  assert.equal(instanceIsVisible(child, 0), false);
 });
 
 test("dimension picture references inherit their owner's world transform", () => {
