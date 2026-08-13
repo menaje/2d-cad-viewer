@@ -120,7 +120,7 @@ libredwg_source="$build_root/libredwg-$LIBREDWG_VERSION"
   < "$script_dir/libredwg-seekable-stdin.patch"
 (
   cd "$libredwg_source"
-  PKG_CONFIG="$pkg_config" ./configure \
+  set -- ./configure \
     --prefix="$install_prefix" \
     --disable-shared \
     --enable-static \
@@ -129,6 +129,14 @@ libredwg_source="$build_root/libredwg-$LIBREDWG_VERSION"
     --disable-dxf \
     --disable-python \
     --disable-write
+  case "$(uname -s)-$(uname -m)" in
+    Darwin-x86_64)
+      CFLAGS=${CFLAGS:--O3 -DNDEBUG} PKG_CONFIG="$pkg_config" "$@"
+      ;;
+    *)
+      PKG_CONFIG="$pkg_config" "$@"
+      ;;
+  esac
   make -j"$jobs" -C src libredwg.la
   make -C src install
   make install-includeHEADERS install-pcdataDATA

@@ -92,6 +92,10 @@ extern void dwg_resolve_objectrefs_silent (Dwg_Data *restrict dwg);
   (MAX_GPU_OVERVIEW_BYTES / (2u * GPU_LINE_VERTEX_RECORD_SIZE))
 #define SPATIAL_SORT_RUN_SEGMENTS 8192u
 #define SPATIAL_MERGE_BUFFER_RECORDS 64u
+#if defined(__APPLE__) && defined(__x86_64__)
+#define DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER 1
+#define CACHE_WRITE_BUFFER_BYTES (64u * 1024u)
+#endif
 #define MAX_CONVERSION_WORKERS 8u
 _Static_assert (
     GPU_BATCH_SEGMENTS * 2u * GPU_LINE_VERTEX_RECORD_SIZE
@@ -391,6 +395,10 @@ typedef struct
   FILE *file;
   char *error;
   size_t error_size;
+#if defined(DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER)
+  size_t buffered;
+  uint8_t buffer[CACHE_WRITE_BUFFER_BYTES];
+#endif
   int failed;
 } CacheWriter;
 
@@ -904,6 +912,28 @@ set_error (CacheWriter *writer, const char *message)
     }
 }
 
+static int
+flush_writer (CacheWriter *writer)
+{
+#if defined(DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER)
+  if (writer->failed)
+    return 0;
+  if (writer->buffered
+      && fwrite (
+             writer->buffer, 1, writer->buffered,
+             writer->file)
+             != writer->buffered)
+    {
+      set_error (writer, "cannot write scene cache");
+      return 0;
+    }
+  writer->buffered = 0;
+  return 1;
+#else
+  return !writer->failed;
+#endif
+}
+
 static uint64_t
 monotonic_nanoseconds (void)
 {
@@ -981,6 +1011,33 @@ conversion_worker_count (void)
 static int
 write_bytes (CacheWriter *writer, const void *value, size_t size)
 {
+#if defined(DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER)
+  const uint8_t *bytes = (const uint8_t *)value;
+  if (writer->failed)
+    return 0;
+  if (!writer->buffered && size >= sizeof (writer->buffer))
+    {
+      if (fwrite (value, 1, size, writer->file) != size)
+        {
+          set_error (writer, "cannot write scene cache");
+          return 0;
+        }
+      return 1;
+    }
+  while (size)
+    {
+      size_t available = sizeof (writer->buffer) - writer->buffered;
+      size_t copied = size < available ? size : available;
+      memcpy (writer->buffer + writer->buffered, bytes, copied);
+      writer->buffered += copied;
+      bytes += copied;
+      size -= copied;
+      if (writer->buffered == sizeof (writer->buffer)
+          && !flush_writer (writer))
+        return 0;
+    }
+  return 1;
+#else
   if (writer->failed)
     return 0;
   if (size && fwrite (value, 1, size, writer->file) != size)
@@ -989,6 +1046,7 @@ write_bytes (CacheWriter *writer, const void *value, size_t size)
       return 0;
     }
   return 1;
+#endif
 }
 
 static int
@@ -1088,7 +1146,7 @@ static int
 position (CacheWriter *writer, uint64_t *value)
 {
   DwgViewerFileOffset result;
-  if (writer->failed)
+  if (!flush_writer (writer))
     return 0;
   result = ftello (writer->file);
   if (result < 0)
@@ -1103,7 +1161,7 @@ position (CacheWriter *writer, uint64_t *value)
 static int
 seek_to (CacheWriter *writer, uint64_t value)
 {
-  if (writer->failed)
+  if (!flush_writer (writer))
     return 0;
   if (value > (uint64_t)INT64_MAX
       || fseeko (
@@ -18441,7 +18499,8 @@ write_scene_preview (
           &writer, file_size, source_size, source_version,
           (uint32_t)LIBREDWG_MAINTENANCE_VERSION (dwg),
           CACHE_HEADER_FLAG_PREVIEW)
-      || !write_directory (&writer, sections) || fflush (file) != 0)
+      || !write_directory (&writer, sections)
+      || !flush_writer (&writer) || fflush (file) != 0)
     goto done;
   if (fclose (file) != 0)
     {
@@ -18668,6 +18727,7 @@ libredwg_write_scene_cache (
           &writer, file_size, source_size, source_version,
           (uint32_t)LIBREDWG_MAINTENANCE_VERSION (dwg), 0)
       || !write_directory (&writer, sections)
+      || !flush_writer (&writer)
       || fflush (file) != 0)
     {
       if (!writer.failed)

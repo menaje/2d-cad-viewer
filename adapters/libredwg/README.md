@@ -219,6 +219,11 @@ adapters/libredwg/prepare.sh \
   /private/tmp/libredwg-adapter
 ```
 
+On Intel macOS x64, the portable preparation step builds the pinned LibreDWG
+parser with `-O3 -DNDEBUG` unless the caller supplies an explicit `CFLAGS`.
+Other targets retain their existing compiler defaults. The adapter writer
+itself remains `-O3 -DNDEBUG` on every native target.
+
 Both paths must not already exist. A C11 compiler, `make`, `strip`, `tar` and
 a SHA-256 utility are required. `curl` is needed only when LibreDWG or a
 fallback pkgconf must be downloaded. An already downloaded source archive can
@@ -357,6 +362,12 @@ deterministically from bounded private files. The GPU section group fuses
 batch-directory and packed-vertex generation into one traversal and buffers
 each batch before writing.
 
+On Intel macOS x64, each section writer also combines packed scalar fields in
+one bounded 64 KiB buffer before calling stdio. Every position check, seek and
+final publication flushes that buffer first. Section workers still own
+separate files, the direct-output worker still completes before finalization,
+and Windows, Linux and Apple Silicon retain their previous writer path.
+
 The remaining group staging is intentional. A physical-Windows A/B made the
 118,534,328-byte entity-geometry body write directly to the final cache. It
 removed 118,993,776 process-read bytes and 118,534,328 process-write bytes, but
@@ -370,6 +381,26 @@ worker count, actual sort and section concurrency, coarse stages, spatial-sort
 sub-stages, each section-group duration, parse-boundary and final current/peak
 working set and private bytes, plus Windows process I/O operations and bytes
 under `performance`.
+
+Use the path-free Intel macOS repeat benchmark with a new work directory and
+report path. Each run starts without a Scene Cache; a warmup controls source
+page-cache state without relabeling it as a cold-disk measurement:
+
+```bash
+node scripts/benchmark-macos-native.mjs \
+  --adapter /absolute/path/to/libredwg-adapter \
+  --fixture /absolute/path/to/fixture.dwg \
+  --work-root /new/private/benchmark-directory \
+  --report /new/private/benchmark-directory/report.json \
+  --source-location local-disk \
+  --mode full \
+  --warmups 1 \
+  --runs 3
+```
+
+Use `--mode progressive` to add preview-ready and preview-write timing. Reports
+contain no source path or artifact digest, enforce deterministic full/preview
+outputs internally and refuse to overwrite an existing report.
 
 LibreDWG exposes block markers, polyline vertices and attached attributes as
 separate raw entities. The adapter keeps raw counts under `drawing.raw_*` and

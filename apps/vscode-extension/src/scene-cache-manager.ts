@@ -1,8 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmod,
+  link,
   mkdir,
   open,
+  realpath,
   rename,
   rm,
   stat,
@@ -58,11 +60,22 @@ function hashFields(fields: readonly string[]): string {
   return hash.digest("hex");
 }
 
-export function computeCacheId(identity: CacheIdentity): string {
+export function canonicalCacheSourcePath(
+  sourcePath: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const resolved = path.resolve(sourcePath);
+  return platform === "darwin" ? resolved.normalize("NFC") : resolved;
+}
+
+function computeCacheIdForSourcePath(
+  identity: CacheIdentity,
+  sourcePath: string,
+): string {
   return hashFields([
     identity.engine.schema,
     identity.engine.cacheSchema,
-    path.resolve(identity.sourcePath),
+    sourcePath,
     identity.sourceSize.toString(),
     identity.sourceMtimeNs.toString(),
     identity.engine.engineId,
@@ -74,6 +87,44 @@ export function computeCacheId(identity: CacheIdentity): string {
       identity.conversionOptions ?? EMPTY_SCENE_CONVERSION_OPTIONS,
     ),
   ]);
+}
+
+export function computeCacheId(
+  identity: CacheIdentity,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return computeCacheIdForSourcePath(
+    identity,
+    canonicalCacheSourcePath(identity.sourcePath, platform),
+  );
+}
+
+function legacyCacheIds(
+  identity: CacheIdentity,
+  platform: NodeJS.Platform,
+  realSourcePath?: string,
+): readonly string[] {
+  if (platform !== "darwin") {
+    return [];
+  }
+  const resolved = path.resolve(identity.sourcePath);
+  const canonicalPath = resolved.normalize("NFC");
+  const canonicalId = computeCacheIdForSourcePath(identity, canonicalPath);
+  const legacyPaths = new Set([resolved, resolved.normalize("NFD")]);
+  if (realSourcePath) {
+    const resolvedRealPath = path.resolve(realSourcePath);
+    if (resolvedRealPath.normalize("NFC") === canonicalPath) {
+      legacyPaths.add(resolvedRealPath);
+    }
+  }
+  const ids = new Set<string>();
+  for (const legacyPath of legacyPaths) {
+    const legacyId = computeCacheIdForSourcePath(identity, legacyPath);
+    if (legacyId !== canonicalId) {
+      ids.add(legacyId);
+    }
+  }
+  return [...ids];
 }
 
 export interface PreparedCache {
@@ -105,6 +156,7 @@ export class SceneCacheManager {
   constructor(
     private readonly cacheRoot: string,
     private readonly engine: SceneEngine,
+    private readonly platform: NodeJS.Platform = process.platform,
   ) {
     if (
       engine.descriptor.schema !== SCENE_ENGINE_CONTRACT ||
@@ -147,10 +199,14 @@ export class SceneCacheManager {
 
       let sourceMetadata;
       let engineSnapshot;
+      let realSourcePath: string | undefined;
       try {
-        [sourceMetadata, engineSnapshot] = await Promise.all([
+        [sourceMetadata, engineSnapshot, realSourcePath] = await Promise.all([
           stat(sourcePath, { bigint: true }),
           this.engine.snapshot(),
+          this.platform === "darwin"
+            ? realpath(sourcePath).catch(() => undefined)
+            : Promise.resolve(undefined),
         ]);
       } catch (error) {
         throw new SceneEngineError(
@@ -166,14 +222,20 @@ export class SceneCacheManager {
         );
       }
 
-      const cacheId = computeCacheId({
+      const identity = {
         sourcePath,
         sourceSize: sourceMetadata.size,
         sourceMtimeNs: sourceMetadata.mtimeNs,
         engine: this.engine.descriptor,
         engineRevision: engineSnapshot.revision,
         conversionOptions: normalizedOptions,
-      });
+      } satisfies CacheIdentity;
+      const cacheId = computeCacheId(identity, this.platform);
+      const legacyIds = legacyCacheIds(
+        identity,
+        this.platform,
+        realSourcePath,
+      );
       const cachePath = path.join(
         this.cacheRoot,
         `${cacheId}.dwg.cache`,
@@ -182,7 +244,9 @@ export class SceneCacheManager {
       if (force) {
         await rm(cachePath, { force: true });
       } else {
-        const existing = await this.readExistingCache(cacheId, cachePath);
+        const existing =
+          (await this.readExistingCache(cacheId, cachePath)) ??
+          (await this.reuseLegacyCache(cacheId, cachePath, legacyIds));
         if (existing) {
           this.notify(onProgress, "cache-ready");
           return existing;
@@ -203,10 +267,16 @@ export class SceneCacheManager {
       let previewHandedOff = false;
       let previewPublication = Promise.resolve();
       if (persistentPreviewPath) {
-        const existingPreview = await this.readExistingPreview(
-          cacheId,
-          persistentPreviewPath,
-        );
+        const existingPreview =
+          (await this.readExistingPreview(
+            cacheId,
+            persistentPreviewPath,
+          )) ??
+          (await this.reuseLegacyPreview(
+            cacheId,
+            persistentPreviewPath,
+            legacyIds,
+          ));
         if (existingPreview) {
           previewHandedOff = true;
           this.notify(onProgress, "preview-ready");
@@ -527,6 +597,99 @@ export class SceneCacheManager {
       }
       return undefined;
     }
+  }
+
+  private async reuseLegacyCache(
+    cacheId: string,
+    cachePath: string,
+    legacyIds: readonly string[],
+  ): Promise<PreparedCache | undefined> {
+    for (const legacyId of legacyIds) {
+      const legacyPath = path.join(
+        this.cacheRoot,
+        `${legacyId}.dwg.cache`,
+      );
+      const existing = await this.readExistingCache(
+        legacyId,
+        legacyPath,
+      );
+      if (!existing) {
+        continue;
+      }
+      try {
+        await link(legacyPath, cachePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          const raced = await this.readExistingCache(cacheId, cachePath);
+          if (raced) {
+            return raced;
+          }
+          continue;
+        }
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          continue;
+        }
+        return { ...existing, cacheId };
+      }
+      const migrated = await this.readExistingCache(cacheId, cachePath);
+      if (migrated) {
+        await rm(legacyPath, { force: true }).catch(() => undefined);
+        return migrated;
+      }
+    }
+    return undefined;
+  }
+
+  private async reuseLegacyPreview(
+    cacheId: string,
+    previewPath: string,
+    legacyIds: readonly string[],
+  ): Promise<PreparedPreview | undefined> {
+    for (const legacyId of legacyIds) {
+      const legacyPath = path.join(
+        this.cacheRoot,
+        `${legacyId}.dwg.preview`,
+      );
+      const existing = await this.readExistingPreview(
+        legacyId,
+        legacyPath,
+      );
+      if (!existing) {
+        continue;
+      }
+      try {
+        await link(legacyPath, previewPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          const raced = await this.readExistingPreview(
+            cacheId,
+            previewPath,
+          );
+          if (raced) {
+            return raced;
+          }
+          continue;
+        }
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          continue;
+        }
+        return this.preparedPreview(
+          cacheId,
+          existing.cachePath,
+          existing.size,
+          true,
+        );
+      }
+      const migrated = await this.readExistingPreview(
+        cacheId,
+        previewPath,
+      );
+      if (migrated) {
+        await rm(legacyPath, { force: true }).catch(() => undefined);
+        return migrated;
+      }
+    }
+    return undefined;
   }
 
   private async hasCompatibleHeader(

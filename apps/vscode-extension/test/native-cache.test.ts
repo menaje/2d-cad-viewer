@@ -21,6 +21,7 @@ import {
   runLibreDwgAdapter,
 } from "../src/native-cache";
 import {
+  canonicalCacheSourcePath,
   computeCacheId,
   SceneCacheManager,
 } from "../src/scene-cache-manager";
@@ -81,6 +82,31 @@ test("cache identity is deterministic and changes with source metadata", () => {
       ...identity,
       conversionOptions: { tessellation: 0.25, alpha: true },
     }),
+  );
+});
+
+test("normalizes canonically equivalent macOS cache paths before UTF-8 hashing", () => {
+  const composed = "/drawings/한글/도면.dwg";
+  const decomposed = composed.normalize("NFD");
+  const identity = {
+    sourcePath: composed,
+    sourceSize: 100n,
+    sourceMtimeNs: 200n,
+    engine: LIBREDWG_NATIVE_ENGINE_DESCRIPTOR,
+    engineRevision: "adapter-revision-1",
+  };
+
+  assert.equal(
+    canonicalCacheSourcePath(composed, "darwin"),
+    canonicalCacheSourcePath(decomposed, "darwin"),
+  );
+  assert.equal(
+    computeCacheId(identity, "darwin"),
+    computeCacheId({ ...identity, sourcePath: decomposed }, "darwin"),
+  );
+  assert.notEqual(
+    computeCacheId(identity, "linux"),
+    computeCacheId({ ...identity, sourcePath: decomposed }, "linux"),
   );
 });
 

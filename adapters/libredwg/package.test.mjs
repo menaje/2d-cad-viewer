@@ -184,6 +184,11 @@ test("keeps package and source preparation pins synchronized", async () => {
   );
   assert.match(prepareScript, /--disable-shared/u);
   assert.match(prepareScript, /--enable-static/u);
+  assert.match(prepareScript, /Darwin-x86_64/u);
+  assert.match(
+    prepareScript,
+    /CFLAGS=\$\{CFLAGS:--O3 -DNDEBUG\}/u,
+  );
   assert.match(
     buildScript,
     new RegExp(`LIBREDWG_VERSION=${LIBREDWG_VERSION.replace(".", "\\.")}`, "u"),
@@ -324,6 +329,44 @@ test("writes full-cache GPU vertices directly into the final cache", async () =>
   assert.match(
     sceneCacheSource,
     /if \(tasks\[group\]\.direct_output\)\s*continue;/u,
+  );
+});
+
+test("buffers packed scalar writes and flushes every publication boundary", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /#define CACHE_WRITE_BUFFER_BYTES \(64u \* 1024u\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /#if defined\(__APPLE__\) && defined\(__x86_64__\)[\s\S]*?DWG_VIEWER_INTEL_MACOS_BUFFERED_WRITER/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /uint8_t buffer\[CACHE_WRITE_BUFFER_BYTES\]/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /writer->buffered == sizeof \(writer->buffer\)[\s\S]*?flush_writer \(writer\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /position \(CacheWriter \*writer[\s\S]*?flush_writer \(writer\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /seek_to \(CacheWriter \*writer[\s\S]*?flush_writer \(writer\)/u,
+  );
+  assert.equal(
+    sceneCacheSource.match(
+      /write_directory \(&writer, sections\)[\s\S]{0,80}?flush_writer \(&writer\)/gu,
+    )?.length,
+    2,
   );
 });
 

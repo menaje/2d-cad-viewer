@@ -10,7 +10,7 @@
     "playwright-core": "1.62.1"
   },
   "scripts": {
-    "check": "pnpm run check:release-channel && pnpm run check:adapter-package && pnpm run check:viewport-layer-overrides && pnpm run check:autocad-display-parity && pnpm run check:viewer-package-archive && pnpm run check:vsix-archive && pnpm run check:wasm-probe && pnpm run check:korean-corpus && pnpm run check:windows-qualification && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm run check:js-packages && pnpm --filter dwg-viewer-libredwg check && pnpm --filter dwg-viewer-vscode check && pnpm run qualify:viewer-boundary",
+    "check": "pnpm run check:release-channel && pnpm run check:adapter-package && pnpm run check:viewport-layer-overrides && pnpm run check:autocad-display-parity && pnpm run check:viewer-package-archive && pnpm run check:vsix-archive && pnpm run check:wasm-probe && pnpm run check:korean-corpus && pnpm run check:windows-qualification && pnpm run check:macos-qualification && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm run check:js-packages && pnpm --filter dwg-viewer-libredwg check && pnpm --filter dwg-viewer-vscode check && pnpm run qualify:viewer-boundary",
     "check:release-channel": "node --check scripts/release-channel.mjs && node --check scripts/check-marketplace-version.mjs && node --check scripts/create-engine-catalog.mjs && node --test scripts/release-channel.test.mjs scripts/check-marketplace-version.test.mjs scripts/create-engine-catalog.test.mjs",
     "check:adapter-package": "node --test adapters/libredwg/package.test.mjs",
     "check:viewport-layer-overrides": "node --check scripts/qualify-viewport-layer-overrides.mjs && node --test scripts/qualify-viewport-layer-overrides.test.mjs",
@@ -20,6 +20,7 @@
     "check:wasm-probe": "node --test adapters/libredwg/wasm/probe.test.mjs",
     "check:korean-corpus": "node --check benchmarks/korean-corpus.mjs && node --check benchmarks/korean-corpus-inventory.mjs && node --check benchmarks/public-korean-corpus.mjs && node --test benchmarks/korean-corpus.test.mjs benchmarks/korean-corpus-inventory.test.mjs benchmarks/public-korean-corpus.test.mjs",
     "check:windows-qualification": "node --check scripts/qualify-windows-native.mjs && node --check scripts/benchmark-windows-native.mjs && node --check scripts/qualify-windows-vscode-ui.mjs && node --test scripts/benchmark-windows-native.test.mjs scripts/qualify-windows-vscode-ui.test.mjs",
+    "check:macos-qualification": "node --check scripts/benchmark-macos-native.mjs && node --test scripts/benchmark-macos-native.test.mjs",
     "check:js-packages": "node scripts/check-module-syntax.mjs packages/render-protocol/src packages/viewer-core/src packages/viewer-ui/src packages/dwg-scene-source/src packages/native-document-adapter/src packages/webview/src && pnpm --filter @menaje/viewer-render-protocol test && pnpm --filter @menaje/viewer-core test && pnpm --filter @menaje/viewer-ui test && pnpm --filter @menaje/dwg-scene-source test && pnpm --filter @dwg-viewer/native-document-adapter test && pnpm --filter @menaje/viewer-webgl test",
     "corpus:korean": "node benchmarks/korean-corpus.mjs",
     "format": "cargo fmt --all",

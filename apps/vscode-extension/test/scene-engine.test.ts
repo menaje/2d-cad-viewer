@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import {
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SceneCacheManager } from "../src/scene-cache-manager";
+import {
+  computeCacheId,
+  SceneCacheManager,
+} from "../src/scene-cache-manager";
 import {
   canonicalSceneConversionOptions,
   createSceneEngineProgress,
@@ -77,6 +82,123 @@ test("binds progress events to one engine and backend identity", () => {
     backendKind: "wasm-worker",
   });
   assert.equal(Object.isFrozen(event), true);
+});
+
+test("reuses a legacy decomposed macOS cache under its NFC identity", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dwg-scene-nfc-cache-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const sourcePath = path.join(
+    root,
+    "한글-도면.dwg".normalize("NFD"),
+  );
+  const cacheRoot = path.join(root, "cache");
+  await writeFile(sourcePath, "drawing");
+  await mkdir(cacheRoot, { recursive: true });
+
+  const descriptor = wasmProbeDescriptor();
+  const engineRevision = "wasm-probe-revision-1";
+  const sourceMetadata = await stat(sourcePath, { bigint: true });
+  const identity = {
+    sourcePath,
+    sourceSize: sourceMetadata.size,
+    sourceMtimeNs: sourceMetadata.mtimeNs,
+    engine: descriptor,
+    engineRevision,
+  };
+  const legacyId = computeCacheId(identity, "linux");
+  const canonicalId = computeCacheId(identity, "darwin");
+  assert.notEqual(legacyId, canonicalId);
+  const legacyPath = path.join(cacheRoot, `${legacyId}.dwg.cache`);
+  await writeFile(legacyPath, sceneCacheBytes("legacy-cache"));
+
+  const engine: SceneEngine = {
+    descriptor,
+    async snapshot() {
+      return { revision: engineRevision };
+    },
+    async convert() {
+      assert.fail("a compatible legacy cache must not be rebuilt");
+    },
+  };
+  const prepared = await new SceneCacheManager(
+    cacheRoot,
+    engine,
+    "darwin",
+  ).prepare(sourcePath, {
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(prepared.cacheId, canonicalId);
+  assert.equal(prepared.reused, true);
+  assert.equal(
+    sceneCachePayload(await readFile(prepared.cachePath)),
+    "legacy-cache",
+  );
+  await assert.rejects(readFile(legacyPath), /ENOENT/u);
+});
+
+test("reuses a legacy decomposed macOS preview during a full rebuild", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dwg-scene-nfc-preview-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const sourcePath = path.join(
+    root,
+    "한글-도면.dwg".normalize("NFD"),
+  );
+  const cacheRoot = path.join(root, "cache");
+  await writeFile(sourcePath, "drawing");
+  await mkdir(cacheRoot, { recursive: true });
+
+  const descriptor = wasmProbeDescriptor();
+  const engineRevision = "wasm-probe-revision-1";
+  const sourceMetadata = await stat(sourcePath, { bigint: true });
+  const identity = {
+    sourcePath,
+    sourceSize: sourceMetadata.size,
+    sourceMtimeNs: sourceMetadata.mtimeNs,
+    engine: descriptor,
+    engineRevision,
+  };
+  const legacyId = computeCacheId(identity, "linux");
+  const canonicalId = computeCacheId(identity, "darwin");
+  const legacyPath = path.join(cacheRoot, `${legacyId}.dwg.preview`);
+  await writeFile(
+    legacyPath,
+    sceneCacheBytes("legacy-preview", 1),
+  );
+
+  let conversionCount = 0;
+  let previewCount = 0;
+  const engine: SceneEngine = {
+    descriptor,
+    async snapshot() {
+      return { revision: engineRevision };
+    },
+    async convert(request) {
+      conversionCount += 1;
+      assert.equal(request.previewPath, undefined);
+      await writeFile(request.outputPath, sceneCacheBytes("full-cache"));
+    },
+  };
+  const prepared = await new SceneCacheManager(
+    cacheRoot,
+    engine,
+    "darwin",
+  ).prepare(sourcePath, {
+    signal: new AbortController().signal,
+    async onPreview(preview) {
+      previewCount += 1;
+      assert.equal(preview.reused, true);
+      assert.equal(
+        sceneCachePayload(await readFile(preview.cachePath)),
+        "legacy-preview",
+      );
+    },
+  });
+
+  assert.equal(prepared.cacheId, canonicalId);
+  assert.equal(conversionCount, 1);
+  assert.equal(previewCount, 1);
+  await assert.rejects(readFile(legacyPath), /ENOENT/u);
 });
 
 test("prepares a progressive WASM-shaped engine through the common cache path", async (context) => {

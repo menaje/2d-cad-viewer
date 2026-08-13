@@ -375,7 +375,16 @@ interface without adding work to the drawing-open path. Cache identity includes
 the source fingerprint, Scene Cache version, engine ID/version, backend
 ID/kind, converter revision and canonical conversion options. Native and a
 future redesigned WASM backend therefore cannot silently reuse each other's
-cache.
+cache. On macOS, the resolved source path is normalized to NFC before the
+existing length-prefixed UTF-8 cache-identity hash. The original path remains
+unchanged for file I/O and presentation. A compatible cache or persistent
+preview created by an older raw-path identity is reused and promoted to the
+NFC identity with a same-directory atomic link when possible. Legacy lookup is
+limited to the supplied path, its NFD form and an NFC-equivalent filesystem
+real path. Other platforms retain their normalization-sensitive path identity
+because distinct byte names can identify distinct files there. This identity
+compatibility rule does not change the Scene Engine protocol or Scene Cache
+wire version.
 Progress events are bound to the same engine/backend identity, while terminal
 failure and cancellation remain explicit. The WASM-shaped test implementation
 only qualifies this boundary; the rejected real probe is reproducible under
@@ -503,6 +512,27 @@ but local median wall time regressed from 10,423 ms to 11,086 ms (+6.4%) and
 median adapter write time regressed from 6,163 ms to 6,821 ms. The direct-write
 experiment was therefore removed; only the GPU vertex body retains direct
 placement, and the other six bounded groups remain staged.
+
+Issue [#43](https://github.com/menaje/2d-cad-viewer/issues/43) separately
+qualifies uncached Scene Cache generation on physical Intel macOS x64. Four
+alternating six-worker A/B pairs, with no Scene Cache present per run and a
+warm source page cache, reduced median process wall time from 7,792 ms to
+7,360 ms (-5.5%) and adapter write time from 3,962 ms to 3,555 ms (-10.3%).
+The entity-geometry section fell from 1,500 ms to 433 ms because its many
+packed scalar fields are combined in a bounded per-writer 64 KiB buffer before
+stdio. Median peak RSS remained in the same approximately 1.19 GB parser
+memory class.
+
+The pinned LibreDWG parser had previously retained its configure default of
+`-g -O2` even though the adapter writer used `-O3 -DNDEBUG`. Restricting the
+parser flag change to Intel macOS x64 shortened the progressive path's median
+parse time from 3,608 ms to 3,391 ms (-6.0%) and its preview-ready marker from
+5,190 ms to 5,012 ms (-3.4%) across three alternating pairs. Baseline and
+candidate full caches and persistent previews were byte-identical. These are
+warm-page-cache, path-free measurements rather than cold-disk claims; the
+repeat tool records that distinction and never emits the private source path
+or artifact digest. Scene Cache v1.26, the engine protocol, atomic publication
+and all non-Intel-macOS writer paths remain unchanged.
 
 The hosted viewer reports `dwg-visual-complete/1` after the full first frame,
 root text and raster setup, host font requests, embedded-image decoding, and

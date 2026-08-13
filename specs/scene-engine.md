@@ -111,7 +111,7 @@ The private cache filename is a SHA-256 digest over length-prefixed fields:
 ```text
 SceneEngine contract
 + Scene Cache version
-+ resolved source path, size and modification time
++ resolved source path (NFC-normalized on macOS), size and modification time
 + engine ID and version
 + backend ID and kind
 + implementation revision
@@ -121,7 +121,15 @@ SceneEngine contract
 Only the digest becomes the filename. Option order cannot change the identity,
 while changing an option value, engine/backend version or implementation
 revision must change it. Source and engine snapshots are checked again after
-conversion before the temporary output is committed.
+conversion before the temporary output is committed. On macOS, NFC
+normalization occurs before the existing length-prefixed UTF-8 encoding so
+canonically equivalent source paths share one identity. The original source
+path remains unchanged for file I/O. A compatible pre-normalization cache or
+persistent preview discovered from the supplied path, its NFD form or an
+NFC-equivalent filesystem real path may be promoted to the NFC identity
+without conversion. This filename-identity compatibility rule does not change
+the Scene Engine protocol or Scene Cache wire version. Other platforms retain
+their existing normalization-sensitive identity.
 
 ## WASM admission
 
