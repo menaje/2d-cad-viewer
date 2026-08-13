@@ -190,6 +190,7 @@ function makeFakeGl() {
     bufferSubData(_target, offset, value) {
       calls.bufferSubData.push({
         offset,
+        buffer: ArrayBuffer.isView(value) ? value.buffer : value,
         byteLength: value.byteLength,
       });
     },
@@ -1153,6 +1154,82 @@ test("draws layout viewport linetypes with their paper-space scales", () => {
         "u_globalLinetypeScale * u_viewportLinetypeScale",
       ),
     ),
+  );
+  renderer.dispose();
+});
+
+test("uploads standalone LINE extents for A-aligned short patterns", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const buffer = new ArrayBuffer(72);
+  const view = new DataView(buffer);
+  for (let endpoint = 0; endpoint < 2; endpoint += 1) {
+    const offset = endpoint * 36;
+    view.setFloat32(offset, endpoint * 0.5, true);
+    view.setUint32(offset + 12, 0, true);
+    view.setUint32(offset + 16, 7, true);
+    view.setUint32(offset + 28, 3 << 5, true);
+    view.setFloat32(offset + 32, endpoint * 0.5, true);
+  }
+  const renderer = new WebGlLineRenderer(canvas);
+
+  renderer.renderOverview({
+    batches: [
+      batch({
+        id: 0,
+        kind: GpuLineBatchKind.ModelOverview,
+        lodLevel: 0,
+        firstVertex: 0,
+      }),
+    ],
+    layers: [{ color: 0, flags: 0 }],
+    linetypes: [
+      {
+        code: 3,
+        alignment: 65,
+        patternLength: 1,
+        flags: 0,
+        dashes: [{ length: 0.5 }, { length: -0.5 }],
+      },
+    ],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: { buffer, byteLength: 72, vertexCount: 2 },
+  });
+
+  const upload = calls.bufferData.find(
+    ({ byteLength, usage }) =>
+      byteLength === 72 && usage === gl.STATIC_DRAW,
+  );
+  assert.ok(upload);
+  assert.notEqual(upload.buffer, buffer);
+  assert.ok(new DataView(upload.buffer).getUint32(12, true) >>> 16);
+  assert.equal(new DataView(buffer).getUint32(12, true), 0);
+  assert.equal(
+    calls.uniform1i
+      .filter(({ name }) => name === "u_aTypeLineExtentsPacked")
+      .at(-1).value,
+    1,
+  );
+  assert.ok(
+    calls.shaderSources.some((source) =>
+      source.includes("v_aTypeLineExtent < patternLength"),
+    ),
+  );
+  renderer.updateLineVertexResource(
+    renderer.overviewScene.resource,
+    { buffer, byteLength: 72, vertexCount: 2, recordSize: 36 },
+  );
+  assert.ok(
+    new DataView(calls.bufferSubData.at(-1).buffer).getUint32(12, true) >>>
+      16,
   );
   renderer.dispose();
 });

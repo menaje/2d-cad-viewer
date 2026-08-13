@@ -220,6 +220,10 @@ built-in languages, template keys, or runtime shell keys diverge.
 - Applies each paper layout's independent `PSLTSCALE` bit when composing model
   geometry through that layout's viewports instead of reusing one drawing-wide
   value for every tab.
+- Applies serialized simple-linetype `A` alignment to standalone LINE objects:
+  a segment shorter than one complete effective pattern stays continuous rather
+  than disappearing into a shader gap. The bounded extent is packed only into
+  a transient GPU upload copy, including draw-order and streamed-detail updates.
 - Applies each viewport's layer color, transparency, linetype and lineweight
   overrides consistently to WebGL geometry, Canvas text/complex linetypes and
   raster images while preserving shared block geometry.

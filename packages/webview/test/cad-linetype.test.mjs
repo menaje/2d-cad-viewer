@@ -29,6 +29,7 @@ test("packs bounded simple and complex linetype definitions for WebGL", () => {
     {
       code: 3,
       patternLength: 1.5,
+      alignment: 65,
       flags: 0,
       dashes: [{ length: 1 }, { length: -0.5 }],
     },
@@ -41,7 +42,7 @@ test("packs bounded simple and complex linetype definitions for WebGL", () => {
   ]);
 
   assert.deepEqual([...data.headers.slice(12, 20)], [
-    1.5, 0, 2, 0,
+    1.5, 0, 2, 2,
     2, 2, 2, 1,
   ]);
   assert.deepEqual([...data.dashes], [1, -0.5, 0, -2]);

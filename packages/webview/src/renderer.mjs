@@ -12,6 +12,10 @@ import {
 } from "./cad-color.mjs";
 import { makeLinetypeTextureData } from "./cad-linetype.mjs";
 import {
+  packATypeLineExtentsForUpload,
+  preserveATypeLineExtents,
+} from "./a-type-linetype.mjs";
+import {
   batchRelativeInstanceMatrix,
   boundsAreFinite,
   emptyBounds3,
@@ -278,6 +282,7 @@ layout(location = 15) in uint a_instanceLinetype;
 uniform mat4 u_projection;
 uniform vec2 u_lineOffset;
 uniform float u_maskBucketScale;
+uniform bool u_aTypeLineExtentsPacked;
 
 flat out uint v_encodedColor;
 flat out uint v_layerIndex;
@@ -290,8 +295,17 @@ flat out float v_instanceLineWeight;
 flat out uint v_instanceLinetype;
 flat out int v_visibilityRow;
 flat out uint v_curveReplacement;
+flat out float v_aTypeLineExtent;
 out float v_patternDistance;
 out vec2 v_viewPosition;
+
+float decodeATypeLineExtent(uint code) {
+  if (code == 0u) return 0.0;
+  if (code == 65535u) return 3.402823466e+38;
+  return exp2(
+    -64.0 + float(code - 1u) * (128.0 / 65533.0)
+  );
+}
 
 void main() {
   vec4 viewPosition = a_instanceMatrix * vec4(a_localPosition, 1.0);
@@ -302,7 +316,13 @@ void main() {
   gl_Position.z = (orderDepth * 2.0 - 1.0) * gl_Position.w;
   gl_Position.xy += u_lineOffset * gl_Position.w;
   v_encodedColor = a_encodedColor;
-  v_layerIndex = a_layerIndex;
+  uint extentCode =
+    u_aTypeLineExtentsPacked ? a_layerIndex >> 16u : 0u;
+  v_layerIndex =
+    u_aTypeLineExtentsPacked
+      ? a_layerIndex & 0xffffu
+      : a_layerIndex;
+  v_aTypeLineExtent = decodeATypeLineExtent(extentCode);
   v_style = a_style;
   int packedClipVisibility = int(a_clipId + 0.5);
   v_clipId = packedClipVisibility & ${MAX_PACKED_CLIP_ID};
@@ -338,6 +358,7 @@ flat in float v_instanceLineWeight;
 flat in uint v_instanceLinetype;
 flat in int v_visibilityRow;
 flat in uint v_curveReplacement;
+flat in float v_aTypeLineExtent;
 in float v_patternDistance;
 in vec2 v_viewPosition;
 
@@ -474,6 +495,10 @@ bool linetypeVisible() {
   int firstDash = int(header.y + 0.5);
   int dashCount = int(header.z + 0.5);
   if (patternLength <= 1.0e-9 || dashCount <= 0) return true;
+  bool aTypeAligned =
+    (int(header.w + 0.5) & 2) != 0 &&
+    v_aTypeLineExtent > 0.0;
+  if (aTypeAligned && v_aTypeLineExtent < patternLength) return true;
   float phase = mod(max(v_patternDistance, 0.0), patternLength);
   float cursor = 0.0;
   for (int index = 0; index < 64; index++) {
@@ -1933,6 +1958,7 @@ function patchLineMaskBuckets(
   ) {
     throw new TypeError("line draw-order payload is inconsistent");
   }
+  preserveATypeLineExtents(buffer, { recordSize });
   const view = new DataView(buffer);
   const vertexCount = buffer.byteLength / recordSize;
   for (const batch of batches) {
@@ -1970,6 +1996,9 @@ function patchStyleMaskBucket(buffer, recordSize, bucket) {
     buffer.byteLength % recordSize !== 0
   ) {
     throw new TypeError("draw-order style payload is inconsistent");
+  }
+  if (recordSize >= VERTEX_STRIDE) {
+    preserveATypeLineExtents(buffer, { recordSize });
   }
   const view = new DataView(buffer);
   for (let offset = 0; offset < buffer.byteLength; offset += recordSize) {
@@ -3065,6 +3094,10 @@ export class WebGlLineRenderer {
     this.maskBucketScaleLocation = gl.getUniformLocation(
       this.program,
       "u_maskBucketScale",
+    );
+    this.aTypeLineExtentsPackedLocation = gl.getUniformLocation(
+      this.program,
+      "u_aTypeLineExtentsPacked",
     );
     this.layerCountLocation = gl.getUniformLocation(this.program, "u_layerCount");
     this.layerZeroIndexLocation = gl.getUniformLocation(
@@ -4223,6 +4256,7 @@ export class WebGlLineRenderer {
     {
       stride = VERTEX_STRIDE,
       patternDistance = stride >= VERTEX_STRIDE,
+      aTypeAlignment = patternDistance && stride === VERTEX_STRIDE,
     } = {},
   ) {
     const gl = this.gl;
@@ -4233,7 +4267,11 @@ export class WebGlLineRenderer {
     }
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, arrayBuffer, gl.STATIC_DRAW);
+    const upload = packATypeLineExtentsForUpload(arrayBuffer, {
+      recordSize: stride,
+      enabled: aTypeAlignment,
+    });
+    gl.bufferData(gl.ARRAY_BUFFER, upload.buffer, gl.STATIC_DRAW);
 
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
@@ -4325,6 +4363,7 @@ export class WebGlLineRenderer {
       vertexArray,
       byteLength: arrayBuffer.byteLength,
       stride,
+      aTypeLineExtentsPacked: upload.packed,
     });
     this.vertexResources.add(resource);
     return resource;
@@ -7051,7 +7090,9 @@ export class WebGlLineRenderer {
         entries.map((entry) =>
           Object.freeze({
             batch: entry.batch,
-            resource: this.uploadVertices(entry.vertices.buffer),
+            resource: this.uploadVertices(entry.vertices.buffer, {
+              aTypeAlignment: false,
+            }),
             byteLength: entry.vertices.byteLength,
             vertices: entry.vertices,
           }),
@@ -7365,9 +7406,16 @@ export class WebGlLineRenderer {
     ) {
       throw new Error("line vertex update payload is inconsistent");
     }
+    const upload = packATypeLineExtentsForUpload(vertices.buffer, {
+      recordSize: vertices.recordSize ?? resource.stride ?? VERTEX_STRIDE,
+      enabled: Boolean(resource.aTypeLineExtentsPacked),
+    });
+    if (resource.aTypeLineExtentsPacked && !upload.packed) {
+      throw new Error("A-type linetype metadata changed during vertex update");
+    }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, resource.vertexBuffer);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertices.buffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, upload.buffer);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
@@ -7451,7 +7499,9 @@ export class WebGlLineRenderer {
     const uploaded = entries.map((entry) =>
       Object.freeze({
         batch: entry.batch,
-        resource: this.uploadVertices(entry.vertices.buffer),
+        resource: this.uploadVertices(entry.vertices.buffer, {
+          aTypeAlignment: false,
+        }),
         byteLength: entry.vertices.byteLength,
         vertices: entry.vertices,
       }),
@@ -7602,6 +7652,15 @@ export class WebGlLineRenderer {
           : this.maskBucketScaleLocation;
     if (maskBucketScaleLocation !== null) {
       gl.uniform1f(maskBucketScaleLocation, maskBucketScale);
+    }
+    if (
+      primitive === gl.LINES &&
+      this.aTypeLineExtentsPackedLocation !== null
+    ) {
+      gl.uniform1i(
+        this.aTypeLineExtentsPackedLocation,
+        resource.aTypeLineExtentsPacked ? 1 : 0,
+      );
     }
     if (primitive === gl.TRIANGLES) {
       this.bindFillGradient(batch);
