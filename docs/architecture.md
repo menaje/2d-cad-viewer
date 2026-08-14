@@ -39,9 +39,10 @@ artifacts in the `viewer-core-v0.1.2` GitHub release and through GitHub
 Packages. Their producer compatibility record, exact artifact digests, protocol
 window, and consumer manifests are recorded in
 [`compatibility/viewer-core.json`](../compatibility/viewer-core.json).
-The interaction-time detail pause/resume changes are qualified as an
-unpublished development artifact in that manifest; they do not replace the
-immutable `viewer-core-v0.1.2` release bytes.
+The interaction-time detail pause/resume and additive async staged-delta API
+are qualified as the unpublished Viewer Core 0.1.3 development artifact in
+that manifest; they do not replace the immutable `viewer-core-v0.1.2` release
+bytes.
 The canonical Scene Cache reader and bounded range sources now live in
 `packages/dwg-scene-source`; the legacy Webview paths are compatibility
 re-exports. The public `@menaje/dwg-scene-source` package exposes that
@@ -101,6 +102,17 @@ source-neutral renderer adapter hook. `MockRenderDeltaSource` verifies that a
 stale replay cannot advance either source or overlay revision and that picking
 tracks the applied revision. The existing DWG WebGL vertex layouts remain
 renderer-adapter details rather than render-protocol fields.
+Asynchronous retained renderers use the additive staged adapter path. A slow
+`prepareDelta()` may allocate bounded range, worker, CPU and GPU resources but
+cannot mutate the visible scene. Its transaction exposes a synchronous atomic
+`commit()` plus asynchronous-capable `rollback()` and `dispose()` cleanup.
+Core rechecks cancellation and lifecycle after prepare, advances its retained
+overlay only after commit, and requires `disposeAsync()` while preparation is
+in flight. The reusable staged conformance proves geometry and pick/identity
+revision switch together and that prepare/commit failure, digest mismatch,
+stale input and cancellation preserve the last scene without retained staged
+resources. The existing opaque payload already carries source-specific 3D
+ranges, so the render wire protocol does not change.
 `DwgRenderDeltaAdapter` now consumes a
 digest/byte-bound decoded v6 packet containing 36-byte lines, 32-byte triangle
 fills, 32-byte POINT records, bounded UTF-8 JSON native-text records, 272-byte

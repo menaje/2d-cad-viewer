@@ -242,16 +242,24 @@ class MockRenderDeltaSession {
 
 export class MockRenderDeltaSource {
   #configuredDeltas;
+  #representation;
   #opened = false;
   #disposed = false;
   #session;
 
-  constructor({ deltas } = {}) {
+  constructor({
+    deltas,
+    representation = ViewerRepresentation.TWO_DIMENSIONAL,
+  } = {}) {
     if (deltas !== undefined && !Array.isArray(deltas)) {
       throw new TypeError("mock render deltas must be an array");
     }
+    if (!Object.values(ViewerRepresentation).includes(representation)) {
+      throw new TypeError("mock render delta representation is invalid");
+    }
     this.supportedProtocolVersions = SupportedRenderProtocolVersions;
     this.#configuredDeltas = deltas;
+    this.#representation = representation;
   }
 
   async open({ protocolVersion, signal } = {}) {
@@ -300,7 +308,7 @@ export class MockRenderDeltaSource {
             sourceId: "source:delta-base",
             revisionId: descriptor.lastSuccessfulRevisionId,
             kind: ViewerLayerKind.BASE,
-            representation: ViewerRepresentation.TWO_DIMENSIONAL,
+            representation: this.#representation,
             order: 0,
             visible: true,
           },
@@ -309,7 +317,7 @@ export class MockRenderDeltaSource {
             sourceId: "source:delta-live",
             revisionId: descriptor.lastSuccessfulRevisionId,
             kind: ViewerLayerKind.LIVE,
-            representation: ViewerRepresentation.TWO_DIMENSIONAL,
+            representation: this.#representation,
             order: 1,
             visible: true,
           },

@@ -409,7 +409,8 @@ built-in languages, template keys, or runtime shell keys diverge.
   left/baseline text uses the insertion point; center, right, middle and
   vertical justification use the alignment point plus resolved SHX or
   fallback-font glyph metrics. Align/Fit retain their two-point span and
-  direction, while multiline attributes use their embedded MTEXT basis.
+  direction. Attribute MTEXT type 1 remains on this single-line path, while
+  multiline types 2 and 4 use their embedded MTEXT basis.
 - Applies ATTMODE 0/1/2 to attributes, preserves the current model annotation
   scale, and hides an annotative MTEXT representation that has no current-scale
   context when ANNOALLVISIBLE is disabled.

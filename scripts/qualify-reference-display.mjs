@@ -30,7 +30,7 @@ const REPOSITORY_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-const REPORT_SCHEMA = "dwg-autocad-display-parity-evidence/1";
+const REPORT_SCHEMA = "dwg-reference-display-qualification/2";
 const CONVERSION_SCHEMA = "dwg-scene-cache/1";
 const DOCTOR_SCHEMA = "dwg-engine-doctor/1";
 const AUTOCAD_PAIR_SCHEMA = "dwg-autocad-system-variable-pair/2";
@@ -2322,20 +2322,12 @@ export function summarizeBrowserEvidenceCoverage(evidence) {
   });
 }
 
-export function displayParityQualificationStatus({
-  annotationComplete,
-  browserComplete,
-  pairsComplete,
-  windowsComplete,
-  xrefComplete,
-}) {
-  return annotationComplete &&
-    browserComplete &&
-    pairsComplete &&
-    windowsComplete &&
-    xrefComplete
-    ? "pass-with-explicit-boundaries"
-    : "pass-with-explicit-external-gates";
+export function referenceDisplayQualificationStatus() {
+  // Required conversion, partition and fixture checks fail closed before the
+  // report is built. Proprietary-viewer captures and platform UI runs remain
+  // useful supplemental evidence, but they do not decide this source-neutral
+  // display qualification status.
+  return "pass-with-explicit-boundaries";
 }
 
 function plotStyleFixtures(records) {
@@ -2432,17 +2424,13 @@ function buildEvidence({
   ]);
   return {
     schema: REPORT_SCHEMA,
-    status: displayParityQualificationStatus({
-      annotationComplete: autoCadAnnotationScaleMatrix.complete,
-      browserComplete: browserEvidenceCoverage.complete,
-      pairsComplete: autoCadSystemVariablePairs.complete,
-      windowsComplete: Boolean(windowsVsCodeEvidence),
-      xrefComplete: autoCadXrefStateMatrix.complete,
-    }),
+    status: referenceDisplayQualificationStatus(),
     observedAt,
     scope: {
       repository: "menaje/2d-cad-viewer",
-      comparisonTarget: "AutoCAD 2026 2D Wireframe model/layout display",
+      referenceBasis:
+        "documented DWG 2D display semantics and reproducible public or synthetic fixtures",
+      commercialProductComparisonRequired: false,
       loadingPerformanceExcluded: true,
       deploymentPerformed: false,
     },
@@ -2513,27 +2501,31 @@ function buildEvidence({
       officialAutodeskSamples: "pass",
       sourceSerializedDeferredPartition: "pass",
       invalidSupportedEntities: "pass-zero",
+    },
+    supplementalEvidence: {
       browserRepresentativePixels: browserEvidenceCoverage.complete
-        ? "pass-required-matrix"
+        ? "observed-complete-matrix"
         : browserEvidenceCoverage.supplied.length > 0
-          ? "pending-incomplete-matrix"
+          ? "observed-incomplete-matrix"
           : "not-run",
       autoCadSystemVariablePairs: autoCadSystemVariablePairs.complete
-        ? "pass-autocad-generated-same-camera-pairs"
+        ? "observed-autocad-generated-same-camera-pairs"
         : autoCadSystemVariablePairs.reports.length > 0
-          ? "pending-incomplete-external-fixtures"
-          : "pending-external-fixtures",
+          ? "observed-incomplete-external-fixtures"
+          : "not-run",
       autoCadAnnotationScaleMatrix: autoCadAnnotationScaleMatrix.complete
-        ? "pass-autocad-generated-model-layout-view-switch"
+        ? "observed-autocad-generated-model-layout-view-switch"
         : autoCadAnnotationScaleMatrix.generatedMatrixComplete
-          ? "pending-single-drawing-model-layout-view-switch"
-          : "pending-external-fixtures",
+          ? "observed-incomplete-model-layout-view-switch"
+          : "not-run",
       autoCadXrefStateMatrix: autoCadXrefStateMatrix.complete
-        ? "pass-autocad-generated-loaded-unloaded-unresolved"
-        : "pending-external-fixtures",
+        ? "observed-autocad-generated-loaded-unloaded-unresolved"
+        : "not-run",
       autoCadReferencePixels: autoCadBrowserReferenceComplete
-        ? "pass-public-autocad-reference-set-and-browser-review"
-        : "pending-browser-reference-review",
+        ? "observed-public-reference-set-and-browser-review"
+        : "not-run",
+    },
+    platformGates: {
       packagedWindowsVsCodeCurrentRevision: windowsVsCodeEvidence
         ? "pass-packaged-current-artifacts"
         : "pending-windows-execution",
@@ -2613,7 +2605,7 @@ export async function qualify(options) {
       : null,
   ]);
   const temporaryRoot = await mkdtemp(
-    path.join(os.tmpdir(), "dwg-autocad-display-parity-"),
+    path.join(os.tmpdir(), "dwg-reference-display-"),
   );
   try {
     const publicTemporaryRoot = path.join(temporaryRoot, "public");

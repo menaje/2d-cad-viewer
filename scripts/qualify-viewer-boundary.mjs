@@ -341,18 +341,22 @@ import {
   openViewerRuntime,
 } from "@menaje/viewer-core";
 import {
+  runRenderDeltaConformance,
   runRenderSourceConformance,
   runServiceEventConformance,
   runServiceRenderSourceConformance,
+  runStagedRenderDeltaConformance,
 } from "@menaje/viewer-core/conformance";
 import {
   createMockServiceEventHarness,
+  MockRenderDeltaSource,
   MockRenderSource,
   MockServicePickFixture,
   MockServiceRenderSource,
 } from "@menaje/viewer-core/testing";
 import {
   RenderProtocolId,
+  ViewerRepresentation,
 } from "@menaje/viewer-render-protocol";
 import {
   ViewerUiApi,
@@ -367,6 +371,28 @@ const serviceSource = await runServiceRenderSourceConformance(
 );
 const serviceEvents = await runServiceEventConformance(
   () => createMockServiceEventHarness(),
+);
+const createDeltaHarness = () => {
+  const source = new MockRenderDeltaSource();
+  return {
+    source,
+    emitNext: (options) => source.emitNext(options),
+    emit: (delta, options) => source.emit(delta, options),
+  };
+};
+const renderDelta = await runRenderDeltaConformance(createDeltaHarness);
+const createStagedDeltaHarness = () => {
+  const source = new MockRenderDeltaSource({
+    representation: ViewerRepresentation.THREE_DIMENSIONAL,
+  });
+  return {
+    source,
+    emitNext: (options) => source.emitNext(options),
+    emit: (delta, options) => source.emit(delta, options),
+  };
+};
+const stagedRenderDelta = await runStagedRenderDeltaConformance(
+  createStagedDeltaHarness,
 );
 let hostDisposals = 0;
 let presentationDisposals = 0;
@@ -410,6 +436,16 @@ console.log(JSON.stringify({
     serviceDiagnosticBatches: serviceEvents.diagnosticBatches,
     serviceDiagnostics: serviceEvents.diagnostics,
     serviceReplayRejected: serviceEvents.replayRejected,
+    renderDeltaRevision: renderDelta.revisionId,
+    stagedRenderDeltaRevision: stagedRenderDelta.revisionId,
+    stagedRenderDeltaRepresentation:
+      stagedRenderDelta.representation,
+    stagedAtomicGeometryPickCommit:
+      stagedRenderDelta.atomicGeometryPickCommit,
+    stagedPrepareFailureReleasedResources:
+      stagedRenderDelta.prepareFailureReleasedResources,
+    stagedCancellationReleasedResources:
+      stagedRenderDelta.cancellationReleasedResources,
   },
   standalone: {
     openedWithoutExternalProduct: true,
@@ -452,13 +488,30 @@ async function qualifyArtifactConsumer(
     ],
     { cwd: directory },
   );
-  return JSON.parse(
+  const result = JSON.parse(
     run(
       process.execPath,
       ["--input-type=module", "--eval", consumerProbe],
       { cwd: directory },
     ),
   );
+  assert.equal(
+    result.conformance.stagedRenderDeltaRepresentation,
+    "3d",
+  );
+  assert.equal(
+    result.conformance.stagedAtomicGeometryPickCommit,
+    true,
+  );
+  assert.equal(
+    result.conformance.stagedPrepareFailureReleasedResources,
+    true,
+  );
+  assert.equal(
+    result.conformance.stagedCancellationReleasedResources,
+    true,
+  );
+  return result;
 }
 
 async function validateProductEntrypoints() {
@@ -549,6 +602,10 @@ assert.equal(
 );
 assert.equal(
   manifest.qualification.viewerOwnedBoundary,
+  "passed",
+);
+assert.equal(
+  manifest.qualification.artifactOnlyStaged3dConsumer,
   "passed",
 );
 assert.equal(

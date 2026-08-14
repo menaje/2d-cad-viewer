@@ -15,9 +15,11 @@ import {
 
 import {
   runRenderDeltaConformance,
+  runStagedRenderDeltaConformance,
 } from "@menaje/viewer-core/conformance";
 import {
   MockRenderDeltaSource,
+  MockStagedRenderDeltaAdapter,
 } from "@menaje/viewer-core/testing";
 import {
   ViewerRenderDeltaController,
@@ -675,6 +677,32 @@ test("passes the reusable Render Delta conformance fixture", async () => {
   assert.equal(report.disposed, true);
 });
 
+test("passes the reusable staged Render Delta conformance fixture", async () => {
+  const report = await runStagedRenderDeltaConformance(() => {
+    const source = new MockRenderDeltaSource({
+      representation: ViewerRepresentation.THREE_DIMENSIONAL,
+    });
+    return {
+      source,
+      emitNext: (options) => source.emitNext(options),
+      emit: (nextDelta, options) =>
+        source.emit(nextDelta, options),
+    };
+  });
+
+  assert.equal(report.deltaCount, 2);
+  assert.equal(report.representation, ViewerRepresentation.THREE_DIMENSIONAL);
+  assert.equal(report.revisionId, "revision:delta-mock:3");
+  assert.equal(report.asynchronousPreparePreservedCurrentScene, true);
+  assert.equal(report.atomicGeometryPickCommit, true);
+  assert.equal(report.staleRejectedBeforePrepare, true);
+  assert.equal(report.prepareFailureReleasedResources, true);
+  assert.equal(report.commitFailureRolledBack, true);
+  assert.equal(report.digestMismatchRejected, true);
+  assert.equal(report.cancellationReleasedResources, true);
+  assert.equal(report.disposed, true);
+});
+
 test("coordinates a source-neutral renderer adapter with preview lifecycle", () => {
   const descriptor = sessionDescriptor();
   const calls = [];
@@ -735,6 +763,215 @@ test("does not publish state when a renderer adapter rejects an atomic delta", (
   );
   assert.deepEqual(controller.snapshot(), baseline);
   controller.dispose();
+});
+
+test("keeps geometry, pick identity, and revision unchanged during asynchronous prepare", async () => {
+  const descriptor = sessionDescriptor();
+  const adapter = new MockStagedRenderDeltaAdapter({
+    revisionId: revisionOne,
+    holdPrepare: true,
+    expectedPayloadSha256: "1".repeat(64),
+  });
+  const controller = new ViewerRenderDeltaController({
+    sourceSession: { descriptor },
+    snapshot: baseSnapshot(descriptor),
+    adapter,
+  });
+  const baseline = controller.snapshot();
+  const applying = controller.applyCommittedAsync(delta());
+
+  await adapter.prepareStarted;
+  assert.equal(controller.preparing, true);
+  assert.deepEqual(controller.snapshot(), baseline);
+  assert.equal(adapter.snapshot().revisionId, revisionOne);
+  assert.equal(adapter.snapshot().geometryRevisionId, revisionOne);
+  assert.equal(adapter.snapshot().pickRevisionId, revisionOne);
+  assert.equal(adapter.snapshot().resources.stagedRanges, 1);
+  assert.equal(adapter.snapshot().resources.stagedWorkers, 1);
+
+  adapter.releasePrepare();
+  const applied = await applying;
+  assert.equal(await controller.whenIdle(), true);
+  assert.equal(applied.revisionId, revisionTwo);
+  assert.equal(adapter.snapshot().revisionId, revisionTwo);
+  assert.equal(adapter.snapshot().geometryRevisionId, revisionTwo);
+  assert.equal(adapter.snapshot().pickRevisionId, revisionTwo);
+  assert.deepEqual(adapter.snapshot().identities, [
+    {
+      renderId: "render:new",
+      externalIdentityToken: "external:render:new",
+    },
+  ]);
+  assert.deepEqual(
+    adapter.snapshot().resources,
+    {
+      stagedRanges: 0,
+      stagedWorkers: 0,
+      stagedCpuBytes: 0,
+      stagedGpuBytes: 0,
+      activeGpuBytes: 128,
+    },
+  );
+
+  assert.equal(await controller.disposeAsync(), true);
+  assert.equal(adapter.snapshot().resources.activeGpuBytes, 0);
+});
+
+test("rolls back and disposes a staged transaction after atomic commit failure", async () => {
+  const descriptor = sessionDescriptor();
+  const adapter = new MockStagedRenderDeltaAdapter({
+    revisionId: revisionOne,
+    expectedPayloadSha256: "1".repeat(64),
+    failCommit: true,
+  });
+  const controller = new ViewerRenderDeltaController({
+    sourceSession: { descriptor },
+    snapshot: baseSnapshot(descriptor),
+    adapter,
+  });
+  const baseline = controller.snapshot();
+
+  await assert.rejects(
+    controller.applyCommittedAsync(delta()),
+    /atomic commit failed/u,
+  );
+  assert.deepEqual(controller.snapshot(), baseline);
+  assert.equal(adapter.snapshot().revisionId, revisionOne);
+  assert.deepEqual(adapter.snapshot().resources, {
+    stagedRanges: 0,
+    stagedWorkers: 0,
+    stagedCpuBytes: 0,
+    stagedGpuBytes: 0,
+    activeGpuBytes: 0,
+  });
+  assert.equal(adapter.snapshot().metrics.rollbacks, 1);
+  assert.equal(adapter.snapshot().metrics.transactionDisposals, 1);
+  await controller.disposeAsync();
+});
+
+test("fails a staged payload digest mismatch without changing the current scene", async () => {
+  const descriptor = sessionDescriptor();
+  const adapter = new MockStagedRenderDeltaAdapter({
+    revisionId: revisionOne,
+    expectedPayloadSha256: "f".repeat(64),
+  });
+  const controller = new ViewerRenderDeltaController({
+    sourceSession: { descriptor },
+    snapshot: baseSnapshot(descriptor),
+    adapter,
+  });
+  const baseline = controller.snapshot();
+
+  await assert.rejects(
+    controller.applyCommittedAsync(delta()),
+    /digest mismatch/u,
+  );
+  assert.deepEqual(controller.snapshot(), baseline);
+  assert.equal(adapter.snapshot().revisionId, revisionOne);
+  assert.equal(adapter.snapshot().resources.stagedCpuBytes, 0);
+  assert.equal(adapter.snapshot().resources.stagedGpuBytes, 0);
+  await controller.disposeAsync();
+});
+
+test("cancels a completed prepare before commit and reclaims every staged resource", async () => {
+  const descriptor = sessionDescriptor();
+  const adapter = new MockStagedRenderDeltaAdapter({
+    revisionId: revisionOne,
+    holdPrepare: true,
+    ignoreAbortDuringPrepare: true,
+  });
+  const controller = new ViewerRenderDeltaController({
+    sourceSession: { descriptor },
+    snapshot: baseSnapshot(descriptor),
+    adapter,
+  });
+  const baseline = controller.snapshot();
+  const abortController = new AbortController();
+  const applying = controller.applyCommittedAsync(delta(), {
+    signal: abortController.signal,
+  });
+
+  await adapter.prepareStarted;
+  abortController.abort(new DOMException("cancel test", "AbortError"));
+  adapter.releasePrepare();
+  await assert.rejects(
+    applying,
+    (error) => error.name === "AbortError",
+  );
+  assert.deepEqual(controller.snapshot(), baseline);
+  assert.equal(adapter.snapshot().metrics.commits, 0);
+  assert.equal(adapter.snapshot().metrics.rollbacks, 1);
+  assert.equal(adapter.snapshot().metrics.transactionDisposals, 1);
+  assert.equal(adapter.snapshot().resources.stagedRanges, 0);
+  assert.equal(adapter.snapshot().resources.stagedWorkers, 0);
+  await controller.disposeAsync();
+});
+
+test("disposeAsync aborts in-flight preparation and terminally releases the adapter", async () => {
+  const descriptor = sessionDescriptor();
+  const adapter = new MockStagedRenderDeltaAdapter({
+    revisionId: revisionOne,
+    holdPrepare: true,
+  });
+  const controller = new ViewerRenderDeltaController({
+    sourceSession: { descriptor },
+    snapshot: baseSnapshot(descriptor),
+    adapter,
+  });
+  const applying = controller.applyCommittedAsync(delta());
+
+  await adapter.prepareStarted;
+  const rejected = assert.rejects(
+    applying,
+    (error) => error.name === "AbortError",
+  );
+  assert.throws(
+    () => controller.dispose(),
+    /disposeAsync/u,
+  );
+  assert.equal(await controller.disposeAsync(), true);
+  await rejected;
+  assert.equal(controller.disposed, true);
+  assert.equal(adapter.snapshot().disposed, true);
+  assert.deepEqual(adapter.snapshot().resources, {
+    stagedRanges: 0,
+    stagedWorkers: 0,
+    stagedCpuBytes: 0,
+    stagedGpuBytes: 0,
+    activeGpuBytes: 0,
+  });
+});
+
+test("rejects stale, out-of-order, and over-budget staged deltas before prepare", async () => {
+  const descriptor = sessionDescriptor();
+  const adapter = new MockStagedRenderDeltaAdapter({
+    revisionId: revisionOne,
+  });
+  const controller = new ViewerRenderDeltaController({
+    sourceSession: { descriptor },
+    snapshot: baseSnapshot(descriptor),
+    adapter,
+  });
+
+  for (const invalid of [
+    delta({ fromRevisionId: revisionTwo }),
+    delta({ sequence: 2 }),
+    {
+      ...delta(),
+      payload: {
+        ...delta().payload,
+        byteLength: 2 * 1024 * 1024,
+      },
+    },
+  ]) {
+    assert.throws(
+      () => controller.applyCommittedAsync(invalid),
+      (error) => error instanceof Error,
+    );
+  }
+  assert.equal(adapter.snapshot().metrics.prepares, 0);
+  assert.equal(controller.revisionId, revisionOne);
+  await controller.disposeAsync();
 });
 
 test("does not advance the source revision when consumer application fails", async () => {

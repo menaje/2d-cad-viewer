@@ -14,6 +14,7 @@ import {
   buildMaskOrderPlan,
   decodeMaskBucket,
   encodeMaskBucket,
+  MAX_GLOBAL_MASK_BUCKET,
   maskBucketBefore,
   maskBucketFor,
   maskSpanForBlock,
@@ -373,7 +374,7 @@ test("disables all masks on duplicate critical sort keys", () => {
   assert.equal(plan.diagnostics.duplicateEventKeys, 1);
 });
 
-test("disables all masks above the expanded occurrence cap", () => {
+test("accepts the complete lossless RGB draw-order bucket range", () => {
   const plan = buildMaskOrderPlan(
     makeDrawOrder([]),
     makeWipeouts([wipeout(25n, 102n)]),
@@ -383,7 +384,27 @@ test("disables all masks above the expanded occurrence cap", () => {
         handle: 10n,
         ownerHandle: 100n,
         blockIndex: 2,
-        columnCount: 10_001,
+        columnCount: MAX_GLOBAL_MASK_BUCKET,
+      }),
+    ],
+  );
+
+  assert.equal(MAX_GLOBAL_MASK_BUCKET, 32_767);
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.maximumExpandedMasks, MAX_GLOBAL_MASK_BUCKET);
+});
+
+test("disables all masks above the lossless RGB draw-order bucket range", () => {
+  const plan = buildMaskOrderPlan(
+    makeDrawOrder([]),
+    makeWipeouts([wipeout(25n, 102n)]),
+    blocks,
+    [
+      insert({
+        handle: 10n,
+        ownerHandle: 100n,
+        blockIndex: 2,
+        columnCount: MAX_GLOBAL_MASK_BUCKET + 1,
       }),
     ],
   );

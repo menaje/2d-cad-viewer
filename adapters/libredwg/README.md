@@ -162,8 +162,10 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   top-to-bottom MTEXT flow. Single-line TEXT uses its OCS plane and
   preserves both raw placement points so the Webview can apply measured
   center/right/vertical justification, while endpoint width and direction are
-  reserved for Align/Fit. Multiline ATTRIB/ATTDEF records preserve their
-  embedded MTEXT insertion point and basis;
+  reserved for Align/Fit. Attribute MTEXT type 1 remains a single-line
+  ATTRIB/ATTDEF record. Types 2 and 4 preserve their finite embedded MTEXT
+  insertion point and basis, and normalize LibreDWG 0.14's reversed embedded
+  extent members to Scene Cache width/height semantics;
   external image baselines for every OCS/justification combination remain
   open in GitHub issues #5 and #7.
 

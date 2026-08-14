@@ -496,6 +496,35 @@ test("preserves saved presentation controls and XREF load state", async () => {
   );
 });
 
+test("normalizes embedded MTEXT attributes without reclassifying single-line records", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.equal(
+    sceneCacheSource.match(
+      /if \(text->mtext_type > 1\)\s+source->flags \|= TEXT_FLAG_MULTILINE;/gu,
+    )?.length,
+    2,
+  );
+  assert.equal(
+    sceneCacheSource.match(
+      /if \(text->mtext_type > 1\)\s+copy_embedded_mtext \(source, &text->mtext\);/gu,
+    )?.length,
+    2,
+  );
+  assert.match(
+    sceneCacheSource,
+    /source->extents_width[\s\S]*?mtext->extents_height[\s\S]*?source->extents_height[\s\S]*?mtext->extents_width/u,
+  );
+  assert.match(sceneCacheSource, /direction_length > 1\.0e-12/u);
+  assert.match(
+    sceneCacheSource,
+    /mtext->column_type == 1 \? \(int32_t\)mtext->numfragments/u,
+  );
+});
+
 test("extracts bounded bitmap and composite EMF previews from OLE frames", async () => {
   const sceneCacheSource = await readFile(
     path.join(import.meta.dirname, "libredwg_scene_cache.c"),

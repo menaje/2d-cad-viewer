@@ -114,12 +114,12 @@ protocol compatibility window를 기록하고, consumer는 자신의 lockfile과
 compatibility manifest에서 exact artifact를 pin한다. 0.x 범위를 벗어나는
 호환 주장은 cross-repository fixture 없이 하지 않는다.
 
-상호작용 중 detail streaming pause/resume lifecycle은 0.1.2 이후 개발 소스로
-별도 qualification한다. 이 소스 artifact는 두 번 pack한 digest와 artifact-only
-consumer fixture를 통과하지만 `publishedInDistribution: false`이며, immutable
-`viewer-core-v0.1.2` artifact를 교체하거나 새 package가 배포됐다는 뜻이
-아니다. 새 tag와 package publication은 별도 version 및 promotion 승인이
-있을 때만 수행한다.
+상호작용 중 detail streaming pause/resume과 async staged Render Delta
+lifecycle은 Viewer Core 0.1.3 개발 소스로 별도 qualification한다. 이 source
+artifact는 두 번 pack한 digest와 artifact-only consumer fixture를 통과하지만
+`publishedInDistribution: false`이며, immutable `viewer-core-v0.1.2` artifact를
+교체하거나 새 package가 배포됐다는 뜻이 아니다. 새 tag와 package publication은
+별도 promotion 승인이 있을 때만 수행한다.
 
 ## Extraction 순서
 
@@ -195,6 +195,14 @@ vertex handle, HATCH/POINT/SOLID/3DFACE/WIPEOUT의 압축 identity-range
 sidecar와 Canvas text의 source-scoped handle filter를 통해 cached draw
 range로 적용한다. 따라서 Scene Cache buffer를 수정하지 않으며 preview
 rollback과 promotion은 같은 native identity/pick map을 사용한다.
+비동기 GPU/worker consumer는 기존 wire shape를 유지하고 additive staged
+adapter lifecycle을 사용한다. `prepareDelta()`는 current scene을 건드리지 않고
+CPU/GPU/range/worker 자원을 준비한 뒤 `commit()`, `rollback()`, `dispose()`
+transaction을 반환한다. Core는 stale·budget·ordering을 prepare 전에 거부하고,
+prepare 뒤에는 cancellation과 controller lifecycle을 다시 확인한다. 동기
+`commit()` 성공 시 geometry와 pick/identity revision이 함께 전환되며 실패나
+취소에서는 rollback/dispose가 완료될 때까지 transaction을 해제하지 않는다.
+기존 동기 `applyDelta()` consumer는 그대로 호환된다.
 direct INSERT transform은 block geometry를 복제하지 않고 root/XREF의
 addressed packed occurrence display/measurement matrix만 희소 교체한다.
 direct INSERT style은 같은 occurrence의 resolved color/layer/opacity/

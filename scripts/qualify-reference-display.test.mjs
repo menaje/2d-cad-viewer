@@ -13,7 +13,7 @@ import {
   describeBrowserEvidence,
   describeJpeg,
   describePng,
-  displayParityQualificationStatus,
+  referenceDisplayQualificationStatus,
   layoutAnnotationVisibilitySummary,
   layoutPaperSpaceLinetypeScaleSummary,
   parseArguments,
@@ -287,24 +287,21 @@ test("requires the complete Browser display matrix", () => {
   );
 });
 
-test("promotes qualification status only after every external gate closes", () => {
-  const complete = {
-    annotationComplete: true,
-    browserComplete: true,
-    pairsComplete: true,
-    windowsComplete: true,
-    xrefComplete: true,
-  };
+test("does not make proprietary or platform observations a display completion gate", () => {
   assert.equal(
-    displayParityQualificationStatus(complete),
+    referenceDisplayQualificationStatus(),
     "pass-with-explicit-boundaries",
   );
-  for (const key of Object.keys(complete)) {
-    assert.equal(
-      displayParityQualificationStatus({ ...complete, [key]: false }),
-      "pass-with-explicit-external-gates",
-    );
-  }
+  assert.equal(
+    referenceDisplayQualificationStatus({
+      annotationComplete: false,
+      browserComplete: false,
+      pairsComplete: false,
+      windowsComplete: false,
+      xrefComplete: false,
+    }),
+    "pass-with-explicit-boundaries",
+  );
 });
 
 test("requires an AutoCAD loaded, unloaded and unresolved XREF matrix", () => {

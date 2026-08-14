@@ -439,7 +439,7 @@ Each kind-22 record is 336 bytes:
 | 280 | `i16` | line-spacing style |
 | 282 | `i16` | generation flags |
 | 284 | `i16` | attribute field length |
-| 286 | `i16` | embedded-MTEXT type |
+| 286 | `i16` | attribute text type: 0 legacy, 1 single-line, 2 multiline ATTRIB, 4 multiline ATTDEF |
 | 288 | `i32` | line count |
 | 292 | `i32` | column type |
 | 296 | `i32` | column count |
@@ -450,7 +450,7 @@ Each kind-22 record is 336 bytes:
 | 328 | `u64` | column-height count |
 
 Text flag bits are 0 alignment point present, 1 rectangle height present, 2
-annotative, 3 multiline, 4 position locked and 5 really locked. Column flag
+annotative, 3 multiline (attribute type 2 or 4), 4 position locked and 5 really locked. Column flag
 bits are 0 automatic height and 1 reversed flow. Kind 23 is a packed `f64`
 pool; every offset/count pair is range-checked.
 

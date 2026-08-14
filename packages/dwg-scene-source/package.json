@@ -36,6 +36,6 @@
     "@menaje/viewer-render-protocol": "0.1.2"
   },
   "devDependencies": {
-    "@menaje/viewer-core": "0.1.2"
+    "@menaje/viewer-core": "0.1.3"
   }
 }

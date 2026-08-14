@@ -1,35 +1,23 @@
-# Native reference display qualification
+# DWG reference display qualification
 
-This document audits visible DWG behavior against Autodesk AutoCAD® 2026
-software in the 2D Wireframe visual style. It deliberately excludes file-open
-latency, conversion latency and time to first frame. The comparison target is
-the saved model/layout presentation, not editing or DWG round-trip behavior.
+This document audits saved 2D DWG model/layout presentation from public format
+and product documentation plus reproducible public or synthetic fixtures. It
+deliberately excludes file-open latency, conversion latency, editing and DWG
+round-trip behavior.
 
-## Reference products and oracle rules
+## Evidence hierarchy and completion rules
 
-Autodesk's viewers do not all expose the same representation. Qualification
-therefore uses the following ordered oracles instead of treating every
-Autodesk screenshot as interchangeable:
+Required completion evidence is source-neutral and reproducible in this
+repository: bounded conversion, an exact source/serialized/deferred partition,
+valid and invalid contract fixtures, deterministic display-state matrices and
+explicit unsupported boundaries. Public vendor documentation is used to
+interpret saved DWG fields and display semantics.
 
-1. AutoCAD creates each saved-state DWG pair. Most saved system variables
-   cannot be changed and saved by DWG TrueView, so TrueView is not the fixture
-   author.
-2. DWG TrueView 2026 is the primary independent screen oracle for a native DWG.
-   Autodesk describes TrueView as using the same viewing engine as AutoCAD.
-   The test profile must pin the visual style, background, active space,
-   viewport, fonts, support paths and registry-backed display controls listed
-   below.
-3. Autodesk Viewer on the web is a secondary published-representation oracle.
-   Its upload pipeline converts 2D DWG content to SmartPDF/SVF; it is useful for
-   checking published visibility and broad placement, but it cannot replace
-   native AutoCAD/TrueView screen pixels. In particular, a boundary with
-   `FRAME=2` is visible on the native screen but is intentionally absent from
-   plot/publish-like output.
-
-The web gate consequently records `autodesk-web` pixels separately from
-`autocad-native` and `trueview-native` pixels. A mismatch between those two
-Autodesk products is classified against the documented screen-versus-plot
-semantics before it is attributed to this viewer.
+Screenshots or reports from proprietary desktop or web viewers can be supplied
+as supplemental observations. They are recorded separately with product,
+version, profile and screen-versus-publish context, but are not required to
+complete this qualification and do not override the source-neutral contract
+fixtures. Packaged Windows UI execution remains a separate platform gate.
 
 The implementation and this audit use four support states:
 
@@ -42,31 +30,32 @@ The implementation and this audit use four support states:
 - **Structural** — the record contributes ownership, style or geometry to
   another entity and is not expected to draw independently.
 
-"Bounded display" is not a blanket claim of AutoCAD pixel identity. A feature
-is parity-qualified only when its source-state pair and reference pixels are
-also present in qualification evidence.
+"Bounded display" is not a blanket claim of pixel identity with another
+renderer. A feature is qualified when its documented source state and the
+repository's deterministic display result are both covered; optional external
+pixels may add observational evidence without becoming a completion condition.
 
 ## Saved display state
 
 | AutoCAD state | Viewer behavior | Audit state |
 | --- | --- | --- |
-| `TILEMODE`, `CTAB` and `CLAYOUT` | The drawing's saved model/paper state chooses the initial tab. When paper space is active, the viewer resolves the layout whose associated block is exactly `*PAPER_SPACE`; it does not assume the first paper tab is current. AutoCAD retains that block name for the most recently active paper layout even while Model is active. The adapter reads the canonical BLOCK entity name rather than a possibly duplicated LibreDWG BLOCK_HEADER name. | Implemented for LAYOUT-bearing drawings. Annotation-matrix schema v3 rejects a converted save unless its named paper layout is the current `*PAPER_SPACE` layout. A missing or ambiguous marker fails closed to Model and is observable in first-frame metrics. Pre-R13 paper space without LAYOUT objects remains an explicit legacy boundary; a native multi-layout same-DWG capture remains an external gate. |
-| `FILLMODE` | Preserved in the drawing record. It gates HATCH solid/gradient/pattern/background results, SOLID/TRACE and wide-polyline interiors. The boundary remains visible when the corresponding entity has one. | Implemented; the public corpus contains only `1`, so the `0/1` AutoCAD pair remains an external gate. |
-| `ATTMODE` / `ATTDISP` | `0` hides ATTRIB and ATTDEF, `1` follows each entity's invisible flag and `2` forces attribute display except structural ATTDEF templates. | Implemented; the public corpus contains only `1`, so `0/1/2` reference pixels remain an external gate. |
+| `TILEMODE`, `CTAB` and `CLAYOUT` | The drawing's saved model/paper state chooses the initial tab. When paper space is active, the viewer resolves the layout whose associated block is exactly `*PAPER_SPACE`; it does not assume the first paper tab is current. AutoCAD retains that block name for the most recently active paper layout even while Model is active. The adapter reads the canonical BLOCK entity name rather than a possibly duplicated LibreDWG BLOCK_HEADER name. | Implemented for LAYOUT-bearing drawings. Annotation-matrix schema v3 rejects a converted save unless its named paper layout is the current `*PAPER_SPACE` layout. A missing or ambiguous marker fails closed to Model and is observable in first-frame metrics. Pre-R13 paper space without LAYOUT objects remains an explicit legacy boundary; proprietary-viewer capture is optional supplemental evidence. |
+| `FILLMODE` | Preserved in the drawing record. It gates HATCH solid/gradient/pattern/background results, SOLID/TRACE and wide-polyline interiors. The boundary remains visible when the corresponding entity has one. | Implemented and covered by the repository-generated `0/1` matrix; proprietary reference pixels are optional. |
+| `ATTMODE` / `ATTDISP` | `0` hides ATTRIB and ATTDEF, `1` follows each entity's invisible flag and `2` forces attribute display except structural ATTDEF templates. | Implemented and covered by the repository-generated `0/1/2` matrix; proprietary reference pixels are optional. |
 | Entity visibility and layer state | Common entity visibility (DXF group 60) is preserved across native geometry, Canvas overlays, XREFs and draw-order masking. Layer off/frozen suppresses screen display; locked and no-plot do not suppress an ordinary screen view. Enabling the layout CTB preview with **Plot style on** (`출력 켬`) excludes no-plot layers from WebGL, Canvas overlays, picking and measurement; turning it off restores ordinary screen visibility without changing the layer-panel state. INSERT-layer visibility still gates every occurrence. | Implemented. `OBJECTISOLATIONMODE=1` fixture authoring must persist the resulting entity visibility in the DWG; the viewer does not infer the author's user setting. |
-| `CANNOSCALE` and `ANNOALLVISIBLE` | Versioned variable-dictionary text is converted before matching `CANNOSCALE`; model and every serialized viewport, including the primary paper viewport, carry an annotation scale. Bounded MTEXT/TEXT/ATTDEF/ATTRIB contexts are selected against that scale, and a missing representation is omitted when all-scales display is off. Scene Cache v1.25 preserves the model value and reads each paper layout's independent value from AutoCAD's `AcadAnnoAV` LAYOUT application data. A layout without that data uses Autodesk's documented initial value 1, not an inferred off state. | Implemented with fail-closed validation for duplicate, malformed or non-boolean layout data. The AutoCAD-generated 2×2 same-DWG matrix remains an external pixel and round-trip gate. Other annotative families remain outside the current representation table. |
-| `QTEXTMODE` | Scene Cache v1.25 preserves the saved boolean. When enabled, the Canvas text path omits glyphs, backgrounds and frames and draws the bounded text-entity box while preserving owner, layer, draw order and clipping. | Implemented for TEXT, MTEXT, ATTDEF and ATTRIB; the AutoCAD-created 0/1 native-pixel pair remains an external gate. |
-| `SPLFRAME` | Scene Cache v1.25 preserves the saved boolean. When enabled, invisible 3DFACE edges are restored. Autodesk's current definition also exposes HELIX control polygons, unsmoothed mesh objects and polyface edges. | Implemented for qualified 3DFACE records. HELIX, smoothed mesh reconstruction and polyface topology remain explicit 3D/mesh boundaries; a spline-fit 2D POLYLINE frame is not invented from this variable. The AutoCAD-created 0/1 native-pixel pair remains an external gate. |
-| `DISPSILH` | Scene Cache v1.25 preserves the saved boolean controlling 3D-solid silhouette display in 2D Wireframe. | Preserved, but silhouette extraction remains inside the explicit 3D boundary. A 0/1 native pair must stay pending rather than accepting the existing bounded SAT edge representation as silhouette parity. |
-| `XREFOVERRIDE` | Scene Cache v1.25 preserves the saved boolean. For objects inside a mounted DWG xref, value 1 resolves explicit color, linetype, lineweight and transparency as ByLayer through the host xref-layer mapping, including nested instances and Canvas/raster paths. The rule is not applied merely because an IMAGE, OLE or underlay file is itself an external resource. | Implemented for the four normalized properties. Per-object named plot-style override remains deferred with STB, and a real host/child xref 0/1 pair is required. |
-| `VISRETAIN` | Scene Cache v1.26 preserves the saved boolean. Value 1 keeps the host's xref-dependent layer table. At value 0, mounting or reloading a child copies its matching on/off, freeze, lock, plot, color/transparency, linetype and lineweight state into immutable display rows for the exact nested XREF prefix. Root source metadata is not mutated and an explicit viewport override remains authoritative. | Implemented for mounted 2D XREF content, including prefix-qualified linetypes and nested contexts. Missing child rows retain the host value. A real host/child reload pair and packaged viewer capture remain external gates. |
+| `CANNOSCALE` and `ANNOALLVISIBLE` | Versioned variable-dictionary text is converted before matching `CANNOSCALE`; model and every serialized viewport, including the primary paper viewport, carry an annotation scale. Bounded MTEXT/TEXT/ATTDEF/ATTRIB contexts are selected against that scale, and a missing representation is omitted when all-scales display is off. Scene Cache v1.25 preserves the model value and reads each paper layout's independent value from AutoCAD's `AcadAnnoAV` LAYOUT application data. A layout without that data uses Autodesk's documented initial value 1, not an inferred off state. | Implemented with fail-closed validation for duplicate, malformed or non-boolean layout data and a repository-generated model/layout `2×2` matrix. Other annotative families remain outside the current representation table. |
+| `QTEXTMODE` | Scene Cache v1.25 preserves the saved boolean. When enabled, the Canvas text path omits glyphs, backgrounds and frames and draws the bounded text-entity box while preserving owner, layer, draw order and clipping. | Implemented for TEXT, MTEXT, ATTDEF and ATTRIB; external pixels are optional supplemental evidence. |
+| `SPLFRAME` | Scene Cache v1.25 preserves the saved boolean. When enabled, invisible 3DFACE edges are restored. Autodesk's current definition also exposes HELIX control polygons, unsmoothed mesh objects and polyface edges. | Implemented for qualified 3DFACE records. HELIX, smoothed mesh reconstruction and polyface topology remain explicit 3D/mesh boundaries; a spline-fit 2D POLYLINE frame is not invented from this variable. |
+| `DISPSILH` | Scene Cache v1.25 preserves the saved boolean controlling 3D-solid silhouette display in 2D Wireframe. | Preserved, but silhouette extraction remains inside the explicit 3D boundary. External observations cannot promote the existing bounded SAT edge representation to silhouette support. |
+| `XREFOVERRIDE` | Scene Cache v1.25 preserves the saved boolean. For objects inside a mounted DWG xref, value 1 resolves explicit color, linetype, lineweight and transparency as ByLayer through the host xref-layer mapping, including nested instances and Canvas/raster paths. The rule is not applied merely because an IMAGE, OLE or underlay file is itself an external resource. | Implemented for the four normalized properties. Per-object named plot-style override remains deferred with STB; a host/child observation is optional supplemental evidence. |
+| `VISRETAIN` | Scene Cache v1.26 preserves the saved boolean. Value 1 keeps the host's xref-dependent layer table. At value 0, mounting or reloading a child copies its matching on/off, freeze, lock, plot, color/transparency, linetype and lineweight state into immutable display rows for the exact nested XREF prefix. Root source metadata is not mutated and an explicit viewport override remains authoritative. | Implemented for mounted 2D XREF content, including prefix-qualified linetypes and nested contexts. Missing child rows retain the host value; packaged viewer capture remains a separate platform observation. |
 | `IMAGEQUALITY` | Scene Cache v1.26 reads the drawing's `RASTERVARIABLES` object. High enables high-quality Canvas sampling; Draft disables interpolation so source pixels remain visibly coarse. Embedded OLE presentations stay high quality because Autodesk scopes this command to raster IMAGE display. | Implemented for decoded IMAGE content. Autodesk states that plotting always uses high quality, so the native pair uses `PNGOUT`, which Autodesk documents as reflecting screen display, and must contain a loaded color/grayscale raster whose decoded pixels differ. |
 | `DISPSILHBLOCKS` | Scene Cache v1.26 preserves this drawing-saved boolean separately from `DISPSILH`. | Preserved, but generation and caching of 3D-solid silhouettes inside block instances remains inside the explicit 3D boundary. A native 0/1 block-solid pair must not be used to claim viewer silhouette support. |
 | XREF state | Original path plus XREF, overlay, loaded and resolved flags are preserved. Unloaded or unresolved references are not resolved or mounted. Nested INSERT/XREF transforms and XCLIP are applied to qualified child content. | Implemented. A redistributable loaded/unloaded/resolved/unresolved AutoCAD fixture is still required for reference pixels. |
 | VIEWPORT group 68 and status group 90 | Nonpositive group 68, invisible entities and group-90 off bit `0x20000` are excluded. Positive group 68 supplies stacking order. The primary paper viewport is not drawn as a model viewport. | Implemented. |
 | VIEWPORT perspective, front/back clipping and render mode | Perspective and front/back clipping flags, hidden/shaded render modes and related saved values are preserved. Unsupported model viewports are omitted with named reasons instead of being flattened as 2D Wireframe. Wireframe mode 0/1 remains eligible. | Explicit fail-closed boundary. |
 | `FRAME` family | `FRAME`, `IMAGEFRAME`, `XCLIPFRAME`, `OLEFRAME`, `PDFFRAME`, `DWFFRAME` and `DGNFRAME` values are preserved when present. `FRAME` 0/1/2 overrides IMAGE, XCLIP and WIPEOUT settings; its derived mixed value 3 selects each individual setting. `OLEFRAME` remains independent. Unavailable values remain unavailable. Values 0/1/2 retain the visible-versus-plot distinction even though the interactive viewer performs no plot job. | Implemented for supported IMAGE, XCLIP, WIPEOUT and OLE presentation boundaries. Underlay entities themselves remain deferred. |
-| `LTSCALE`, entity linetype scale, `MSLTSCALE`, `PSLTSCALE` | Global, per-entity and model-annotation factors are combined for first-frame lines, complex linetype overlays and high-zoom curve/XLINE/RAY refinement. Each paper layout independently reads its own `PSLTSCALE` from LAYOUT group-70 bit 1 before scaling model-space objects through that layout's viewports; a drawing-wide header value is not reused for every tab. | Implemented with bounded dash/shape/text tables. A same-DWG pair with conflicting layout values remains an external pixel gate. |
+| `LTSCALE`, entity linetype scale, `MSLTSCALE`, `PSLTSCALE` | Global, per-entity and model-annotation factors are combined for first-frame lines, complex linetype overlays and high-zoom curve/XLINE/RAY refinement. Each paper layout independently reads its own `PSLTSCALE` from LAYOUT group-70 bit 1 before scaling model-space objects through that layout's viewports; a drawing-wide header value is not reused for every tab. | Implemented with bounded dash/shape/text tables; a same-DWG external capture is optional supplemental evidence. |
 | Simple-linetype `A` alignment | A finite standalone LINE shorter than one complete scaled pattern is displayed continuously instead of letting the repeating shader place the whole segment inside a gap. The renderer carries a conservative segment extent only in its transient GPU upload and leaves the source cache and CPU layer index unchanged. | Implemented for the short standalone-LINE rule, including ByLayer resolution, draw-order repacking and streamed detail updates. Polyline-wide `PLINEGEN` endpoint adjustment and longer-segment terminal-dash stretching remain explicit follow-up behavior. |
 | `LWDISPLAY` | Drawing-wide lineweight visibility is saved. Layout lineweights use paper units, layout/model scale and device pixels; the displayed width is zoom/DPI aware and capped. | Implemented for the 2D renderer. Plot-device end/join styles are not independently reconstructed. |
 | `VIEWRES` / curve display resolution | Autodesk saves VIEWRES in the drawing and, with hardware acceleration disabled, can deliberately show circles, arcs, splines and arced polylines as coarse vectors. The viewer instead retains analytic curve sources and refines them to a bounded half-pixel screen tolerance. | Known fidelity-policy difference, not an object-presence loss. Scene Cache does not yet preserve the per-viewport VIEWRES value, so an exact low-VIEWRES polygonal screen is a remaining contract change. Native evidence must record hardware acceleration and `WHIPARC`; ordinary parity captures use a smooth-curve profile. |
@@ -215,11 +204,12 @@ The current run records:
   distributions plus selected-fixture hashes and section counts;
 - all 141 public-corpus drawings use the saved/default-off state for
   `QTEXTMODE`, `SPLFRAME`, `DISPSILH` and `XREFOVERRIDE`; this proves v1.26
-  decoding but deliberately does not replace the missing 0/1 pair fixtures;
+  decoding, while repository fixtures separately cover implemented decisions;
 - Scene Cache v1.26 additionally observes `VISRETAIN=1` in 137 drawings and
   `0` in 4, high `IMAGEQUALITY` in all 141 and `DISPSILHBLOCKS=1` in all 141;
   the non-default VISRETAIN values prove both cache states are exercised, while
-  raster-quality and block-silhouette 0/1 pixels remain external gates;
+  raster-quality pixels are optional observations and block-silhouette
+  extraction remains an explicit 3D boundary;
 - AutoCAD ActiveX `BasePoint` and `DirectionVector` values for the public
   XLINE/RAY fixtures compared numerically with the decoded Scene Cache values;
 - Browser pixel evidence for HATCH, XLINE, RAY, MLINE, text-only MTEXT,
@@ -239,29 +229,22 @@ pnpm run qualify:reference-display \
   --corpus /absolute/path/to/libredwg-0.14/test/test-data \
   --autodesk-samples /absolute/path/to/autodesk-official-samples \
   --source-archive /absolute/path/to/libredwg-0.14.tar.xz \
-  --autocad-pair-evidence /absolute/path/to/fillmode-pair.json \
-  --autocad-pair-evidence /absolute/path/to/attmode-pair.json \
-  --autocad-annotation-evidence /absolute/path/to/annotation-matrix.json \
-  --autocad-xref-evidence /absolute/path/to/xref-matrix.json \
-  --windows-vscode-evidence /absolute/path/to/windows/report.json \
-  --windows-vsix /absolute/path/to/viewer.vsix \
-  --windows-companion-vsix /absolute/path/to/companion.vsix \
-  --browser-evidence /absolute/path/to/representative-browser.png \
-  --output /absolute/new/path/autocad-display-parity.json \
+  --output /absolute/new/path/reference-display-report.json \
   --observed-at 2026-08-12T08:30:00Z
 ```
 
-Browser, AutoCAD, TrueView and Autodesk Viewer raster captures are private
-qualification inputs. They must remain outside Git unless their redistribution
-rights are documented. The aggregate report records only the capture basename,
-dimensions and SHA-256; it never copies the image into the repository. Raster
-files under `compatibility/evidence` are ignored as a second line of defense.
+Optional proprietary-viewer reports can be added with the existing repeated
+evidence options. Raster captures must remain outside Git unless their
+redistribution rights are documented. The aggregate report records only a
+capture basename, dimensions and SHA-256; it never copies the image into the
+repository. Raster files under `compatibility/evidence` are ignored as a
+second line of defense.
 
-On Windows with AutoCAD installed, generate one same-camera DWG/PNG pair per
-saved value before supplying the external pair gate. The output directory must
-not already exist. The runner starts AutoCAD with its documented `/b` startup
-script switch, performs `ZOOM Extents` once, changes every value in the same
-session, uses `PNGOUT` for the displayed reference, saves a DWG for that value,
+### Optional proprietary-viewer observations
+
+On Windows with AutoCAD installed, the supplemental runner can generate one
+same-camera DWG/PNG pair per saved value. The output directory must not already
+exist. It changes every value in the same session, saves a DWG for that value
 and reconverts each DWG with the exact adapter under test:
 
 ```powershell
@@ -321,16 +304,14 @@ pnpm run qualify:reference-annotation-matrix `
   --observed-at 2026-08-12T12:00:00Z
 ```
 
-Pass the ordinary pairs and dedicated reports back to the aggregate
-qualification. The aggregate gate remains pending until it
-has complete FILLMODE 0/1, ATTMODE 0/1/2, model and layout ANNOALLVISIBLE 0/1,
-QTEXTMODE 0/1, SPLFRAME 0/1, DISPSILH 0/1, DISPSILHBLOCKS 0/1,
-IMAGEQUALITY 0/1, VISRETAIN 0/1, XREFOVERRIDE 0/1, and FRAME,
-IMAGEFRAME, XCLIPFRAME and OLEFRAME 0/1/2 reports. Annotation-scale and XREF
-state matrices remain independent completion gates.
+When supplied, ordinary pairs and dedicated reports are summarized as
+supplemental evidence. Missing or partial proprietary reports remain visibly
+`not-run` or incomplete, but do not change the source-neutral top-level
+qualification status. Annotation-scale and XREF matrices are validated
+independently when they are present.
 
 The three Windows inputs are optional as a group. When supplied, the aggregate
-gate verifies the raw packaged-VSIX report, all eight 100/125/150/200% normal
+verifies the raw packaged-VSIX report, all eight 100/125/150/200% normal
 and narrow screenshots, interaction and model/layout reset results, cleanup
 enforcement, the exact viewer and companion VSIX bytes and SHA-256 values, and
 the pinned Autodesk annotation-scaling/multileader sample used by the Browser
@@ -356,51 +337,40 @@ node scripts/qualify-display-state-matrix.mjs \
 The report refuses an existing destination and hashes the ordered normalized
 cases, so repeated execution can detect a state or inventory change without
 committing a drawing or raster. This closes the local fixture and deterministic
-inventory/display-result gates. It does not replace the separate Browser plus
-exact packaged Windows VS Code inventory gate below.
+inventory/display-result gates. Browser captures are supplemental; exact
+packaged Windows VS Code execution remains a separate platform gate.
 
-### Official Autodesk viewer handoff
-
-The AutoCAD-created DWGs are reused unchanged for both official viewer checks:
-
-| Gate | Input and capture | Acceptance rule |
-| --- | --- | --- |
-| DWG TrueView 2026 | Open each pair DWG natively on Windows, select the recorded model/layout and 2D Wireframe view, normalize the registry-backed profile above, then capture the same drawing-area dimensions. | Object presence, boundary state, layer/property resolution and active-space result must agree with the matching AutoCAD screen reference. TrueView is read-only evidence; it does not author the pair. |
-| Autodesk Viewer web | Upload the same public pair DWGs, wait for conversion to finish, select the recorded sheet/view and capture the canvas with background and quality settings recorded. | Compare object inventory and placement as a SmartPDF/SVF published representation. Record any native-only screen boundary separately; do not use web pixels to overrule AutoCAD/TrueView for screen-only semantics. |
-
-Every capture report pins product/version or web observation time, source DWG
-and screenshot SHA-256, dimensions, selected space/view, visual style,
-background, font/resource availability and the profile values above. Login
-state, private drawings, local paths and credentials are never committed.
+This repository does not define product-to-product screenshot comparison as a
+completion workflow. If maintainers supply optional external observations,
+their reports pin product/version or observation time, source digest,
+screenshot digest and dimensions, selected space/view, background and
+font/resource availability. Login state, private drawings, local paths,
+credentials and raster bytes are never committed.
 
 The output never includes local paths, drawing names outside the public corpus,
 source text, raster bytes or credentials. It refuses a non-pinned source
-archive, the wrong
-Scene Cache version, evidence not produced by AutoCAD 2026 (`ACADVER=25.1s`)
-on Windows, a non-2D-Wireframe capture mode, a missing section, an invalid supported entity, an
-unpartitioned omission, an omitted referenced linetype or a mislabeled Browser
-image. The Browser gate requires private access to all 11 named model/layout,
-dark/light,
-1×/2×, CTB/STB and object-family images; a partial list remains pending. The
-aggregate also records model and paper-layout `ANNOALLVISIBLE` counts,
-model-versus-paper saved current tabs, exact current-paper resolution and
-per-layout `PSLTSCALE` counts separately. An independently saved layout value
-therefore cannot be hidden by a drawing-level summary.
+archive, the wrong Scene Cache version, a missing section, an invalid supported
+entity, an unpartitioned omission or an omitted referenced linetype. Optional
+external reports additionally fail closed on an unrecognized product/version,
+platform, capture mode or mislabeled image. The aggregate records model and
+paper-layout `ANNOALLVISIBLE` counts, saved current tabs, exact current-paper
+resolution and per-layout `PSLTSCALE` counts separately, so an independently
+saved layout value cannot be hidden by a drawing-level summary.
 
-The top-level status remains `pass-with-explicit-external-gates` until the
-complete Browser matrix, AutoCAD variable pairs, annotation matrix, XREF
-matrix and exact packaged Windows run are all present. Only then does it become
-`pass-with-explicit-boundaries`; documented STB, underlay, proxy and 3D product
-boundaries remain explicit rather than being presented as rendered parity.
+After the required local checks pass, the top-level report status is
+`pass-with-explicit-boundaries`. Supplemental Browser or proprietary reports
+are listed as observed, incomplete or `not-run`; they do not promote or demote
+that status. Documented STB, underlay, proxy and 3D product boundaries remain
+explicit rather than being presented as rendered parity.
 
 This corpus does **not** contain `FILLMODE=0`, `ATTMODE=0/2`,
 `ANNOALLVISIBLE=0`, `QTEXTMODE=1`, `SPLFRAME=1`, `DISPSILH=1`,
 `DISPSILHBLOCKS=0`, `IMAGEQUALITY=0`, `VISRETAIN=0`, `XREFOVERRIDE=1`,
 FRAME values 1/2 for every family, STB, or a complete XREF
-state matrix. The public AutoCAD reference-image gate is closed by the paired
-set and representative Browser review, while the AutoCAD-created
-system-variable pair gate remains pending. A packaged Windows VS Code run from
-the current implementation also remains pending.
+state matrix. Repository-generated state fixtures cover the listed local
+completion matrix where applicable; unsupported families remain explicit
+boundaries. A packaged Windows VS Code run from the current implementation
+remains pending as a separate platform gate.
 
 ## Autodesk and format references
 

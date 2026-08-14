@@ -1,10 +1,10 @@
 {
   "schema": "menaje-viewer-core-compatibility/1",
   "status": "public-preview",
-  "asOf": "2026-08-13",
+  "asOf": "2026-08-14",
   "viewerCore": {
     "package": "@menaje/viewer-core",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "api": "menaje-viewer-core/0.1"
   },
   "viewerUi": {
@@ -23,6 +23,11 @@
     "releaseStage": "prerelease",
     "tagPublicationApproved": false,
     "automaticStablePromotion": false,
+    "packageVersions": {
+      "viewerCore": "0.1.2",
+      "renderProtocol": "0.1.2",
+      "viewerUi": "0.1.2"
+    },
     "tag": "viewer-core-v0.1.2",
     "releaseUrl": "https://github.com/menaje/2d-cad-viewer/releases/tag/viewer-core-v0.1.2",
     "registry": "https://npm.pkg.github.com",
@@ -75,7 +80,7 @@
     "serviceIdentity": "revision-bound-core-hook-and-conformance",
     "serviceEvents": "ordered-revision-and-diagnostic-streams-with-last-successful-snapshot-preservation-and-intent-only-host-events",
     "layerComposition": "source-neutral-2d-3d-semantic-base-live-diff-diagnostic-ordering-with-atomic-rollback",
-    "renderDelta": "atomic-overlay-state-with-dwg-line-fill-point-text-instance-transform-style-upsert-bounded-nested-instance-propagation-native-base-suppression-scoped-and-bounded-dependency-invalidation-revision-bound-pick-filtering-and-retryable-resource-cleanup",
+    "renderDelta": "backward-compatible-sync-apply-plus-async-prepare-atomic-geometry-pick-commit-with-bounded-rollback-disposal",
     "renderDiff": "changed-id-only-added-removed-modified-unchanged-net-summary",
     "diffOverlay": "bounded-revision-bound-status-style-policy-with-dwg-line-fill-point-canvas-text-and-shared-insert-occurrence-presentation-source-intersected-visibility-child-precedence-and-retryable-application",
     "diffSemantic": "revision-bound-diff-open-host-hook-with-bounded-identity-and-dependency-projection",
@@ -91,6 +96,7 @@
     "viewerServiceEvents": "packages/viewer-core/test/service-event-controller.test.mjs",
     "viewerLayerComposition": "packages/viewer-core/test/layer-composition-controller.test.mjs",
     "viewerRenderDelta": "packages/viewer-core/test/render-delta-controller.test.mjs",
+    "viewerRenderDeltaStaged": "packages/viewer-core/test/render-delta-controller.test.mjs",
     "viewerRenderDeltaLargeQualification": "packages/viewer-core/test/render-delta-large-qualification.test.mjs",
     "viewerDiffOverlay": "packages/viewer-core/test/diff-overlay-controller.test.mjs",
     "viewerDiffSemantic": "packages/viewer-core/test/diff-semantic-controller.test.mjs",
@@ -108,6 +114,7 @@
   },
   "qualification": {
     "viewerOwnedBoundary": "passed",
+    "artifactOnlyStaged3dConsumer": "passed",
     "command": "pnpm run qualify:viewer-boundary",
     "evidence": "compatibility/evidence/viewer-boundary-0.1.2-2026-08-04.json",
     "externalConsumers": "consumer-owned"
@@ -115,21 +122,21 @@
   "developmentQualification": {
     "status": "passed",
     "publishedInDistribution": false,
-    "sourceVersion": "0.1.2",
-    "feature": "interaction-detail-pause-resume-with-cancellable-stale-load-rejection",
+    "sourceVersion": "0.1.3",
+    "feature": "interaction-detail-and-async-staged-render-delta-lifecycle",
     "command": "pnpm run qualify:viewer-boundary",
     "artifacts": {
       "viewerCore": {
-        "file": "menaje-viewer-core-0.1.2.tgz",
-        "sha256": "a693fca1bc78867b7bc7e905ddd12c5b745ae43e2bdf917dd286bb95f699ca79",
-        "bytes": 51089,
-        "contentSha256": "258af9a9dab99e6a404984296d704188925c6a93d4066fa86c057153c4ffc2f8"
+        "file": "menaje-viewer-core-0.1.3.tgz",
+        "sha256": "bf4ddaa6c90a0ebbf321ea13a08ffe0bed2b206ca0597b39be6732123457e916",
+        "bytes": 55704,
+        "contentSha256": "84e505839c3c11e503d0a4cfebd69233b314900dedcbf58c3f8734ddb33e1343"
       },
       "renderProtocol": {
         "file": "menaje-viewer-render-protocol-0.1.2.tgz",
-        "sha256": "6534ec7d021e06d3ea616ae15fb995ece57a7c3292fc37e892a28db8e2a91d42",
-        "bytes": 16424,
-        "contentSha256": "6b02978d161a61f4ed8b3453b941c13a2c6a7f2f58bb8477e980a0ab34e0d1d2"
+        "sha256": "8ce76d0760d40feb37d9431a82d14b6b128199bdd2a59714364451af07795ca8",
+        "bytes": 16635,
+        "contentSha256": "1f06a6c04ddc2b477e386015add888a933bb45466b18dcadbf68c1bb28c439b2"
       },
       "viewerUi": {
         "file": "menaje-viewer-ui-0.1.2.tgz",

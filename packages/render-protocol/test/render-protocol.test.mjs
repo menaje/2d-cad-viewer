@@ -719,6 +719,120 @@ test("normalizes atomic tombstone and bounded upsert delta operations", () => {
   );
 });
 
+test("carries retained 3D ranges and visibility through the existing opaque delta envelope", () => {
+  const session = parseRenderSessionDescriptor(
+    sessionInput({
+      capabilities: [
+        RenderCapability.LAYER_MANIFEST,
+        RenderCapability.RENDER_DELTA,
+        RenderCapability.RENDER_SNAPSHOT,
+      ],
+    }),
+  );
+  const {
+    rangeHandle: _rangeHandle,
+    ...baseLayer
+  } = snapshotInput().layers[0];
+  const threeDimensionalLayer = {
+    ...baseLayer,
+    representation: ViewerRepresentation.THREE_DIMENSIONAL,
+  };
+  const snapshot = parseRenderSnapshotDescriptor(
+    snapshotInput({ layers: [threeDimensionalLayer] }),
+    { session },
+  );
+  const operations = [
+    deltaOperation({
+      operationId: "operation:3d:geometry",
+      renderIds: ["render:3d:geometry"],
+    }),
+    deltaOperation({
+      operationId: "operation:3d:transform",
+      aspect: RenderDeltaAspect.TRANSFORM,
+      renderIds: ["render:3d:transform"],
+    }),
+    // Visibility is renderer packet state under the source-neutral STYLE
+    // aspect; no format-specific visibility field is added to the wire shape.
+    deltaOperation({
+      operationId: "operation:3d:style-visibility",
+      aspect: RenderDeltaAspect.STYLE,
+      renderIds: ["render:3d:style-visibility"],
+    }),
+    deltaOperation({
+      operationId: "operation:3d:identity",
+      aspect: RenderDeltaAspect.IDENTITY,
+      renderIds: ["render:3d:identity"],
+    }),
+    deltaOperation({
+      operationId: "operation:3d:dependency",
+      aspect: RenderDeltaAspect.DEPENDENCY,
+      renderIds: ["render:3d:dependency"],
+      dependencyIds: ["mesh:shared"],
+    }),
+    deltaOperation({
+      operationId: "operation:3d:tombstone",
+      kind: RenderDeltaOperationKind.TOMBSTONE,
+      aspect: RenderDeltaAspect.ENTITY,
+      renderIds: ["render:3d:tombstone"],
+      externalIdentityToken: null,
+    }),
+  ];
+  const parsed = parseRenderDeltaDescriptor(
+    renderDelta({
+      operations,
+      payload: deltaPayload({
+        mediaType: "application/vnd.example.retained-3d-delta",
+      }),
+    }),
+    { session, snapshot },
+  );
+
+  assert.equal(
+    parsed.payload.mediaType,
+    "application/vnd.example.retained-3d-delta",
+  );
+  assert.deepEqual(
+    parsed.operations.map((operation) => operation.aspect),
+    [
+      RenderDeltaAspect.GEOMETRY,
+      RenderDeltaAspect.TRANSFORM,
+      RenderDeltaAspect.STYLE,
+      RenderDeltaAspect.IDENTITY,
+      RenderDeltaAspect.DEPENDENCY,
+      RenderDeltaAspect.ENTITY,
+    ],
+  );
+
+  assert.throws(
+    () =>
+      parseRenderDeltaDescriptor(
+        {
+          ...renderDelta({ operations }),
+          geometryRanges: [{ byteOffset: 0, byteLength: 256 }],
+        },
+        { session, snapshot },
+      ),
+    (error) =>
+      error.code === RenderProtocolDiagnosticCode.MESSAGE_INVALID,
+  );
+  assert.throws(
+    () =>
+      parseRenderDeltaDescriptor(
+        renderDelta({
+          operations: [
+            {
+              ...operations[0],
+              primitive: "mesh",
+            },
+          ],
+        }),
+        { session, snapshot },
+      ),
+    (error) =>
+      error.code === RenderProtocolDiagnosticCode.MESSAGE_INVALID,
+  );
+});
+
 test("rejects stale, out-of-order, duplicate, and unbounded render deltas", () => {
   const session = parseRenderSessionDescriptor(
     sessionInput({

@@ -1795,11 +1795,35 @@ test("derives Align and Fit rotation from their endpoint span", () => {
   }
 });
 
+test("keeps mtext_type 1 attributes on single-line placement", () => {
+  const matrix = cadTextEntityMatrix(
+    {
+      kind: TextEntityKind.Attribute,
+      mtextType: 1,
+      insertionPoint: [1, 2, 3],
+      alignmentPoint: [9, 10, 3],
+      normal: [0, 0, 1],
+      xAxisDirection: [0, 1, 0],
+      height: 1,
+      widthFactor: 1,
+      rotation: 0,
+      obliqueAngle: 0,
+      horizontalAlignment: 2,
+      verticalAlignment: 3,
+      generationFlags: 0,
+    },
+    { flags: 0, widthFactor: 1 },
+  );
+
+  assert.deepEqual(transformPoint(matrix, [0, 0, 0]), [9, 10, 3]);
+  assert.deepEqual(transformPoint(matrix, [1, 0, 0]), [10, 10, 3]);
+});
+
 test("uses embedded MTEXT insertion and world direction for multiline attributes", () => {
   const matrix = cadTextEntityMatrix(
     {
       kind: 3,
-      mtextType: 1,
+      mtextType: 2,
       insertionPoint: [1, 2, 3],
       alignmentPoint: [9, 9, 9],
       normal: [0, 0, 1],

@@ -72,6 +72,12 @@ expiration/disposal scope를 가진 opaque binary payload로 분리됩니다. �
 atomic delta에서 같은 layer/Render ID를 두 번 변경하거나 전체 affected
 bounds 밖의 operation을 선언할 수 없습니다.
 
+동일한 envelope가 `3d` layer의 retained geometry range에도 사용됩니다.
+geometry, transform, style(가시성 포함), identity, dependency와 entity
+tombstone은 기존 aspect로 구분하고 mesh/primitive/GPU range 같은
+source-specific 필드는 payload media type 내부에 둡니다. valid/invalid 3D
+fixture가 이 경계를 검증하므로 wire protocol version은 `0.1.0` 그대로입니다.
+
 현재 계약은 snapshot/delta, preview overlay, Service revision/diagnostics
 stream 기반을 제공합니다. 실제 WebGL packet layout과 visual diff 표현은
 renderer adapter와 제품 UI가 소유합니다.

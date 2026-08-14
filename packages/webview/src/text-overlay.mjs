@@ -680,7 +680,7 @@ export function annotativeTextRecordForInstance(
 function isMTextRecord(record) {
   return (
     record.kind === TextEntityKind.MText ||
-    (Number.isInteger(record.mtextType) && record.mtextType !== 0)
+    (Number.isInteger(record.mtextType) && record.mtextType > 1)
   );
 }
 

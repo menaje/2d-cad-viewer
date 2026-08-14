@@ -30,15 +30,51 @@ function assertAdapter(value) {
   if (value === null || value === undefined) {
     return null;
   }
-  for (const method of [
+  if (typeof value?.dispose !== "function") {
+    throw new TypeError(
+      "render delta adapter must implement dispose()",
+    );
+  }
+  const synchronousMethods = [
     "applyDelta",
     "rollbackPreview",
     "promotePreview",
-    "dispose",
-  ]) {
-    if (typeof value?.[method] !== "function") {
+  ];
+  const synchronousMethodCount = synchronousMethods.filter(
+    (method) => typeof value?.[method] === "function",
+  ).length;
+  if (
+    synchronousMethodCount > 0 &&
+    synchronousMethodCount !== synchronousMethods.length
+  ) {
+    const missing = synchronousMethods.find(
+      (method) => typeof value?.[method] !== "function",
+    );
+    throw new TypeError(
+      `render delta adapter must implement ${missing}()`,
+    );
+  }
+  if (
+    synchronousMethodCount === 0 &&
+    typeof value?.prepareDelta !== "function"
+  ) {
+    throw new TypeError(
+      "render delta adapter must implement applyDelta() or prepareDelta()",
+    );
+  }
+  return value;
+}
+
+function assertPreparedDelta(value) {
+  if (!value || typeof value !== "object") {
+    throw new TypeError(
+      "render delta prepareDelta() must return a staged transaction",
+    );
+  }
+  for (const method of ["commit", "rollback", "dispose"]) {
+    if (typeof value[method] !== "function") {
       throw new TypeError(
-        `render delta adapter must implement ${method}()`,
+        `staged render delta transaction must implement ${method}()`,
       );
     }
   }
@@ -50,6 +86,56 @@ function synchronous(value, label) {
     throw new TypeError(`${label} must complete synchronously`);
   }
   return value;
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) {
+    return;
+  }
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+  throw new DOMException("render delta preparation was aborted", "AbortError");
+}
+
+function linkedAbortController(signal) {
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) {
+    abort();
+  } else {
+    signal?.addEventListener?.("abort", abort, { once: true });
+  }
+  return Object.freeze({
+    controller,
+    dispose() {
+      signal?.removeEventListener?.("abort", abort);
+    },
+  });
+}
+
+async function discardPreparedDelta(transaction, primaryError) {
+  const cleanupErrors = [];
+  for (const method of ["rollback", "dispose"]) {
+    try {
+      if (typeof transaction?.[method] !== "function") {
+        throw new TypeError(
+          `staged render delta transaction omits ${method}()`,
+        );
+      }
+      await transaction[method]();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [primaryError, ...cleanupErrors],
+      `${primaryError.message}; staged render delta cleanup failed`,
+      { cause: primaryError },
+    );
+  }
+  throw primaryError;
 }
 
 function outOfOrder(message, details = {}) {
@@ -165,8 +251,11 @@ export class ViewerRenderDeltaController {
   #committed;
   #preview = null;
   #disposed = false;
+  #closing = false;
   #limits;
   #adapter;
+  #pending = null;
+  #disposePromise = null;
 
   constructor({
     snapshot,
@@ -243,15 +332,39 @@ export class ViewerRenderDeltaController {
     return this.#disposed;
   }
 
+  get preparing() {
+    return this.#pending !== null;
+  }
+
   get revisionId() {
     this.#assertOpen();
     return (this.#preview?.state ?? this.#committed).revisionId;
   }
 
   #assertOpen() {
-    if (this.#disposed) {
+    if (this.#disposed || this.#closing) {
       throw invalidState("Viewer render delta controller is disposed");
     }
+  }
+
+  #assertIdle() {
+    if (this.#pending) {
+      outOfOrder("only one staged render delta may be prepared at a time", {
+        deltaId: this.#pending.deltaId,
+      });
+    }
+  }
+
+  #synchronousAdapterMethod(method) {
+    if (!this.#adapter) {
+      return null;
+    }
+    if (typeof this.#adapter[method] !== "function") {
+      throw new TypeError(
+        `render delta adapter does not implement synchronous ${method}()`,
+      );
+    }
+    return this.#adapter[method].bind(this.#adapter);
   }
 
   #parse(delta, state) {
@@ -331,6 +444,7 @@ export class ViewerRenderDeltaController {
 
   applyCommitted(delta) {
     this.#assertOpen();
+    this.#assertIdle();
     if (this.#preview) {
       outOfOrder(
         "a committed render delta cannot replace an active preview",
@@ -340,18 +454,89 @@ export class ViewerRenderDeltaController {
     const parsed = this.#parse(delta, this.#committed);
     const next = applyDeltaToState(this.#committed, parsed);
     this.#assertWithinLimits(next);
+    const applyDelta = this.#synchronousAdapterMethod("applyDelta");
     synchronous(
-      this.#adapter?.applyDelta(parsed, {
-        preview: false,
-      }),
+      applyDelta?.(parsed, { preview: false }),
       "render delta adapter applyDelta",
     );
     this.#committed = next;
     return this.snapshot();
   }
 
+  applyCommittedAsync(delta, { signal } = {}) {
+    this.#assertOpen();
+    this.#assertIdle();
+    throwIfAborted(signal);
+    if (this.#preview) {
+      outOfOrder(
+        "a committed render delta cannot replace an active preview",
+        { previewId: this.#preview.delta.deltaId },
+      );
+    }
+    if (typeof this.#adapter?.prepareDelta !== "function") {
+      throw new TypeError(
+        "render delta adapter does not implement prepareDelta()",
+      );
+    }
+    const parsed = this.#parse(delta, this.#committed);
+    const next = applyDeltaToState(this.#committed, parsed);
+    this.#assertWithinLimits(next);
+    const baseline = this.#committed;
+    const linkedAbort = linkedAbortController(signal);
+    const pending = {
+      deltaId: parsed.deltaId,
+      abortController: linkedAbort.controller,
+      promise: null,
+    };
+    const operation = (async () => {
+      let transaction = null;
+      let committed = false;
+      try {
+        transaction = await this.#adapter.prepareDelta(parsed, {
+          preview: false,
+          signal: linkedAbort.controller.signal,
+        });
+        assertPreparedDelta(transaction);
+        throwIfAborted(linkedAbort.controller.signal);
+        this.#assertOpen();
+        if (
+          this.#committed !== baseline ||
+          this.#preview !== null ||
+          this.#pending !== pending
+        ) {
+          outOfOrder(
+            "render delta state changed while preparation was in flight",
+            { deltaId: parsed.deltaId },
+          );
+        }
+        synchronous(
+          transaction.commit(),
+          "staged render delta transaction commit",
+        );
+        committed = true;
+        this.#committed = next;
+        return this.snapshot();
+      } catch (error) {
+        if (transaction && !committed) {
+          return discardPreparedDelta(transaction, error);
+        }
+        throw error;
+      } finally {
+        linkedAbort.dispose();
+      }
+    })();
+    this.#pending = pending;
+    pending.promise = operation.finally(() => {
+      if (this.#pending === pending) {
+        this.#pending = null;
+      }
+    });
+    return pending.promise;
+  }
+
   applyPreview(delta) {
     this.#assertOpen();
+    this.#assertIdle();
     if (this.#preview) {
       outOfOrder("only one render preview may be active", {
         previewId: this.#preview.delta.deltaId,
@@ -360,10 +545,9 @@ export class ViewerRenderDeltaController {
     const parsed = this.#parse(delta, this.#committed);
     const state = applyDeltaToState(this.#committed, parsed);
     this.#assertWithinLimits(state);
+    const applyDelta = this.#synchronousAdapterMethod("applyDelta");
     synchronous(
-      this.#adapter?.applyDelta(parsed, {
-        preview: true,
-      }),
+      applyDelta?.(parsed, { preview: true }),
       "render delta adapter applyDelta",
     );
     this.#preview = Object.freeze({ delta: parsed, state });
@@ -372,14 +556,17 @@ export class ViewerRenderDeltaController {
 
   promotePreview(deltaId) {
     this.#assertOpen();
+    this.#assertIdle();
     if (!this.#preview || this.#preview.delta.deltaId !== deltaId) {
       outOfOrder("render preview does not match the promotion request", {
         deltaId,
         previewId: this.#preview?.delta.deltaId ?? null,
       });
     }
+    const promotePreview =
+      this.#synchronousAdapterMethod("promotePreview");
     synchronous(
-      this.#adapter?.promotePreview(this.#preview.delta),
+      promotePreview?.(this.#preview.delta),
       "render delta adapter promotePreview",
     );
     this.#committed = this.#preview.state;
@@ -389,14 +576,17 @@ export class ViewerRenderDeltaController {
 
   rollbackPreview(deltaId = this.#preview?.delta.deltaId) {
     this.#assertOpen();
+    this.#assertIdle();
     if (!this.#preview || this.#preview.delta.deltaId !== deltaId) {
       outOfOrder("render preview does not match the rollback request", {
         deltaId: deltaId ?? null,
         previewId: this.#preview?.delta.deltaId ?? null,
       });
     }
+    const rollbackPreview =
+      this.#synchronousAdapterMethod("rollbackPreview");
     synchronous(
-      this.#adapter?.rollbackPreview(this.#preview.delta),
+      rollbackPreview?.(this.#preview.delta),
       "render delta adapter rollbackPreview",
     );
     this.#preview = null;
@@ -434,9 +624,19 @@ export class ViewerRenderDeltaController {
     return state.identities.get(entryKey(layerId, renderId));
   }
 
+  async whenIdle() {
+    await this.#pending?.promise;
+    return this.#pending === null;
+  }
+
   dispose() {
-    if (this.#disposed) {
+    if (this.#disposed || this.#closing) {
       return false;
+    }
+    if (this.#pending) {
+      throw invalidState(
+        "disposeAsync() is required while a staged render delta is preparing",
+      );
     }
     synchronous(
       this.#adapter?.dispose(),
@@ -449,6 +649,38 @@ export class ViewerRenderDeltaController {
     this.#committed.identities.clear();
     this.#committed.invalidatedDependencyIds.clear();
     return true;
+  }
+
+  disposeAsync() {
+    if (this.#disposePromise) {
+      return this.#disposePromise;
+    }
+    if (this.#disposed) {
+      return Promise.resolve(false);
+    }
+    this.#closing = true;
+    this.#pending?.abortController.abort(
+      new DOMException(
+        "Viewer render delta controller is disposed",
+        "AbortError",
+      ),
+    );
+    this.#disposePromise = (async () => {
+      try {
+        await this.#pending?.promise.catch(() => {});
+        await this.#adapter?.dispose();
+        return true;
+      } finally {
+        this.#disposed = true;
+        this.#closing = false;
+        this.#preview = null;
+        this.#committed.tombstones.clear();
+        this.#committed.upserts.clear();
+        this.#committed.identities.clear();
+        this.#committed.invalidatedDependencyIds.clear();
+      }
+    })();
+    return this.#disposePromise;
   }
 }
 

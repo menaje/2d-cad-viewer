@@ -4221,19 +4221,53 @@ static void
 copy_embedded_mtext (TextSource *source,
                      const Dwg_AcDbMTextObjectEmbedded *mtext)
 {
-  source->insertion_point[0] = mtext->ins_pt.x;
-  source->insertion_point[1] = mtext->ins_pt.y;
-  source->insertion_point[2] = mtext->ins_pt.z;
-  source->attachment = (int16_t)mtext->attachment;
-  source->x_axis_direction[0] = mtext->x_axis_dir.x;
-  source->x_axis_direction[1] = mtext->x_axis_dir.y;
-  source->x_axis_direction[2] = mtext->x_axis_dir.z;
-  source->rectangle_height = mtext->rect_height;
-  source->rectangle_width = mtext->rect_width;
-  source->extents_width = mtext->extents_width;
-  source->extents_height = mtext->extents_height;
+  double direction_length;
+  if (isfinite (mtext->ins_pt.x) && isfinite (mtext->ins_pt.y)
+      && isfinite (mtext->ins_pt.z))
+    {
+      source->insertion_point[0] = mtext->ins_pt.x;
+      source->insertion_point[1] = mtext->ins_pt.y;
+      source->insertion_point[2] = mtext->ins_pt.z;
+    }
+  if (mtext->attachment >= 1 && mtext->attachment <= 9)
+    source->attachment = (int16_t)mtext->attachment;
+  direction_length
+      = hypot (hypot (mtext->x_axis_dir.x, mtext->x_axis_dir.y),
+               mtext->x_axis_dir.z);
+  if (isfinite (direction_length) && direction_length > 1.0e-12)
+    {
+      source->x_axis_direction[0] = mtext->x_axis_dir.x;
+      source->x_axis_direction[1] = mtext->x_axis_dir.y;
+      source->x_axis_direction[2] = mtext->x_axis_dir.z;
+      source->rotation
+          = atan2 (mtext->x_axis_dir.y, mtext->x_axis_dir.x);
+    }
+  source->rectangle_height
+      = isfinite (mtext->rect_height) && mtext->rect_height > 0.0
+            ? mtext->rect_height
+            : 0.0;
+  source->rectangle_width
+      = isfinite (mtext->rect_width) && mtext->rect_width > 0.0
+            ? mtext->rect_width
+            : 0.0;
+  /* LibreDWG 0.14 exposes the R2018 embedded-MTEXT group-42 width and
+     group-43 height in the opposite struct members. Normalize them to the
+     Scene Cache width/height contract instead of squeezing a line to its
+     stored text height. */
+  source->extents_width
+      = isfinite (mtext->extents_height) && mtext->extents_height > 0.0
+            ? mtext->extents_height
+            : 0.0;
+  source->extents_height
+      = isfinite (mtext->extents_width) && mtext->extents_width > 0.0
+            ? mtext->extents_width
+            : 0.0;
+  source->flow_direction
+      = normalize_mtext_flow_direction (mtext->flow_dir);
   source->column_type = (int32_t)mtext->column_type;
-  source->column_count = (int32_t)mtext->num_column_heights;
+  source->column_count
+      = mtext->column_type == 1 ? (int32_t)mtext->numfragments
+                                : (int32_t)mtext->num_column_heights;
   source->column_width = mtext->column_width;
   source->column_gutter = mtext->gutter;
   if (mtext->auto_height)
@@ -4377,7 +4411,7 @@ read_text_source (const Dwg_Data *dwg, const Dwg_Object *object,
         source->flags |= TEXT_FLAG_HAS_ALIGNMENT_POINT;
         if (text->annotative_flag)
           source->flags |= TEXT_FLAG_ANNOTATIVE;
-        if (text->mtext_type)
+        if (text->mtext_type > 1)
           source->flags |= TEXT_FLAG_MULTILINE;
         if (text->lock_position_flag)
           source->flags |= TEXT_FLAG_LOCK_POSITION;
@@ -4399,7 +4433,7 @@ read_text_source (const Dwg_Data *dwg, const Dwg_Object *object,
         source->generation_flags = (int16_t)text->generation;
         source->field_length = (int16_t)text->field_length;
         source->mtext_type = (int16_t)text->mtext_type;
-        if (text->mtext_type)
+        if (text->mtext_type > 1)
           copy_embedded_mtext (source, &text->mtext);
         break;
       }
@@ -4422,7 +4456,7 @@ read_text_source (const Dwg_Data *dwg, const Dwg_Object *object,
         source->flags |= TEXT_FLAG_HAS_ALIGNMENT_POINT;
         if (text->annotative_flag)
           source->flags |= TEXT_FLAG_ANNOTATIVE;
-        if (text->mtext_type)
+        if (text->mtext_type > 1)
           source->flags |= TEXT_FLAG_MULTILINE;
         if (text->lock_position_flag)
           source->flags |= TEXT_FLAG_LOCK_POSITION;
@@ -4444,7 +4478,7 @@ read_text_source (const Dwg_Data *dwg, const Dwg_Object *object,
         source->generation_flags = (int16_t)text->generation;
         source->field_length = (int16_t)text->field_length;
         source->mtext_type = (int16_t)text->mtext_type;
-        if (text->mtext_type)
+        if (text->mtext_type > 1)
           copy_embedded_mtext (source, &text->mtext);
         break;
       }
