@@ -30,7 +30,7 @@ import {
   pngPixelSha256,
   validateAutoCad2026Identity,
   validateConversionReport,
-} from "./qualify-autocad-display-parity.mjs";
+} from "./qualify-reference-display.mjs";
 
 const execFile = promisify(execFileCallback);
 const REPORT_SCHEMA = "dwg-autocad-annotation-scale-matrix/3";

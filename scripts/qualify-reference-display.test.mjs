@@ -34,7 +34,7 @@ import {
   validateAutoCadPairPixelStates,
   validateConversionReport,
   viewportModeSummary,
-} from "./qualify-autocad-display-parity.mjs";
+} from "./qualify-reference-display.mjs";
 
 test("accepts only AutoCAD 2026 on Windows for external display evidence", () => {
   assert.equal(

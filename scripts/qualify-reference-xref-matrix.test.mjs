@@ -8,7 +8,7 @@ import {
   createAutoCadXrefScript,
   parseAutoCadXrefArguments,
   parseAutoCadXrefLog,
-} from "./qualify-autocad-xref-matrix.mjs";
+} from "./qualify-reference-xref-matrix.mjs";
 
 function argumentsFor(overrides = {}) {
   const values = {

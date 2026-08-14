@@ -1,11 +1,11 @@
-# AutoCAD display compatibility audit
+# Native reference display qualification
 
-This document audits visible DWG behavior against Autodesk AutoCAD 2026 in
-2D Wireframe. It deliberately excludes file-open latency, conversion latency
-and time to first frame. The comparison target is the saved model/layout
-presentation, not editing or DWG round-trip behavior.
+This document audits visible DWG behavior against Autodesk AutoCAD® 2026
+software in the 2D Wireframe visual style. It deliberately excludes file-open
+latency, conversion latency and time to first frame. The comparison target is
+the saved model/layout presentation, not editing or DWG round-trip behavior.
 
-## Comparison products and oracle rules
+## Reference products and oracle rules
 
 Autodesk's viewers do not all expose the same representation. Qualification
 therefore uses the following ordered oracles instead of treating every
@@ -178,7 +178,7 @@ not silently applied.
 ## Qualification evidence
 
 The current reproducible public-corpus run is
-[`autocad-display-parity-2026-08-12.json`](../compatibility/evidence/autocad-display-parity-2026-08-12.json).
+[`reference-display-qualification-2026-08-12.json`](../compatibility/evidence/reference-display-qualification-2026-08-12.json).
 It pins the LibreDWG 0.14 source archive and scans its complete 141-DWG
 `test/test-data` tree. Ninety-one companion text records identify AutoCAD as
 their producer. All 75 companion AutoCAD JPEG references are paired to their
@@ -234,7 +234,7 @@ The current run records:
 Run the same gate with a newly built adapter and the checksum-pinned source:
 
 ```bash
-pnpm run qualify:autocad-display-parity \
+pnpm run qualify:reference-display \
   --adapter /absolute/path/to/libredwg-adapter \
   --corpus /absolute/path/to/libredwg-0.14/test/test-data \
   --autodesk-samples /absolute/path/to/autodesk-official-samples \
@@ -265,7 +265,7 @@ session, uses `PNGOUT` for the displayed reference, saves a DWG for that value,
 and reconverts each DWG with the exact adapter under test:
 
 ```powershell
-pnpm run qualify:autocad-variable-pair `
+pnpm run qualify:reference-variable-pair `
   --autocad "C:\Program Files\Autodesk\AutoCAD 2026\acad.exe" `
   --adapter C:\qualification\libredwg-adapter.exe `
   --drawing C:\qualification\public\HatchG.dwg `
@@ -310,7 +310,7 @@ Schema v3 additionally requires the generated named layout to resolve through
 the canonical current-paper `*PAPER_SPACE` block in every saved state:
 
 ```powershell
-pnpm run qualify:autocad-annotation-matrix `
+pnpm run qualify:reference-annotation-matrix `
   --autocad "C:\Program Files\Autodesk\AutoCAD 2026\acad.exe" `
   --adapter C:\qualification\libredwg-adapter.exe `
   --drawing C:\qualification\public\blank.dwg `

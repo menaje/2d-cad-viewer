@@ -6,6 +6,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
+  copyFile,
   mkdir,
   mkdtemp,
   open,
@@ -28,12 +29,11 @@ import {
   describePng,
   pngPixelSha256,
   validateAutoCad2026Identity,
-  validateAutoCadPairPixelStates,
   validateConversionReport,
-} from "./qualify-autocad-display-parity.mjs";
+} from "./qualify-reference-display.mjs";
 
 const execFile = promisify(execFileCallback);
-const REPORT_SCHEMA = "dwg-autocad-system-variable-pair/2";
+const REPORT_SCHEMA = "dwg-autocad-xref-state-matrix/2";
 const MAX_SOURCE_BYTES = 256 * 1024 * 1024;
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024 * 1024;
 const PROCESS_TIMEOUT_MS = 15 * 60 * 1000;
@@ -41,94 +41,13 @@ const AUTOCAD_STARTUP_REFERENCE =
   "https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Customization/files/GUID-5510017F-4656-478F-BD4C-AB6B1998BF55.htm";
 const AUTOCAD_PNGOUT_REFERENCE =
   "https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-DC273B67-42AC-4A2A-9001-4825FF268E5D.htm";
-
-const VARIABLE_CONTRACTS = Object.freeze({
-  FILLMODE: Object.freeze({
-    field: "fillMode",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  ATTMODE: Object.freeze({
-    field: "attributeDisplayMode",
-    values: Object.freeze([0, 1, 2]),
-    normalize: Number,
-  }),
-  ANNOALLVISIBLE: Object.freeze({
-    field: "annotationAllVisible",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  QTEXTMODE: Object.freeze({
-    field: "quickTextMode",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  SPLFRAME: Object.freeze({
-    field: "splineFrame",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  DISPSILH: Object.freeze({
-    field: "displaySilhouettes",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  DISPSILHBLOCKS: Object.freeze({
-    field: "displaySilhouettesInBlocks",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  IMAGEQUALITY: Object.freeze({
-    field: "rasterImageQualityHigh",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  VISRETAIN: Object.freeze({
-    field: "retainExternalReferenceLayers",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  XREFOVERRIDE: Object.freeze({
-    field: "externalReferenceOverrides",
-    values: Object.freeze([0, 1]),
-    normalize: Boolean,
-  }),
-  FRAME: Object.freeze({
-    field: "frame",
-    values: Object.freeze([0, 1, 2]),
-    normalize: Number,
-  }),
-  IMAGEFRAME: Object.freeze({
-    field: "imageFrame",
-    values: Object.freeze([0, 1, 2]),
-    normalize: Number,
-  }),
-  XCLIPFRAME: Object.freeze({
-    field: "xclipFrame",
-    values: Object.freeze([0, 1, 2]),
-    normalize: Number,
-  }),
-  OLEFRAME: Object.freeze({
-    field: "oleFrame",
-    values: Object.freeze([0, 1, 2]),
-    normalize: Number,
-  }),
-  PDFFRAME: Object.freeze({
-    field: "pdfFrame",
-    values: Object.freeze([0, 1, 2]),
-    normalize: Number,
-  }),
-  DWFFRAME: Object.freeze({
-    field: "dwfFrame",
-    values: Object.freeze([0, 1, 2]),
-    normalize: Number,
-  }),
-  DGNFRAME: Object.freeze({
-    field: "dgnFrame",
-    values: Object.freeze([0, 1, 2]),
-    normalize: Number,
-  }),
-});
+const AUTOCAD_XREF_REFERENCE =
+  "https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-70599862-DF52-4291-B64B-8A4C45599F39.htm";
+const EXPECTED_STATES = Object.freeze([
+  Object.freeze({ id: "loaded", loaded: true, resolved: true }),
+  Object.freeze({ id: "unloaded", loaded: false, resolved: true }),
+  Object.freeze({ id: "unresolved", loaded: false, resolved: false }),
+]);
 
 function requiredValue(values, index, option) {
   const value = values[index + 1];
@@ -138,24 +57,7 @@ function requiredValue(values, index, option) {
   return value;
 }
 
-function parseValues(value, contract) {
-  const result = value.split(",").map((entry) => Number(entry));
-  if (
-    result.length < 2 ||
-    new Set(result).size !== result.length ||
-    result.some(
-      (entry) =>
-        !Number.isInteger(entry) || !contract.values.includes(entry),
-    )
-  ) {
-    throw new Error(
-      `values must be distinct members of ${contract.values.join(",")}`,
-    );
-  }
-  return Object.freeze(result);
-}
-
-export function parseAutoCadPairArguments(values) {
+export function parseAutoCadXrefArguments(values) {
   const result = {};
   for (let index = 0; index < values.length; index += 1) {
     const option = values[index];
@@ -163,13 +65,11 @@ export function parseAutoCadPairArguments(values) {
       "--adapter": "adapterPath",
       "--autocad": "autoCadPath",
       "--case-id": "caseId",
-      "--drawing": "drawingPath",
+      "--child": "childPath",
+      "--host": "hostPath",
       "--observed-at": "observedAt",
       "--output-dir": "outputDirectory",
-      "--layout": "layoutName",
-      "--space": "space",
-      "--values": "rawValues",
-      "--variable": "variable",
+      "--xref-name": "xrefName",
     }[option];
     if (!key || result[key] !== undefined) {
       throw new Error(`unsupported or repeated option: ${option}`);
@@ -181,23 +81,21 @@ export function parseAutoCadPairArguments(values) {
     "adapterPath",
     "autoCadPath",
     "caseId",
-    "drawingPath",
+    "childPath",
+    "hostPath",
     "observedAt",
     "outputDirectory",
-    "rawValues",
-    "variable",
+    "xrefName",
   ]) {
     if (!result[key]) {
       throw new Error(`${key} is required`);
     }
   }
-  const variable = result.variable.toUpperCase();
-  const contract = VARIABLE_CONTRACTS[variable];
-  if (!contract) {
-    throw new Error(`unsupported AutoCAD variable: ${result.variable}`);
-  }
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(result.caseId)) {
     throw new Error("caseId must be a lowercase kebab-case identifier");
+  }
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(result.xrefName)) {
+    throw new Error("xrefName must be a bounded AutoCAD identifier");
   }
   if (
     !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u.test(
@@ -207,103 +105,75 @@ export function parseAutoCadPairArguments(values) {
   ) {
     throw new Error("observedAt must be a whole-second UTC timestamp");
   }
-  const space = result.space ?? "current";
-  if (!["current", "model", "layout"].includes(space)) {
-    throw new Error("space must be current, model or layout");
-  }
-  if (result.layoutName && space !== "layout") {
-    throw new Error("layout is accepted only with --space layout");
-  }
   return Object.freeze({
     adapterPath: path.resolve(result.adapterPath),
     autoCadPath: path.resolve(result.autoCadPath),
     caseId: result.caseId,
-    drawingPath: path.resolve(result.drawingPath),
+    childPath: path.resolve(result.childPath),
+    hostPath: path.resolve(result.hostPath),
     observedAt: result.observedAt,
     outputDirectory: path.resolve(result.outputDirectory),
-    layoutName: result.layoutName,
-    space,
-    values: parseValues(result.rawValues, contract),
-    variable,
+    xrefName: result.xrefName,
   });
 }
 
 function lispString(value) {
-  return value
-    .replaceAll("\\", "/")
-    .replaceAll('"', '\\"');
+  return value.replaceAll("\\", "/").replaceAll('"', '\\"');
 }
 
-function stateStem(caseId, value) {
-  return `${caseId}-${value}`;
+function stateStem(caseId, state) {
+  return `${caseId}-${state}`;
 }
 
-function autoCadSettingCommand(variable) {
-  if (variable === "IMAGEQUALITY") {
-    return '  (command "_.IMAGEQUALITY" (if (= (car dwgv-state) 0) "_Draft" "_High"))';
-  }
-  return `  (setvar "${variable}" (car dwgv-state))`;
-}
-
-function autoCadReloadCommand(variable) {
-  return variable === "VISRETAIN"
-    ? '  (command "_.-XREF" "_Reload" "*")'
-    : null;
-}
-
-function autoCadObservedExpression(variable) {
-  return variable === "IMAGEQUALITY"
-    ? '(cdr (assoc 71 (dictsearch (namedobjdict) "ACAD_IMAGE_VARS")))'
-    : `(getvar "${variable}")`;
-}
-
-export function createAutoCadPairScript({
+export function createAutoCadXrefScript({
   caseId,
-  layoutName,
+  childFile,
   outputDirectory,
-  space = "current",
-  values,
-  variable,
+  xrefName,
 }) {
   const output = lispString(outputDirectory);
+  const child = lispString(path.join(outputDirectory, childFile));
+  const relativeChild = `./${lispString(childFile)}`;
+  const missingChild = `./${caseId}-intentionally-missing.dwg`;
   const logPath = `${output}/${caseId}-autocad.tsv`;
   const readyPath = `${output}/${caseId}.ready`;
-  const states = values
-    .map((value) => `(${value} "${stateStem(caseId, value)}")`)
-    .join(" ");
-  const settingCommand = autoCadSettingCommand(variable);
-  const reloadCommand = autoCadReloadCommand(variable);
-  const observedExpression = autoCadObservedExpression(variable);
-  const context = [];
-  if (space === "model") {
-    context.push("(setvar \"TILEMODE\" 1)");
-  } else if (space === "layout") {
-    context.push("(setvar \"TILEMODE\" 0)");
-    if (layoutName) {
-      context.push(`(setvar "CTAB" "${lispString(layoutName)}")`);
-    }
-  }
+  const capture = (state) => {
+    const stem = stateStem(caseId, state);
+    return [
+      `(command "_.PNGOUT" "${output}/${stem}.png" "")`,
+      `(vla-SaveAs dwgv-doc "${output}/${stem}.dwg")`,
+      `(dwgv-write (strcat "STATE\\t${state}\\t" (getvar "CTAB") "\\t" (itoa (getvar "TILEMODE")) "\\t" (vla-get-Path dwgv-block) "\\t" (itoa (dwgv-resolved-probe dwgv-block))))`,
+    ];
+  };
   return [
     "(vl-load-com)",
     "(setq dwgv-doc (vla-get-ActiveDocument (vlax-get-acad-object)))",
     `(setq dwgv-log "${logPath}")`,
     "(defun dwgv-write (value / stream) (setq stream (open dwgv-log \"a\")) (write-line value stream) (close stream))",
-    `(dwgv-write (strcat "ACADVER\\t" (getvar "ACADVER")))`,
-    `(dwgv-write (strcat "PLATFORM\\t" (getvar "PLATFORM")))`,
+    "(defun dwgv-resolved-probe (block / value) (setq value (vl-catch-all-apply 'vla-get-XRefDatabase (list block))) (if (vl-catch-all-error-p value) 0 1))",
+    "(dwgv-write (strcat \"ACADVER\\t\" (getvar \"ACADVER\")))",
+    "(dwgv-write (strcat \"PLATFORM\\t\" (getvar \"PLATFORM\")))",
     "(setvar \"CMDECHO\" 0)",
     "(setvar \"FILEDIA\" 0)",
     "(setvar \"CMDDIA\" 0)",
     "(setvar \"BACKGROUNDPLOT\" 0)",
-    ...context,
+    "(setvar \"TILEMODE\" 1)",
+    `(if (tblsearch "BLOCK" "${lispString(xrefName)}") (progn (dwgv-write "ERROR\\txref-name-exists") (command "_.QUIT")))`,
+    `(setq dwgv-reference (vla-AttachExternalReference (vla-get-ModelSpace dwgv-doc) "${child}" "${lispString(xrefName)}" (vlax-3d-point 0 0 0) 1.0 1.0 1.0 0.0 :vlax-false))`,
+    `(setq dwgv-block (vla-Item (vla-get-Blocks dwgv-doc) "${lispString(xrefName)}"))`,
+    `(vla-put-Path dwgv-block "${relativeChild}")`,
+    "(vla-Reload dwgv-block)",
     "(command \"_.ZOOM\" \"_Extents\")",
-    `(foreach dwgv-state '(${states})`,
-    settingCommand,
-    ...(reloadCommand ? [reloadCommand] : []),
-    "  (command \"_.REGENALL\")",
-    `  (command "_.PNGOUT" (strcat "${output}/" (cadr dwgv-state) ".png") "")`,
-    `  (vla-SaveAs dwgv-doc (strcat "${output}/" (cadr dwgv-state) ".dwg"))`,
-    `  (dwgv-write (strcat "STATE\\t" (itoa (car dwgv-state)) "\\t" (getvar "CTAB") "\\t" (itoa (getvar "TILEMODE")) "\\t" (vl-princ-to-string ${observedExpression})))`,
-    ")",
+    "(command \"_.REGENALL\")",
+    ...capture("loaded"),
+    "(vla-Unload dwgv-block)",
+    "(command \"_.REGENALL\")",
+    ...capture("unloaded"),
+    `(vla-put-Path dwgv-block "${missingChild}")`,
+    "(setq dwgv-reload-result (vl-catch-all-apply 'vla-Reload (list dwgv-block)))",
+    "(dwgv-write (strcat \"UNRESOLVED_RELOAD_FAILED\\t\" (if (vl-catch-all-error-p dwgv-reload-result) \"1\" \"0\")))",
+    "(command \"_.REGENALL\")",
+    ...capture("unresolved"),
     `(setq dwgv-ready-stream (open "${readyPath}" "w"))`,
     "(write-line \"pass\" dwgv-ready-stream)",
     "(close dwgv-ready-stream)",
@@ -349,7 +219,7 @@ async function runAdapter(adapterPath, args) {
   return JSON.parse(line);
 }
 
-async function readDrawing(cachePath) {
+async function readCacheState(cachePath, xrefName) {
   const bytes = await readFile(cachePath);
   assert.ok(bytes.byteLength <= MAX_SOURCE_BYTES);
   const arrayBuffer = bytes.buffer.slice(
@@ -359,49 +229,54 @@ async function readDrawing(cachePath) {
   const reader = await SceneCacheReader.open(
     new MemoryRangeSource(arrayBuffer),
   );
-  return reader.readDrawing();
+  const [drawing, blocks] = await Promise.all([
+    reader.readDrawing(),
+    reader.readBlocks(),
+  ]);
+  const xrefs = blocks.filter((block) => (block.flags & (1 << 2)) !== 0);
+  assert.equal(xrefs.length, 1, "generated host must contain exactly one XREF");
+  const xref = xrefs[0];
+  assert.equal(
+    xref.name.toLocaleLowerCase("en-US"),
+    xrefName.toLocaleLowerCase("en-US"),
+  );
+  return Object.freeze({ drawing, xref });
 }
 
-export function expectedDrawingVariable(variable, value) {
-  const contract = VARIABLE_CONTRACTS[variable];
-  if (!contract || !contract.values.includes(value)) {
-    throw new Error("unsupported AutoCAD variable value");
-  }
-  return Object.freeze({
-    field: contract.field,
-    value: contract.normalize(value),
-  });
-}
-
-function parseAutoCadLog(value, expectedStates) {
+export function parseAutoCadXrefLog(value) {
   const lines = value.trim().split(/\r?\n/u).filter(Boolean);
   const property = (name) =>
     lines.find((line) => line.startsWith(`${name}\t`))?.split("\t")[1];
-  const states = lines
-    .filter((line) => line.startsWith("STATE\t"))
-    .map((line) => {
-      const [, rawValue, tab, tileMode, observed] = line.split("\t");
-      return {
-        value: Number(rawValue),
-        tab,
-        tileMode: Number(tileMode),
-        observed,
-      };
-    });
   assert.equal(property("ACADVER")?.length > 0, true);
   assert.equal(property("PLATFORM")?.length > 0, true);
   validateAutoCad2026Identity(
     property("ACADVER"),
     property("PLATFORM"),
   );
+  assert.equal(property("ERROR"), undefined);
+  assert.equal(property("UNRESOLVED_RELOAD_FAILED"), "1");
+  const states = lines
+    .filter((line) => line.startsWith("STATE\t"))
+    .map((line) => {
+      const [, id, tab, tileMode, storedPath, resolvedProbe] =
+        line.split("\t");
+      return Object.freeze({
+        id,
+        tab,
+        tileMode: Number(tileMode),
+        storedPath,
+        resolvedProbe: Number(resolvedProbe),
+      });
+    });
   assert.deepEqual(
-    states.map(({ value }) => value),
-    expectedStates,
+    states.map(({ id }) => id),
+    EXPECTED_STATES.map(({ id }) => id),
   );
+  assert.equal(states.every(({ tileMode }) => tileMode === 1), true);
   return Object.freeze({
     acadVersion: property("ACADVER"),
     platform: property("PLATFORM"),
-    states: Object.freeze(states.map((state) => Object.freeze(state))),
+    states: Object.freeze(states),
   });
 }
 
@@ -414,32 +289,41 @@ async function writeJsonExclusive(filePath, value) {
   }
 }
 
-export async function qualifyAutoCadVariablePair(options) {
-  const [sourceMetadata] = await Promise.all([
-    ensureBoundedFile(options.drawingPath),
+export async function qualifyAutoCadXrefMatrix(options) {
+  await Promise.all([
+    ensureBoundedFile(options.hostPath),
+    ensureBoundedFile(options.childPath),
     ensureBoundedFile(options.adapterPath, true),
     ensureBoundedFile(options.autoCadPath, true),
   ]);
   await mkdir(options.outputDirectory);
+  const hostCopy = path.join(
+    options.outputDirectory,
+    `${options.caseId}-source-host.dwg`,
+  );
+  const childCopy = path.join(
+    options.outputDirectory,
+    `${options.caseId}-source-child.dwg`,
+  );
+  await Promise.all([
+    copyFile(options.hostPath, hostCopy),
+    copyFile(options.childPath, childCopy),
+  ]);
   const scriptPath = path.join(
     options.outputDirectory,
     `${options.caseId}.scr`,
   );
-  await writeFile(scriptPath, createAutoCadPairScript(options), {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
-
+  await writeFile(
+    scriptPath,
+    createAutoCadXrefScript({
+      ...options,
+      childFile: path.basename(childCopy),
+    }),
+    { encoding: "utf8", flag: "wx", mode: 0o600 },
+  );
   await execFile(
     options.autoCadPath,
-    [
-      options.drawingPath,
-      "/nologo",
-      "/nossm",
-      "/b",
-      scriptPath,
-    ],
+    [hostCopy, "/nologo", "/nossm", "/b", scriptPath],
     {
       encoding: "utf8",
       maxBuffer: MAX_PROCESS_OUTPUT_BYTES,
@@ -447,13 +331,16 @@ export async function qualifyAutoCadVariablePair(options) {
       windowsHide: false,
     },
   );
-
-  const readyPath = path.join(
-    options.outputDirectory,
-    `${options.caseId}.ready`,
+  assert.equal(
+    (
+      await readFile(
+        path.join(options.outputDirectory, `${options.caseId}.ready`),
+        "utf8",
+      )
+    ).trim(),
+    "pass",
   );
-  assert.equal((await readFile(readyPath, "utf8")).trim(), "pass");
-  const autoCadLog = parseAutoCadLog(
+  const autoCadLog = parseAutoCadXrefLog(
     await readFile(
       path.join(
         options.outputDirectory,
@@ -461,15 +348,27 @@ export async function qualifyAutoCadVariablePair(options) {
       ),
       "utf8",
     ),
-    options.values,
   );
   const temporaryRoot = await mkdtemp(
-    path.join(os.tmpdir(), "dwg-autocad-variable-pair-"),
+    path.join(os.tmpdir(), "dwg-autocad-xref-matrix-"),
   );
   try {
+    const childCachePath = path.join(temporaryRoot, "child.cache");
+    const childConversion = validateConversionReport(
+      await runAdapter(options.adapterPath, [
+        "convert",
+        childCopy,
+        childCachePath,
+      ]),
+    );
+    assert.ok(
+      childConversion.coverage.total_entities > 0 &&
+        childConversion.coverage.serialized_entities > 0,
+      "XREF child must contain displayable source content",
+    );
     const states = [];
-    for (const value of options.values) {
-      const stem = stateStem(options.caseId, value);
+    for (const expected of EXPECTED_STATES) {
+      const stem = stateStem(options.caseId, expected.id);
       const dwgPath = path.join(options.outputDirectory, `${stem}.dwg`);
       const pngPath = path.join(options.outputDirectory, `${stem}.png`);
       await Promise.all([
@@ -484,54 +383,73 @@ export async function qualifyAutoCadVariablePair(options) {
           cachePath,
         ]),
       );
-      const drawing = await readDrawing(cachePath);
-      const expected = expectedDrawingVariable(options.variable, value);
-      assert.deepEqual(
-        drawing[expected.field],
-        expected.value,
-        `${options.variable}=${value} did not survive AutoCAD save and conversion`,
+      const cache = await readCacheState(cachePath, options.xrefName);
+      assert.equal(cache.xref.xrefLoaded, expected.loaded);
+      assert.equal(cache.xref.xrefResolved, expected.resolved);
+      assert.ok(cache.xref.referenceCount > 0);
+      assert.ok(cache.xref.xrefPath.length > 0);
+      assert.equal(path.isAbsolute(cache.xref.xrefPath), false);
+      assert.equal(
+        cache.xref.xrefPath
+          .replaceAll("\\", "/")
+          .endsWith(
+            expected.id === "unresolved"
+              ? `${options.caseId}-intentionally-missing.dwg`
+              : path.basename(childCopy),
+          ),
+        true,
       );
-      const [dwg, pngBytes] = await Promise.all([
-        describeFile(dwgPath),
-        readFile(pngPath),
-      ]);
+      const pngBytes = await readFile(pngPath);
       states.push(
         Object.freeze({
-          value,
+          id: expected.id,
           autoCad: autoCadLog.states.find(
-            (state) => state.value === value,
+            (state) => state.id === expected.id,
           ),
-          drawing: dwg,
+          expected: Object.freeze({
+            loaded: expected.loaded,
+            resolved: expected.resolved,
+            displayed: expected.loaded && expected.resolved,
+          }),
+          drawing: await describeFile(dwgPath),
           referenceImage: Object.freeze({
             ...describePng(pngBytes, path.basename(pngPath)),
             pixelSha256: pngPixelSha256(pngBytes),
+          }),
+          observedXref: Object.freeze({
+            name: cache.xref.name,
+            pathKind: "relative",
+            loaded: cache.xref.xrefLoaded,
+            resolved: cache.xref.xrefResolved,
+            referenceCount: cache.xref.referenceCount,
           }),
           conversion: Object.freeze({
             totalEntities: conversion.coverage.total_entities,
             serializedEntities: conversion.coverage.serialized_entities,
             deferredEntities: conversion.coverage.deferred_entities,
             coverage: Object.freeze({ ...conversion.coverage }),
-            sections: Object.freeze(
-              Object.fromEntries(
-                conversion.cache.sections
-                  .filter((section) => section.records > 0)
-                  .map((section) => [section.kind, section.records]),
-              ),
-            ),
             invalidSupportedEntities:
               conversion.coverage.deferred_reasons
                 .invalid_supported_entities,
           }),
-          observedDrawingValue: Object.freeze({
-            field: expected.field,
-            value: drawing[expected.field],
-          }),
         }),
       );
     }
-    validateAutoCadPairPixelStates(options.variable, states);
-
-    const source = await readFile(options.drawingPath);
+    assert.equal(
+      new Set(states.map((state) => state.conversion.totalEntities)).size,
+      1,
+      "XREF state changes must retain the logical host entity count",
+    );
+    assert.notEqual(
+      states[0].referenceImage.pixelSha256,
+      states[1].referenceImage.pixelSha256,
+      "loaded and unloaded AutoCAD pixels must differ",
+    );
+    assert.equal(
+      states[1].referenceImage.pixelSha256,
+      states[2].referenceImage.pixelSha256,
+      "unloaded and unresolved AutoCAD pixels must match",
+    );
     const report = Object.freeze({
       schema: REPORT_SCHEMA,
       status: "pass",
@@ -540,26 +458,37 @@ export async function qualifyAutoCadVariablePair(options) {
         product: "Autodesk AutoCAD",
         acadVersion: autoCadLog.acadVersion,
         platform: autoCadLog.platform,
-        displayMode: "saved current 2D view",
+        displayMode: "2D Wireframe model space",
       }),
       references: Object.freeze({
         startupScript: AUTOCAD_STARTUP_REFERENCE,
         pngOut: AUTOCAD_PNGOUT_REFERENCE,
+        xrefCommand: AUTOCAD_XREF_REFERENCE,
       }),
       adapter: await describeFile(options.adapterPath),
       case: Object.freeze({
         id: options.caseId,
-        variable: options.variable,
-        values: options.values,
-        space: options.space,
-        layout: options.layoutName ?? null,
+        xrefName: options.xrefName,
+        states: Object.freeze(EXPECTED_STATES.map(({ id }) => id)),
         singleSession: true,
         camera: "one ZOOM Extents view retained across every state",
       }),
-      source: Object.freeze({
-        file: path.basename(options.drawingPath),
-        bytes: sourceMetadata.size,
-        sha256: sha256(source),
+      sources: Object.freeze({
+        host: await describeFile(hostCopy),
+        child: Object.freeze({
+          ...(await describeFile(childCopy)),
+          conversion: Object.freeze({
+            totalEntities: childConversion.coverage.total_entities,
+            serializedEntities:
+              childConversion.coverage.serialized_entities,
+            deferredEntities:
+              childConversion.coverage.deferred_entities,
+            coverage: Object.freeze({ ...childConversion.coverage }),
+            invalidSupportedEntities:
+              childConversion.coverage.deferred_reasons
+                .invalid_supported_entities,
+          }),
+        }),
       }),
       states: Object.freeze(states),
       pathsIncluded: false,
@@ -576,8 +505,8 @@ export async function qualifyAutoCadVariablePair(options) {
 
 async function main() {
   try {
-    const options = parseAutoCadPairArguments(process.argv.slice(2));
-    const report = await qualifyAutoCadVariablePair(options);
+    const options = parseAutoCadXrefArguments(process.argv.slice(2));
+    const report = await qualifyAutoCadXrefMatrix(options);
     process.stdout.write(
       `${JSON.stringify({
         schema: report.schema,

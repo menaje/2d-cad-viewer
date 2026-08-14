@@ -8,7 +8,7 @@ import {
   createAutoCadPairScript,
   expectedDrawingVariable,
   parseAutoCadPairArguments,
-} from "./qualify-autocad-variable-pair.mjs";
+} from "./qualify-reference-variable-pair.mjs";
 
 function argumentsFor(overrides = {}) {
   const values = {

@@ -8,7 +8,7 @@ import {
   createAutoCadAnnotationScript,
   parseAutoCadAnnotationArguments,
   parseAutoCadAnnotationLog,
-} from "./qualify-autocad-annotation-matrix.mjs";
+} from "./qualify-reference-annotation-matrix.mjs";
 
 function argumentsFor(overrides = {}) {
   const values = {
