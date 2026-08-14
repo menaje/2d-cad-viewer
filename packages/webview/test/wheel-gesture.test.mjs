@@ -3,84 +3,79 @@ import test from "node:test";
 
 import { WHEEL_ZOOM_RATE } from "../../viewer-core/src/viewport-interaction.mjs";
 import {
+  DEFAULT_SCROLL_INPUT_MODE,
   DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
   MAXIMUM_ZOOM_SENSITIVITY,
   MAXIMUM_PINCH_ZOOM_PIXELS,
   MINIMUM_ZOOM_SENSITIVITY,
   PINCH_ZOOM_RATE,
-  WHEEL_GESTURE_IDLE_MS,
+  SCROLL_INPUT_MODE_MOUSE_ZOOM,
+  SCROLL_INPUT_MODE_TRACKPAD_PAN,
   WHEEL_LINE_PIXELS,
   normalizeWheelGesture,
+  normalizeScrollInputMode,
   normalizeZoomSensitivity,
 } from "../src/wheel-gesture.mjs";
 
-test("keeps a macOS smooth-scroll sequence in trackpad pan mode", () => {
-  const first = normalizeWheelGesture({
-    ctrlKey: false,
-    deltaMode: 0,
-    deltaX: 0,
-    deltaY: 7.5,
-    timeStamp: 10,
-  });
-  assert.equal(first.kind, "trackpad-pan");
-  assert.equal(first.panX, 0);
-  assert.equal(first.panY, -7.5);
-  assert.equal(first.zoomFactor, 1);
-
-  const inertia = normalizeWheelGesture(
-    {
+test("uses deterministic mouse zoom for every unmodified scroll by default", () => {
+  assert.equal(DEFAULT_SCROLL_INPUT_MODE, SCROLL_INPUT_MODE_MOUSE_ZOOM);
+  for (const [deltaX, deltaY] of [
+    [0, 1],
+    [0, 7.5],
+    [1, 4],
+    [0, 53],
+    [0, 120],
+  ]) {
+    const wheel = normalizeWheelGesture({
       ctrlKey: false,
       deltaMode: 0,
-      deltaX: 0,
-      deltaY: 140,
-      timeStamp: 80,
-    },
-    first,
-  );
-  assert.equal(inertia.kind, "trackpad-pan");
-  assert.equal(inertia.panY, -140);
-
-  const nextGesture = normalizeWheelGesture(
-    {
-      ctrlKey: false,
-      deltaMode: 0,
-      deltaX: 0,
-      deltaY: 100,
-      timeStamp: 80 + WHEEL_GESTURE_IDLE_MS + 1,
-    },
-    inertia,
-  );
-  assert.equal(nextGesture.kind, "wheel-zoom");
-  assert.equal(nextGesture.panY, 0);
+      deltaX,
+      deltaY,
+      timeStamp: 10,
+    });
+    assert.equal(wheel.kind, "wheel-zoom");
+    assert.equal(wheel.panX, 0);
+    assert.equal(wheel.panY, 0);
+    assert.notEqual(wheel.zoomFactor, 1);
+  }
 });
 
-test("normalizes Windows precision touchpad and mouse-wheel deltas", () => {
-  const touchpad = normalizeWheelGesture({
-    ctrlKey: false,
-    deltaMode: 0,
-    deltaX: -12,
-    deltaY: 24,
-    timeStamp: 20,
-  });
-  assert.equal(touchpad.kind, "trackpad-pan");
-  assert.equal(touchpad.panX, 12);
-  assert.equal(touchpad.panY, -24);
+test("keeps slow, fast and line-mode input in explicit trackpad pan mode", () => {
+  for (const [deltaMode, deltaX, deltaY, expectedX, expectedY] of [
+    [0, 0, 1, 0, -1],
+    [0, -12, 24, 12, -24],
+    [0, 0, 140, 0, -140],
+    [1, 0, 3, 0, -3 * WHEEL_LINE_PIXELS],
+  ]) {
+    const gesture = normalizeWheelGesture(
+      {
+        ctrlKey: false,
+        deltaMode,
+        deltaX,
+        deltaY,
+        timeStamp: 20,
+      },
+      { scrollInputMode: SCROLL_INPUT_MODE_TRACKPAD_PAN },
+    );
+    assert.equal(gesture.kind, "trackpad-pan");
+    assert.equal(gesture.panX, expectedX);
+    assert.equal(gesture.panY, expectedY);
+    assert.equal(gesture.zoomFactor, 1);
+  }
+});
 
-  const wheel = normalizeWheelGesture({
-    ctrlKey: false,
-    deltaMode: 1,
-    deltaX: 0,
-    deltaY: 3,
-    timeStamp: 40,
-  });
-  assert.equal(wheel.kind, "wheel-zoom");
-  assert.ok(
-    Math.abs(
-      wheel.zoomFactor -
-        Math.exp(3 * WHEEL_LINE_PIXELS * WHEEL_ZOOM_RATE),
-    ) < 1e-12,
+test("does not expose an automatic input mode", () => {
+  assert.equal(
+    normalizeScrollInputMode(SCROLL_INPUT_MODE_TRACKPAD_PAN),
+    SCROLL_INPUT_MODE_TRACKPAD_PAN,
   );
+  for (const value of [undefined, null, "auto", "wheel", 1]) {
+    assert.equal(
+      normalizeScrollInputMode(value),
+      SCROLL_INPUT_MODE_MOUSE_ZOOM,
+    );
+  }
 });
 
 test("zooms an unmodified physical mouse wheel on macOS and Windows", () => {
@@ -110,6 +105,8 @@ test("uses a stronger bounded zoom curve for trackpad pinch", () => {
     deltaX: 0,
     deltaY: -10,
     timeStamp: 10,
+  }, {
+    scrollInputMode: SCROLL_INPUT_MODE_TRACKPAD_PAN,
   });
   assert.equal(pinch.kind, "pinch");
   assert.ok(
@@ -132,6 +129,8 @@ test("uses a stronger bounded zoom curve for trackpad pinch", () => {
     deltaX: 0,
     deltaY: 10_000,
     timeStamp: 20,
+  }, {
+    scrollInputMode: SCROLL_INPUT_MODE_TRACKPAD_PAN,
   });
   assert.ok(
     Math.abs(
@@ -154,7 +153,6 @@ test("applies independent bounded mouse and trackpad zoom sensitivity", () => {
       deltaY: -53,
       timeStamp: 10,
     },
-    null,
     { mouseWheelZoomSensitivity: 2 },
   );
   assert.ok(
@@ -171,8 +169,10 @@ test("applies independent bounded mouse and trackpad zoom sensitivity", () => {
       deltaY: -10,
       timeStamp: 20,
     },
-    null,
-    { trackpadPinchZoomSensitivity: 0.5 },
+    {
+      scrollInputMode: SCROLL_INPUT_MODE_TRACKPAD_PAN,
+      trackpadPinchZoomSensitivity: 0.5,
+    },
   );
   assert.ok(
     Math.abs(

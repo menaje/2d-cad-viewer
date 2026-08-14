@@ -1,5 +1,7 @@
 const TERMINAL_REFERENCE_STATES = new Set([
   "ready",
+  "unloaded",
+  "unresolved",
   "missing",
   "ambiguous",
   "cycle",

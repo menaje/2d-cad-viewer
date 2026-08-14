@@ -42,13 +42,16 @@ import {
 } from "./qualification";
 import { activateRevisionComparisonQualification } from "./comparison-qualification";
 import {
+  DEFAULT_SCROLL_INPUT_MODE,
   DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  normalizeWebviewScrollInputMode,
   normalizeWebviewZoomSensitivity,
   renderWebviewHtml,
   type InteractionRenderingMode,
   type MenuLabelMode,
   type RenderResolutionMode,
+  type ScrollInputMode,
 } from "./webview-html";
 import { XrefController } from "./xref-controller";
 import { ImageReferenceChannel } from "./image-reference-channel";
@@ -99,6 +102,32 @@ function configuredInteractionRendering(
   return value === "continuous" || value === "maximumPerformance"
     ? value
     : "hybrid";
+}
+
+function configuredScrollInputMode(
+  configuration: vscode.WorkspaceConfiguration,
+): ScrollInputMode {
+  return normalizeWebviewScrollInputMode(
+    configuration.get<unknown>(
+      "scrollInputMode",
+      DEFAULT_SCROLL_INPUT_MODE,
+    ),
+  );
+}
+
+function scrollInputModeConfigurationTarget(
+  configuration: vscode.WorkspaceConfiguration,
+): vscode.ConfigurationTarget {
+  const inspected = configuration.inspect<ScrollInputMode>(
+    "scrollInputMode",
+  );
+  if (inspected?.workspaceFolderValue !== undefined) {
+    return vscode.ConfigurationTarget.WorkspaceFolder;
+  }
+  if (inspected?.workspaceValue !== undefined) {
+    return vscode.ConfigurationTarget.Workspace;
+  }
+  return vscode.ConfigurationTarget.Global;
 }
 
 function configuredSceneCacheMode(
@@ -450,6 +479,7 @@ interface HostMessage {
   firstFrameMs?: unknown;
   format?: unknown;
   kind?: unknown;
+  mode?: unknown;
   requestId?: unknown;
   name?: unknown;
   suggestedName?: unknown;
@@ -643,6 +673,13 @@ class DwgEditorProvider
       ),
     } as const);
 
+    const scrollInputModeSettings = () => ({
+      type: "dwg-scroll-input-mode/1",
+      mode: configuredScrollInputMode(
+        vscode.workspace.getConfiguration("dwgViewer", document.uri),
+      ),
+    } as const);
+
     const zoomSensitivitySettings = () => {
       const configuration = vscode.workspace.getConfiguration(
         "dwgViewer",
@@ -709,6 +746,7 @@ class DwgEditorProvider
       const menuSettings = menuDisplaySettings();
       const renderSettings = renderResolutionSettings();
       const interactionSettings = interactionRenderingSettings();
+      const scrollSettings = scrollInputModeSettings();
       const zoomSettings = zoomSensitivitySettings();
       webviewPanel.webview.html = renderWebviewHtml(template, {
         cspSource: webviewPanel.webview.cspSource,
@@ -726,6 +764,7 @@ class DwgEditorProvider
         leftToolbarLabels: menuSettings.leftToolbarLabels,
         renderResolution: renderSettings.mode,
         interactionRendering: interactionSettings.mode,
+        scrollInputMode: scrollSettings.mode,
         mouseWheelZoomSensitivity:
           zoomSettings.mouseWheelZoomSensitivity,
         trackpadPinchZoomSensitivity:
@@ -753,6 +792,15 @@ class DwgEditorProvider
       }
       void webviewPanel.webview.postMessage(
         interactionRenderingSettings(),
+      );
+    };
+
+    const postScrollInputModeSettings = (): void => {
+      if (!webviewReady) {
+        return;
+      }
+      void webviewPanel.webview.postMessage(
+        scrollInputModeSettings(),
       );
     };
 
@@ -1323,6 +1371,7 @@ class DwgEditorProvider
             postMenuDisplaySettings();
             postRenderResolutionSettings();
             postInteractionRenderingSettings();
+            postScrollInputModeSettings();
             postZoomSensitivitySettings();
             if (activeCacheReadyMessage) {
               void webviewPanel.webview.postMessage(
@@ -1339,6 +1388,32 @@ class DwgEditorProvider
               document.uri,
               webviewPanel,
             );
+            break;
+          }
+          case "dwg-scroll-input-mode-set/1": {
+            if (
+              raw.mode !== "mouse-zoom" &&
+              raw.mode !== "trackpad-pan"
+            ) {
+              postScrollInputModeSettings();
+              break;
+            }
+            const configuration = vscode.workspace.getConfiguration(
+              "dwgViewer",
+              document.uri,
+            );
+            void Promise.resolve(
+              configuration.update(
+                "scrollInputMode",
+                raw.mode,
+                scrollInputModeConfigurationTarget(configuration),
+              ),
+            ).catch(() => {
+              postScrollInputModeSettings();
+              void vscode.window.showErrorMessage(
+                "2D CAD Viewer: 스크롤 입력 모드 설정을 저장하지 못했습니다.",
+              );
+            });
             break;
           }
           case "dwg-cache-retry/1":
@@ -1809,6 +1884,14 @@ class DwgEditorProvider
           )
         ) {
           postInteractionRenderingSettings();
+        }
+        if (
+          event.affectsConfiguration(
+            "dwgViewer.scrollInputMode",
+            document.uri,
+          )
+        ) {
+          postScrollInputModeSettings();
         }
         if (
           event.affectsConfiguration(

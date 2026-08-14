@@ -11,16 +11,21 @@ import {
 } from "@menaje/viewer-webgl";
 
 import {
+  DEFAULT_SCROLL_INPUT_MODE,
   DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  SCROLL_INPUT_MODE_MOUSE_ZOOM,
+  SCROLL_INPUT_MODE_TRACKPAD_PAN,
   ViewportInteraction,
+  normalizeScrollInputMode,
   normalizeZoomSensitivity,
-} from "./interaction.mjs?v=1.18.13";
+} from "./interaction.mjs?v=1.18.20";
 import {
   applyDisplayLayerProperties,
   buildExternalLayerMap,
   buildExternalLinetypeMap,
-  blockExternalReferenceIsDisplayable,
+  blockExternalReferenceIsDiscoverable,
+  blockExternalReferenceSavedState,
   composeExternalInstanceGraph,
   overrideExternalVertexProperties,
   remapLineVertexLayers,
@@ -199,6 +204,10 @@ let interactionRenderingMode = normalizeInteractionRenderingMode(
   document.body.dataset.interactionRendering,
 );
 document.body.dataset.interactionRendering = interactionRenderingMode;
+let scrollInputMode = normalizeScrollInputMode(
+  document.body.dataset.scrollInputMode ?? DEFAULT_SCROLL_INPUT_MODE,
+);
+document.body.dataset.scrollInputMode = scrollInputMode;
 let zoomSensitivitySettings = Object.freeze({
   mouseWheelZoomSensitivity: normalizeZoomSensitivity(
     document.body.dataset.mouseWheelZoomSensitivity,
@@ -286,6 +295,9 @@ const viewBookmarkEmpty = document.querySelector("#view-bookmark-empty");
 const viewBookmarkList = document.querySelector("#view-bookmark-list");
 const layoutTabs = document.querySelector("#layout-tabs");
 const viewControls = [...document.querySelectorAll("[data-view-action]")];
+const trackpadModeToggle = document.querySelector(
+  "#trackpad-mode-toggle",
+);
 const layersToggle = document.querySelector("#layers-toggle");
 const layerPanel = document.querySelector("#layer-panel");
 const layerSearch = document.querySelector("#layer-search");
@@ -436,6 +448,34 @@ let visualCompletionState;
 let visualCompletionTimer;
 const LOCAL_CACHE_FINGERPRINT_SAMPLE_BYTES = 64 * 1024;
 const MAX_DWG_SESSION_READ_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
+
+function applyScrollInputMode(value) {
+  scrollInputMode = normalizeScrollInputMode(value);
+  document.body.dataset.scrollInputMode = scrollInputMode;
+  activeInteraction?.setScrollInputMode(scrollInputMode);
+  const trackpadModeEnabled =
+    scrollInputMode === SCROLL_INPUT_MODE_TRACKPAD_PAN;
+  trackpadModeToggle?.setAttribute(
+    "aria-pressed",
+    String(trackpadModeEnabled),
+  );
+  setViewerToolMessage(
+    trackpadModeToggle,
+    trackpadModeEnabled
+      ? "toolbar.trackpadMode.on"
+      : "toolbar.trackpadMode.off",
+  );
+  if (trackpadModeToggle) {
+    trackpadModeToggle.title = t(
+      trackpadModeEnabled
+        ? "toolbar.trackpadMode.disable"
+        : "toolbar.trackpadMode.enable",
+    );
+  }
+  return scrollInputMode;
+}
+
+applyScrollInputMode(scrollInputMode);
 
 function resetVisualCompletion() {
   if (visualCompletionTimer !== undefined) {
@@ -2121,6 +2161,8 @@ function xrefStateLabel(state) {
     converting: "xrefs.state.converting",
     decoding: "xrefs.state.decoding",
     ready: "xrefs.state.ready",
+    unloaded: "xrefs.state.unloaded",
+    unresolved: "xrefs.state.unresolved",
     missing: "xrefs.state.missing",
     ambiguous: "xrefs.state.ambiguous",
     cycle: "xrefs.state.cycle",
@@ -2139,6 +2181,8 @@ function renderXrefDiagnostics() {
     [
       "missing",
       "ambiguous",
+      "unloaded",
+      "unresolved",
       "cycle",
       "limit",
       "unsupported",
@@ -2202,13 +2246,35 @@ function renderXrefDiagnostics() {
       detail.textContent = entry.message;
       item.append(detail);
     }
+    const actions = document.createElement("div");
+    actions.className = "xref-actions";
+    const disableActions = () => {
+      for (const button of actions.querySelectorAll("button")) {
+        button.disabled = true;
+      }
+    };
+    if (entry.kind !== "image" && entry.canLoad && vscodeApi) {
+      const load = document.createElement("button");
+      load.type = "button";
+      load.className = "xref-load";
+      load.textContent = t("xrefs.loadSession");
+      load.addEventListener("click", () => {
+        disableActions();
+        vscodeApi.postMessage({
+          type: "dwg-xref-load/1",
+          parentCacheId: entry.parentCacheId,
+          blockIndex: entry.blockIndex,
+        });
+      });
+      actions.append(load);
+    }
     if (entry.canSelect && vscodeApi) {
       const select = document.createElement("button");
       select.type = "button";
       select.className = "xref-select";
       select.textContent = t("xrefs.selectFile");
       select.addEventListener("click", () => {
-        select.disabled = true;
+        disableActions();
         vscodeApi.postMessage(
           entry.kind === "image"
             ? {
@@ -2223,7 +2289,10 @@ function renderXrefDiagnostics() {
               },
         );
       });
-      item.append(select);
+      actions.append(select);
+    }
+    if (actions.childElementCount > 0) {
+      item.append(actions);
     }
     fragment.append(item);
   }
@@ -5400,19 +5469,22 @@ function discoverExternalReferences(scene, cacheId, depth = 0) {
   }
   discoveredXrefCaches.add(cacheId);
   const references = scene.metadata.blocks
-    .filter(
-      (block) =>
-        blockExternalReferenceIsDisplayable(block) &&
-        typeof block.xrefPath === "string" &&
-        block.xrefPath.length > 0,
-    )
-    .slice(0, 64)
+    .filter(blockExternalReferenceIsDiscoverable)
     .map((block) => ({
       blockIndex: block.index,
       name: block.name,
-      path: block.xrefPath,
+      path: typeof block.xrefPath === "string" ? block.xrefPath : "",
       overlay: (block.flags & (1 << 3)) !== 0,
-    }));
+      xrefLoaded: block.xrefLoaded !== false,
+      xrefResolved: block.xrefResolved !== false,
+      savedState: blockExternalReferenceSavedState(block),
+    }))
+    .sort(
+      (left, right) =>
+        Number(left.savedState !== "enabled") -
+        Number(right.savedState !== "enabled"),
+    )
+    .slice(0, 64);
   for (const reference of references) {
     const key = `${cacheId}:${reference.blockIndex}`;
     if (!xrefDiagnostics.has(key)) {
@@ -5420,8 +5492,13 @@ function discoverExternalReferences(scene, cacheId, depth = 0) {
         ...reference,
         parentCacheId: cacheId,
         storedPath: reference.path,
-        status: "waiting",
+        status:
+          reference.savedState === "enabled"
+            ? "waiting"
+            : reference.savedState,
         depth,
+        canLoad: reference.savedState !== "enabled",
+        canSelect: reference.savedState !== "enabled",
       });
     }
   }
@@ -5456,6 +5533,7 @@ function handleXrefStatus(message) {
         ? message.message.slice(0, 300)
         : undefined,
     canSelect: Boolean(message.canSelect),
+    canLoad: Boolean(message.canLoad),
   });
   renderXrefDiagnostics();
 }
@@ -6113,6 +6191,7 @@ async function handleExternalCacheReady(message) {
       ...existing,
       status: "ready",
       canSelect: false,
+      canLoad: false,
       fileName:
         typeof message.fileName === "string"
           ? message.fileName.slice(0, 300)
@@ -6187,6 +6266,7 @@ function installInteraction(
   });
   activeInteraction = new ViewportInteraction(interactionScene, canvas, {
     ...zoomSensitivitySettings,
+    scrollInputMode,
     onUpdate(viewport) {
       renderMetrics(scene, source, viewport);
       if (viewport.render.interactive) {
@@ -7106,6 +7186,10 @@ if (vscodeApi) {
       activeInteraction?.refresh();
       return;
     }
+    if (message?.type === "dwg-scroll-input-mode/1") {
+      applyScrollInputMode(message.mode);
+      return;
+    }
     if (message?.type === "dwg-zoom-sensitivity/1") {
       applyZoomSensitivitySettings(message);
       return;
@@ -7379,6 +7463,18 @@ for (const control of viewControls) {
     }
   });
 }
+
+trackpadModeToggle?.addEventListener("click", () => {
+  const nextMode =
+    scrollInputMode === SCROLL_INPUT_MODE_TRACKPAD_PAN
+      ? SCROLL_INPUT_MODE_MOUSE_ZOOM
+      : SCROLL_INPUT_MODE_TRACKPAD_PAN;
+  applyScrollInputMode(nextMode);
+  vscodeApi?.postMessage({
+    type: "dwg-scroll-input-mode-set/1",
+    mode: nextMode,
+  });
+});
 
 viewBookmarkForm.addEventListener("submit", (event) => {
   event.preventDefault();

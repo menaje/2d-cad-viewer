@@ -15,6 +15,11 @@ import {
   xrefBasename,
   xrefExactMappingKey,
 } from "./xref-resolver";
+import {
+  xrefSavedState,
+  xrefShouldLoadAutomatically,
+  type XrefSavedState,
+} from "./xref-state";
 
 const XREF_MAPPING_STATE_KEY = "dwgViewer.xrefMappings.v1";
 const MAX_XREF_REFERENCES = 64;
@@ -27,6 +32,8 @@ interface XrefReferenceMessage {
   name?: unknown;
   path?: unknown;
   overlay?: unknown;
+  xrefLoaded?: unknown;
+  xrefResolved?: unknown;
 }
 
 interface ValidXrefReference {
@@ -34,6 +41,8 @@ interface ValidXrefReference {
   name: string;
   path: string;
   overlay: boolean;
+  xrefLoaded?: boolean;
+  xrefResolved?: boolean;
 }
 
 interface XrefDiscoveryMessage {
@@ -71,6 +80,7 @@ interface PendingReference {
   name: string;
   storedPath: string;
   overlay: boolean;
+  savedState: XrefSavedState;
   lastFailure?: "ambiguous" | "error" | "missing";
 }
 
@@ -111,9 +121,12 @@ function validReference(
     typeof reference.name === "string" &&
     reference.name.length <= 1_024 &&
     typeof reference.path === "string" &&
-    reference.path.length > 0 &&
     reference.path.length <= 32_768 &&
-    typeof reference.overlay === "boolean"
+    typeof reference.overlay === "boolean" &&
+    (reference.xrefLoaded === undefined ||
+      typeof reference.xrefLoaded === "boolean") &&
+    (reference.xrefResolved === undefined ||
+      typeof reference.xrefResolved === "boolean")
   );
 }
 
@@ -196,6 +209,10 @@ export class XrefController {
     }
     if (type === "dwg-xref-select/1") {
       this.enqueueSelection(message as XrefSelectionMessage);
+      return true;
+    }
+    if (type === "dwg-xref-load/1") {
+      this.enqueueLoad(message as XrefSelectionMessage);
       return true;
     }
     if (type === "dwg-xref-mounted/1") {
@@ -302,9 +319,14 @@ export class XrefController {
         name: reference.name,
         storedPath: reference.path,
         overlay: reference.overlay,
+        savedState: xrefSavedState(reference),
       };
       this.pending.set(pending.key, pending);
-      this.enqueue(() => this.resolveAndPrepare(pending));
+      if (xrefShouldLoadAutomatically(pending.savedState)) {
+        this.enqueue(() => this.resolveAndPrepare(pending));
+      } else {
+        this.enqueue(() => this.postSavedState(pending));
+      }
     }
   }
 
@@ -321,6 +343,23 @@ export class XrefController {
     );
     if (pending) {
       this.enqueue(() => this.selectManually(pending));
+    }
+  }
+
+  private enqueueLoad(message: XrefSelectionMessage): void {
+    const parentCacheId =
+      typeof message.parentCacheId === "string"
+        ? message.parentCacheId
+        : "";
+    if (!validBlockIndex(message.blockIndex)) {
+      return;
+    }
+    const pending = this.pending.get(
+      `${parentCacheId}:${message.blockIndex}`,
+    );
+    if (pending) {
+      pending.lastFailure = undefined;
+      this.enqueue(() => this.resolveAndPrepare(pending));
     }
   }
 
@@ -574,24 +613,35 @@ export class XrefController {
       }
       return;
     }
+    const basename = xrefBasename(reference.storedPath);
+    const sourceDirectory = portableDirectory(reference.storedPath);
+    const scopes: Array<{
+      label: string;
+      description: string;
+      value: "exact" | "basename" | "prefix";
+    }> = [
+      {
+        label: "이 참조만",
+        description: "현재 도면의 이 경로에만 적용",
+        value: "exact",
+      },
+    ];
+    if (basename && basename !== ".dwg") {
+      scopes.push({
+        label: "같은 파일명",
+        description: "이 워크스페이스의 같은 참조 파일명에 적용",
+        value: "basename",
+      });
+    }
+    if (sourceDirectory) {
+      scopes.push({
+        label: "같은 원본 폴더",
+        description: "이전 서버 폴더를 선택한 로컬 폴더로 치환",
+        value: "prefix",
+      });
+    }
     const scope = await vscode.window.showQuickPick(
-      [
-        {
-          label: "이 참조만",
-          description: "현재 도면의 이 경로에만 적용",
-          value: "exact",
-        },
-        {
-          label: "같은 파일명",
-          description: "이 워크스페이스의 같은 참조 파일명에 적용",
-          value: "basename",
-        },
-        {
-          label: "같은 원본 폴더",
-          description: "이전 서버 폴더를 선택한 로컬 폴더로 치환",
-          value: "prefix",
-        },
-      ],
+      scopes,
       {
         title: "수동 연결 적용 범위",
         placeHolder: "기본값은 현재 참조에만 안전하게 적용합니다.",
@@ -610,15 +660,10 @@ export class XrefController {
       prefixes: { ...(current.prefixes ?? {}) },
     };
     if (scope.value === "basename") {
-      (next.basenames as Record<string, string>)[
-        xrefBasename(reference.storedPath)
-      ] = selectedPath;
+      (next.basenames as Record<string, string>)[basename] = selectedPath;
     } else if (scope.value === "prefix") {
-      const sourceDirectory = portableDirectory(reference.storedPath);
-      if (sourceDirectory) {
-        (next.prefixes as Record<string, string>)[sourceDirectory] =
-          path.dirname(selectedPath);
-      }
+      (next.prefixes as Record<string, string>)[sourceDirectory] =
+        path.dirname(selectedPath);
     }
     (next.exact as Record<string, string>)[
       xrefExactMappingKey(
@@ -633,6 +678,10 @@ export class XrefController {
   private async restoreManualSelection(
     reference: PendingReference,
   ): Promise<void> {
+    if (!reference.lastFailure && reference.savedState !== "enabled") {
+      await this.postSavedState(reference, true);
+      return;
+    }
     const status = reference.lastFailure ?? "missing";
     await this.postStatus(reference, status, {
       canSelect: true,
@@ -642,6 +691,23 @@ export class XrefController {
           : status === "error"
             ? "파일 선택을 취소했습니다. 변환에 실패한 참조 파일을 다시 지정할 수 있습니다."
           : "파일 선택을 취소했습니다. 참조 파일을 직접 지정할 수 있습니다.",
+    });
+  }
+
+  private async postSavedState(
+    reference: PendingReference,
+    selectionCancelled = false,
+  ): Promise<void> {
+    const cancelledPrefix = selectionCancelled
+      ? "파일 선택을 취소했습니다. "
+      : "";
+    await this.postStatus(reference, reference.savedState, {
+      canLoad: true,
+      canSelect: true,
+      message:
+        reference.savedState === "unloaded"
+          ? `${cancelledPrefix}원본 도면에 언로드 상태로 저장되어 있습니다. 이번 세션에서만 로드하거나 다른 파일을 지정할 수 있습니다.`
+          : `${cancelledPrefix}원본 도면에 미해결 상태로 저장되어 있습니다. 이번 세션에서 경로를 다시 확인하거나 파일을 직접 지정할 수 있습니다.`,
     });
   }
 

@@ -186,6 +186,20 @@
           "scope": "window",
           "description": "Choose how the viewer redraws while panning or zooming. Conversion and export performance are unaffected."
         },
+        "dwgViewer.scrollInputMode": {
+          "type": "string",
+          "enum": [
+            "mouse-zoom",
+            "trackpad-pan"
+          ],
+          "enumDescriptions": [
+            "Zoom with every unmodified vertical scroll, including a detented wheel, smooth-scrolling wheel, or Magic Mouse. This is the default.",
+            "Pan with every unmodified scroll regardless of speed. Trackpad pinch remains zoom."
+          ],
+          "default": "mouse-zoom",
+          "scope": "window",
+          "description": "Choose deterministic scroll behavior. Input hardware is not detected automatically because smooth mouse and trackpad events are indistinguishable."
+        },
         "dwgViewer.mouseWheelZoomSensitivity": {
           "type": "number",
           "minimum": 0.25,

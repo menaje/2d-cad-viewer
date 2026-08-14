@@ -178,6 +178,12 @@ h1 {
   background: #263449;
 }
 
+.view-controls button[aria-pressed="true"],
+.view-controls button[aria-pressed="true"]:hover:not(:disabled) {
+  background: #315d8f;
+  color: #ffffff;
+}
+
 .view-controls button:disabled {
   cursor: default;
   color: #586274;
@@ -1095,6 +1101,12 @@ canvas.panning {
   color: #f0d37c;
 }
 
+.xref-state[data-state="unloaded"],
+.xref-state[data-state="unresolved"] {
+  background: #3b344f;
+  color: #d9c3ff;
+}
+
 .xref-state[data-state="missing"],
 .xref-state[data-state="ambiguous"],
 .xref-state[data-state="cycle"],
@@ -1104,8 +1116,15 @@ canvas.panning {
   color: #ffb0b0;
 }
 
-.xref-select {
+.xref-actions {
   grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.xref-load,
+.xref-select {
   justify-self: start;
   cursor: pointer;
   border: 1px solid #3d73bd;
@@ -1116,6 +1135,12 @@ canvas.panning {
   font: inherit;
   font-size: 0.7rem;
   font-weight: 700;
+}
+
+.xref-load:disabled,
+.xref-select:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 #font-status-list li {

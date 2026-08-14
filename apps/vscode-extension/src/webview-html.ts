@@ -8,6 +8,7 @@ export interface WebviewHtmlOptions {
   leftToolbarLabels?: MenuLabelMode;
   renderResolution?: RenderResolutionMode;
   interactionRendering?: InteractionRenderingMode;
+  scrollInputMode?: ScrollInputMode;
   mouseWheelZoomSensitivity?: number;
   trackpadPinchZoomSensitivity?: number;
 }
@@ -21,6 +22,8 @@ export type InteractionRenderingMode =
   | "continuous"
   | "hybrid"
   | "maximumPerformance";
+export type ScrollInputMode = "mouse-zoom" | "trackpad-pan";
+export const DEFAULT_SCROLL_INPUT_MODE: ScrollInputMode = "mouse-zoom";
 export const DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY = 1;
 export const DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY = 1.5;
 export const MINIMUM_ZOOM_SENSITIVITY = 0.25;
@@ -44,6 +47,12 @@ export function normalizeWebviewZoomSensitivity(
     ),
     MAXIMUM_ZOOM_SENSITIVITY,
   );
+}
+
+export function normalizeWebviewScrollInputMode(
+  value: unknown,
+): ScrollInputMode {
+  return value === "trackpad-pan" ? "trackpad-pan" : "mouse-zoom";
 }
 
 function normalizeWebviewLocale(value: string | undefined): string {
@@ -96,6 +105,7 @@ export function renderWebviewHtml(
     leftToolbarLabels,
     renderResolution,
     interactionRendering,
+    scrollInputMode,
     mouseWheelZoomSensitivity,
     trackpadPinchZoomSensitivity,
   }: WebviewHtmlOptions,
@@ -136,6 +146,9 @@ export function renderWebviewHtml(
   );
   const resolvedInteractionRendering =
     normalizeInteractionRenderingMode(interactionRendering);
+  const resolvedScrollInputMode = normalizeWebviewScrollInputMode(
+    scrollInputMode,
+  );
   const resolvedMouseWheelZoomSensitivity =
     normalizeWebviewZoomSensitivity(
       mouseWheelZoomSensitivity,
@@ -148,7 +161,7 @@ export function renderWebviewHtml(
     );
   const withHost = withLocale.replace(
     "<body>",
-    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}" data-render-resolution="${resolvedRenderResolution}" data-interaction-rendering="${resolvedInteractionRendering}" data-mouse-wheel-zoom-sensitivity="${resolvedMouseWheelZoomSensitivity}" data-trackpad-pinch-zoom-sensitivity="${resolvedTrackpadPinchZoomSensitivity}">`,
+    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}" data-render-resolution="${resolvedRenderResolution}" data-interaction-rendering="${resolvedInteractionRendering}" data-scroll-input-mode="${resolvedScrollInputMode}" data-mouse-wheel-zoom-sensitivity="${resolvedMouseWheelZoomSensitivity}" data-trackpad-pinch-zoom-sensitivity="${resolvedTrackpadPinchZoomSensitivity}">`,
   );
   const withStyles = withHost.replace(
     /<link\s+rel=["']stylesheet["']\s+href=["'][^"']+["']\s*\/?>/iu,

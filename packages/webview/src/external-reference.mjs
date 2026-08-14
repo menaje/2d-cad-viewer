@@ -141,13 +141,25 @@ function externalVisibilityComposer(
   });
 }
 
+export function blockExternalReferenceIsDiscoverable(block) {
+  return Boolean(block && (block.flags & (1 << 2)) !== 0);
+}
+
+export function blockExternalReferenceSavedState(block) {
+  if (!blockExternalReferenceIsDiscoverable(block)) {
+    return "not-xref";
+  }
+  if (block.xrefLoaded === false) {
+    return "unloaded";
+  }
+  if (block.xrefResolved === false) {
+    return "unresolved";
+  }
+  return "enabled";
+}
+
 export function blockExternalReferenceIsDisplayable(block) {
-  return Boolean(
-    block &&
-      (block.flags & (1 << 2)) !== 0 &&
-      block.xrefLoaded !== false &&
-      block.xrefResolved !== false,
-  );
+  return blockExternalReferenceSavedState(block) === "enabled";
 }
 
 function layerKey(value) {

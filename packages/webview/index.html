@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title data-i18n="page.title">2D CAD Viewer</title>
-    <link rel="stylesheet" href="./styles.css?v=1.18.19" />
+    <link rel="stylesheet" href="./styles.css?v=1.18.20" />
   </head>
   <body>
     <main>
@@ -58,6 +58,19 @@
             >
               <span class="viewer-tool-icon" aria-hidden="true">⛶</span>
               <span class="viewer-tool-label" data-i18n="toolbar.fit">Fit drawing</span>
+            </button>
+            <button
+              id="trackpad-mode-toggle"
+              class="viewer-tool-button"
+              type="button"
+              aria-pressed="false"
+              aria-label="Mouse zoom"
+              data-i18n-aria-label="toolbar.trackpadMode.off"
+              title="Enable trackpad mode: scrolling pans the drawing"
+              data-i18n-title="toolbar.trackpadMode.enable"
+            >
+              <span class="viewer-tool-icon" aria-hidden="true">↕</span>
+              <span class="viewer-tool-label" data-i18n="toolbar.trackpadMode.off">Mouse zoom</span>
             </button>
             <button
               id="layers-toggle"

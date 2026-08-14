@@ -72,6 +72,12 @@ resumes the existing distance-priority queue. Snapshots expose pause/resume,
 coalesced update, load start, cancellation, stale completion/mount, GPU upload
 and settled-detail latency counters without assigning a platform-wide
 performance claim to them.
+Wheel events use an explicit product-level mode instead of hardware inference:
+`mouse-zoom` maps every ordinary scroll to anchored zoom, while `trackpad-pan`
+maps every ordinary scroll to pan regardless of delta size or timing. A
+pixel-mode Ctrl wheel event remains the browser trackpad-pinch signal and zooms
+in either mode. The standalone toolbar toggles the same mode that the VS Code
+host persists as `dwgViewer.scrollInputMode`; no `auto` mode is exposed.
 `ViewerSelectionController` binds projected picks to the active
 session/revision/snapshot and publishes monotonic `selection.changed` Host
 events. Service-backed sources can additionally use revision-bound

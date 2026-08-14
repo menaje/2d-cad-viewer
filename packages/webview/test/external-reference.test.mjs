@@ -5,7 +5,9 @@ import {
   applyDisplayLayerProperties,
   buildExternalLayerMap,
   buildExternalLinetypeMap,
+  blockExternalReferenceIsDiscoverable,
   blockExternalReferenceIsDisplayable,
+  blockExternalReferenceSavedState,
   composeExternalInstanceGraph,
   overrideExternalVertexProperties,
   remapLineVertexLayers,
@@ -46,17 +48,33 @@ import {
   nestedInstanceGraph,
 } from "./nested-instance-graph-fixture.mjs";
 
-test("discovers only loaded and resolved external-reference blocks", () => {
+test("discovers saved external references without automatically displaying unloaded blocks", () => {
   const base = { flags: 1 << 2, xrefLoaded: true, xrefResolved: true };
 
+  assert.equal(blockExternalReferenceIsDiscoverable(base), true);
+  assert.equal(blockExternalReferenceSavedState(base), "enabled");
   assert.equal(blockExternalReferenceIsDisplayable(base), true);
+  const unloaded = { ...base, xrefLoaded: false };
+  assert.equal(blockExternalReferenceIsDiscoverable(unloaded), true);
+  assert.equal(blockExternalReferenceSavedState(unloaded), "unloaded");
   assert.equal(
-    blockExternalReferenceIsDisplayable({ ...base, xrefLoaded: false }),
+    blockExternalReferenceIsDisplayable(unloaded),
+    false,
+  );
+  const unresolved = { ...base, xrefResolved: false };
+  assert.equal(blockExternalReferenceIsDiscoverable(unresolved), true);
+  assert.equal(blockExternalReferenceSavedState(unresolved), "unresolved");
+  assert.equal(
+    blockExternalReferenceIsDisplayable(unresolved),
     false,
   );
   assert.equal(
-    blockExternalReferenceIsDisplayable({ ...base, xrefResolved: false }),
+    blockExternalReferenceIsDiscoverable({ ...base, flags: 0 }),
     false,
+  );
+  assert.equal(
+    blockExternalReferenceSavedState({ ...base, flags: 0 }),
+    "not-xref",
   );
   assert.equal(
     blockExternalReferenceIsDisplayable({ ...base, flags: 0 }),

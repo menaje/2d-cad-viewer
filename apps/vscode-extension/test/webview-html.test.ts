@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { renderWebviewHtml } from "../src/webview-html";
+import {
+  normalizeWebviewScrollInputMode,
+  renderWebviewHtml,
+} from "../src/webview-html";
 
 const template = `<!doctype html>
 <html>
@@ -36,7 +39,7 @@ test("renders a nonce-protected VS Code webview without an import map", () => {
   assert.match(html, /data-host="vscode"/u);
   assert.match(
     html,
-    /<body data-host="vscode" data-top-toolbar-labels="hover" data-left-toolbar-labels="hover" data-render-resolution="auto" data-interaction-rendering="hybrid" data-mouse-wheel-zoom-sensitivity="1" data-trackpad-pinch-zoom-sensitivity="1\.5">/u,
+    /<body data-host="vscode" data-top-toolbar-labels="hover" data-left-toolbar-labels="hover" data-render-resolution="auto" data-interaction-rendering="hybrid" data-scroll-input-mode="mouse-zoom" data-mouse-wheel-zoom-sensitivity="1" data-trackpad-pinch-zoom-sensitivity="1\.5">/u,
   );
   assert.match(html, /<html lang="ko-KR" data-locale="ko-KR">/u);
   assert.match(html, /vscode-webview:\/\/test\/styles\.css/u);
@@ -54,13 +57,23 @@ test("renders independent toolbar preferences", () => {
     leftToolbarLabels: "hover",
     renderResolution: "performance",
     interactionRendering: "maximumPerformance",
+    scrollInputMode: "trackpad-pan",
     mouseWheelZoomSensitivity: 1.75,
     trackpadPinchZoomSensitivity: 2.25,
   });
 
   assert.match(
     html,
-    /<body data-host="vscode" data-top-toolbar-labels="icons" data-left-toolbar-labels="hover" data-render-resolution="performance" data-interaction-rendering="maximumPerformance" data-mouse-wheel-zoom-sensitivity="1\.75" data-trackpad-pinch-zoom-sensitivity="2\.25">/u,
+    /<body data-host="vscode" data-top-toolbar-labels="icons" data-left-toolbar-labels="hover" data-render-resolution="performance" data-interaction-rendering="maximumPerformance" data-scroll-input-mode="trackpad-pan" data-mouse-wheel-zoom-sensitivity="1\.75" data-trackpad-pinch-zoom-sensitivity="2\.25">/u,
+  );
+});
+
+test("rejects automatic or unknown scroll input modes", () => {
+  assert.equal(normalizeWebviewScrollInputMode("auto"), "mouse-zoom");
+  assert.equal(normalizeWebviewScrollInputMode("unknown"), "mouse-zoom");
+  assert.equal(
+    normalizeWebviewScrollInputMode("trackpad-pan"),
+    "trackpad-pan",
   );
 });
 
@@ -266,6 +279,7 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   assert.match(template, /id="export-orientation"/u);
   assert.match(template, /id="export-scale"/u);
   assert.match(template, /id="export-plot-style"/u);
+  assert.match(template, /id="trackpad-mode-toggle"/u);
   assert.match(template, /data-review-tool="distance"/u);
   assert.match(template, /data-review-action="settings"/u);
   assert.match(mainModule, /qualification-theme/u);
@@ -300,6 +314,8 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
   assert.match(mainModule, /NamedPlotStyleName/u);
   assert.match(mainModule, /\.endsWith\("\.stb"\)/u);
   assert.match(mainModule, /dwg-menu-display-settings\/1/u);
+  assert.match(mainModule, /dwg-scroll-input-mode\/1/u);
+  assert.match(mainModule, /dwg-scroll-input-mode-set\/1/u);
   assert.match(mainModule, /dwg-zoom-sensitivity\/1/u);
   assert.match(
     mainModule,
@@ -470,6 +486,23 @@ test("repository host UI and manifest expose adapter selection and diagnosis", a
       scope: "window",
       description:
         "Choose how the viewer redraws while panning or zooming. Conversion and export performance are unaffected.",
+    },
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.[
+      "dwgViewer.scrollInputMode"
+    ],
+    {
+      type: "string",
+      enum: ["mouse-zoom", "trackpad-pan"],
+      enumDescriptions: [
+        "Zoom with every unmodified vertical scroll, including a detented wheel, smooth-scrolling wheel, or Magic Mouse. This is the default.",
+        "Pan with every unmodified scroll regardless of speed. Trackpad pinch remains zoom.",
+      ],
+      default: "mouse-zoom",
+      scope: "window",
+      description:
+        "Choose deterministic scroll behavior. Input hardware is not detected automatically because smooth mouse and trackpad events are indistinguishable.",
     },
   );
   assert.deepEqual(

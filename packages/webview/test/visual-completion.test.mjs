@@ -37,6 +37,27 @@ test("treats terminal visual failures as complete and reports their counts", () 
   });
 });
 
+test("treats explicitly unloaded and unresolved XREFs as terminal", () => {
+  assert.deepEqual(
+    completed({
+      references: [
+        { kind: "xref", status: "unloaded" },
+        { kind: "xref", status: "unresolved" },
+      ],
+    }),
+    {
+      complete: true,
+      detailLoading: 0,
+      xrefCount: 2,
+      xrefIssueCount: 2,
+      imageCount: 0,
+      imageIssueCount: 0,
+      fontCount: 2,
+      fontIssueCount: 1,
+    },
+  );
+});
+
 test("waits for every asynchronous visual dependency", () => {
   for (const override of [
     { firstFrame: false },

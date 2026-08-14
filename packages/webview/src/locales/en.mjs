@@ -16,6 +16,12 @@ export const EN_MESSAGES = Object.freeze({
   "toolbar.controls": "Drawing view controls",
   "toolbar.zoomOut": "Zoom out",
   "toolbar.fit": "Fit drawing",
+  "toolbar.trackpadMode.off": "Mouse zoom",
+  "toolbar.trackpadMode.on": "Trackpad pan",
+  "toolbar.trackpadMode.enable":
+    "Enable trackpad mode: scrolling pans the drawing",
+  "toolbar.trackpadMode.disable":
+    "Disable trackpad mode: scrolling zooms the drawing",
   "toolbar.layers": "Layers",
   "toolbar.fonts": "Fonts",
   "toolbar.fontsWithIssues": "Fonts ({count})",
@@ -204,6 +210,8 @@ export const EN_MESSAGES = Object.freeze({
   "xrefs.state.converting": "Converting",
   "xrefs.state.decoding": "Preparing display",
   "xrefs.state.ready": "Connected",
+  "xrefs.state.unloaded": "Unloaded",
+  "xrefs.state.unresolved": "Unresolved",
   "xrefs.state.missing": "Missing",
   "xrefs.state.ambiguous": "Selection required",
   "xrefs.state.cycle": "Reference cycle",
@@ -216,6 +224,7 @@ export const EN_MESSAGES = Object.freeze({
   "xrefs.empty": "This drawing has no external drawing or image references.",
   "xrefs.imageName": "Image · {name}",
   "xrefs.noStoredPath": "No stored path",
+  "xrefs.loadSession": "Load for this session",
   "xrefs.selectFile": "Choose file",
   "xrefs.resolution.relative":
     "Connected from a path relative to the drawing.",

@@ -49,8 +49,13 @@ of starting a separate task.
 
 ### Comfortable navigation on mouse and trackpad
 
-- Click-drag or two-finger scroll to pan.
-- Use the mouse wheel or a trackpad pinch to zoom around the pointer.
+- The default **Mouse zoom** mode zooms around the pointer for every ordinary
+  scroll, including a detented wheel, smooth-scrolling wheel, or Magic Mouse.
+- Turn on **Trackpad pan** in the toolbar to make every ordinary scroll pan,
+  regardless of speed. Trackpad pinch zoom remains available in both modes.
+- Hardware is not detected automatically, so a slowing trackpad gesture never
+  changes from pan to zoom mid-gesture.
+- Click-drag always pans in either mode.
 - Drag a window to zoom, return to the fitted view, move through previous and
   next views, and save named view bookmarks.
 - The top-right and left tool shelves can independently remain icon-only or
@@ -126,8 +131,13 @@ platform-specific commands, see the
 
 ## Everyday use
 
-- **Pan:** click-drag or use a two-finger trackpad scroll.
-- **Zoom:** use the mouse wheel, trackpad pinch, or window-zoom tool.
+- **Choose scroll behavior:** keep **Scroll Input Mode** on `mouse-zoom` (the
+  default) to zoom with every ordinary wheel or Magic Mouse scroll. Turn on
+  **Trackpad pan** in the toolbar, or choose `trackpad-pan` in settings, to pan
+  with every ordinary scroll. There is no automatic hardware detection.
+- **Pan:** click-drag, or use a two-finger scroll in `trackpad-pan` mode.
+- **Zoom:** use ordinary scrolling in `mouse-zoom` mode, a trackpad pinch in
+  either mode, or the window-zoom tool.
 - **Tune zoom response:** adjust **Mouse Wheel Zoom Sensitivity** and
   **Trackpad Pinch Zoom Sensitivity** independently in the 2D CAD Viewer
   settings.

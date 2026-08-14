@@ -5,6 +5,8 @@ import {
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
   DETAIL_DEBOUNCE_MS,
   DETAIL_ZOOM_THRESHOLD,
+  SCROLL_INPUT_MODE_MOUSE_ZOOM,
+  SCROLL_INPUT_MODE_TRACKPAD_PAN,
   VIEW_COMMIT_DEBOUNCE_MS,
   ViewportInteraction,
   WHEEL_ZOOM_RATE,
@@ -81,6 +83,7 @@ test("injects DWG detail streaming and intercepts platform wheel gestures", () =
       },
       canvas,
       {
+        scrollInputMode: SCROLL_INPUT_MODE_TRACKPAD_PAN,
         keyboardTarget: {
           addEventListener() {},
         },
@@ -160,6 +163,10 @@ test("injects DWG detail streaming and intercepts platform wheel gestures", () =
     );
 
     const customPinchZoom = interaction.snapshot().zoom;
+    assert.equal(
+      interaction.setScrollInputMode(SCROLL_INPUT_MODE_MOUSE_ZOOM),
+      SCROLL_INPUT_MODE_MOUSE_ZOOM,
+    );
     listeners.get("wheel")[0]({
       ctrlKey: false,
       deltaMode: 0,
