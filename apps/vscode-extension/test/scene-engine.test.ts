@@ -149,8 +149,23 @@ test("defaults drawing cache retention to one releasable session", async (contex
   assert.equal(first.reused, false);
   assert.equal(second.reused, false);
   assert.equal(first.storageGeneration, second.storageGeneration);
+  assert.match(first.storageGeneration, /^[a-f0-9]{64}$/u);
   assert.notEqual(first.cachePath, second.cachePath);
   assert.equal(previews.length, 2);
+  const sessionCacheParts = path
+    .relative(cacheRoot, first.cachePath)
+    .split(path.sep);
+  assert.equal(sessionCacheParts[0], "sessions");
+  assert.match(sessionCacheParts[1], /^[a-f0-9]{32}$/u);
+  assert.match(sessionCacheParts[2], /^[a-f0-9]{32}$/u);
+  assert.match(
+    sessionCacheParts[3],
+    /^[a-f0-9]{32}\.[a-f0-9]{16}\.dwg\.cache$/u,
+  );
+  assert.match(
+    path.basename(previews[0].cachePath),
+    /^[a-f0-9]{32}\.[a-f0-9]{16}\.dwg\.preview$/u,
+  );
   assert.equal(
     sceneCachePayload(await readFile(first.cachePath)),
     "cache-1",

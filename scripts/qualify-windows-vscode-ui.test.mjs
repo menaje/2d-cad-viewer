@@ -16,11 +16,15 @@ import {
   parseVSCodeVersionOutput,
   rectIsContained,
   viewportZoomFromStatus,
+  validatePackagedDisplayStateMatrix,
   WINDOWS_UI_CLEANUP_OPTIONS,
   WINDOWS_UI_COMPANION_EXTENSION_ID,
   WINDOWS_UI_EXTENSION_ID,
   WINDOWS_UI_LOCALE,
 } from "./qualify-windows-vscode-ui.mjs";
+import {
+  buildDisplayStateMatrixReport,
+} from "./qualify-display-state-matrix.mjs";
 
 test("retries only transient detached Webview frame errors", () => {
   assert.equal(
@@ -317,4 +321,27 @@ test("bounds Windows profile lock cleanup retries", () => {
     maxRetries: 20,
     retryDelay: 250,
   });
+});
+
+test("accepts only an exact packaged display-state matrix", async () => {
+  const expected = await buildDisplayStateMatrixReport();
+  const observed = {
+    schema: "dwg-packaged-windows-display-state-matrix/1",
+    status: "pass",
+    cacheSchema: expected.cacheSchema,
+    cases: expected.cases,
+    fingerprint: expected.fingerprint,
+  };
+  assert.equal(
+    validatePackagedDisplayStateMatrix(expected, observed),
+    true,
+  );
+  assert.throws(
+    () =>
+      validatePackagedDisplayStateMatrix(expected, {
+        ...observed,
+        cases: observed.cases.slice(0, -1),
+      }),
+    /Expected values to be strictly equal/u,
+  );
 });

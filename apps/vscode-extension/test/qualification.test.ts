@@ -11,6 +11,8 @@ import path from "node:path";
 import test from "node:test";
 import {
   createQualificationReporter,
+  DISPLAY_STATE_QUALIFICATION_MODE,
+  displayStateQualificationEnabled,
   QUALIFICATION_CLOSE_AFTER_ENV,
   QUALIFICATION_DRAWING_ENV,
   QUALIFICATION_EVENT_SCHEMA,
@@ -21,6 +23,35 @@ import {
 } from "../src/qualification";
 
 const TOKEN = "a".repeat(64);
+
+test("enables packaged display-state observation only for a private token", () => {
+  const drawingPath = path.resolve("drawing.dwg");
+  assert.equal(displayStateQualificationEnabled({}), false);
+  assert.equal(
+    displayStateQualificationEnabled({
+      [QUALIFICATION_TOKEN_ENV]: TOKEN,
+      [QUALIFICATION_DRAWING_ENV]: drawingPath,
+      [QUALIFICATION_MODE_ENV]: DISPLAY_STATE_QUALIFICATION_MODE,
+    }),
+    true,
+  );
+  assert.equal(
+    displayStateQualificationEnabled({
+      [QUALIFICATION_TOKEN_ENV]: "short",
+      [QUALIFICATION_DRAWING_ENV]: drawingPath,
+      [QUALIFICATION_MODE_ENV]: DISPLAY_STATE_QUALIFICATION_MODE,
+    }),
+    false,
+  );
+  assert.equal(
+    displayStateQualificationEnabled({
+      [QUALIFICATION_TOKEN_ENV]: TOKEN,
+      [QUALIFICATION_DRAWING_ENV]: "relative.dwg",
+      [QUALIFICATION_MODE_ENV]: DISPLAY_STATE_QUALIFICATION_MODE,
+    }),
+    false,
+  );
+});
 
 test("enables qualification only for a private absolute target and token", () => {
   assert.equal(createQualificationReporter({}, 42), undefined);

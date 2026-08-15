@@ -36,6 +36,7 @@ import {
 import { CtbPlotStyleChannel } from "./ctb-plot-style";
 import {
   createQualificationReporter,
+  displayStateQualificationEnabled,
   type QualificationCloseStage,
   type QualificationFields,
   type QualificationReporter,
@@ -518,6 +519,7 @@ class DwgEditorProvider
     private readonly output: vscode.OutputChannel,
     private readonly managedEngine: ManagedEngineManager,
     private readonly qualification?: QualificationReporter,
+    private readonly displayStateQualification = false,
   ) {}
 
   private documentKey(uri: vscode.Uri): string {
@@ -769,6 +771,7 @@ class DwgEditorProvider
           zoomSettings.mouseWheelZoomSensitivity,
         trackpadPinchZoomSensitivity:
           zoomSettings.trackpadPinchZoomSensitivity,
+        displayStateQualification: this.displayStateQualification,
       });
     };
 
@@ -1997,6 +2000,7 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     managedEngine,
     qualificationReporter,
+    displayStateQualificationEnabled(),
   );
   const textSearch = new WorkspaceTextSearchController(
     context,

@@ -60,6 +60,11 @@ if [ "$jobs" -gt 8 ]; then
   jobs=8
 fi
 
+case $(uname -s) in
+  MINGW*|MSYS*|CYGWIN*) program_target=dxf2dwg.exe ;;
+  *) program_target=dxf2dwg ;;
+esac
+
 mkdir -m 700 "$build_root"
 pkg_config_works=false
 case $pkg_config in
@@ -103,13 +108,10 @@ source_root="$build_root/libredwg-$LIBREDWG_VERSION"
     --disable-docs \
     --disable-python
   make -j"$jobs" -C src libredwg.la
-  make -j"$jobs" -C programs dxf2dwg
+  make -j"$jobs" -C programs "$program_target"
 )
 
-case $(uname -s) in
-  MINGW*|MSYS*|CYGWIN*) built_path="$source_root/programs/dxf2dwg.exe" ;;
-  *) built_path="$source_root/programs/dxf2dwg" ;;
-esac
+built_path="$source_root/programs/$program_target"
 [ -x "$built_path" ] || fail "LibreDWG fixture writer was not built"
 cp "$built_path" "$output_path"
 chmod 700 "$output_path"

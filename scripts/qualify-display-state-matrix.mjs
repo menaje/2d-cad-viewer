@@ -320,8 +320,8 @@ export function validateDisplayStateMatrix(report) {
   return true;
 }
 
-export async function buildDisplayStateMatrixReport() {
-  const definitions = [
+function displayStateCaseDefinitions() {
+  return [
     ...fillModeCases(),
     ...attributeModeCases(),
     ...annotationCases(),
@@ -329,8 +329,23 @@ export async function buildDisplayStateMatrixReport() {
     ...layoutCases(),
     ...xrefCases(),
   ];
+}
+
+export function buildDisplayStateMatrixFixtureCaches() {
+  return Object.freeze(
+    displayStateCaseDefinitions().map(({ id, family, options }) =>
+      Object.freeze({
+        id,
+        family,
+        cache: cacheBytes(makeFixtureCache(options)),
+      }),
+    ),
+  );
+}
+
+export async function buildDisplayStateMatrixReport() {
   const cases = Object.freeze(
-    await Promise.all(definitions.map(qualifyCase)),
+    await Promise.all(displayStateCaseDefinitions().map(qualifyCase)),
   );
   const report = Object.freeze({
     schema: REPORT_SCHEMA,

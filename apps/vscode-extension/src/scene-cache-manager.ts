@@ -59,6 +59,7 @@ const PERSISTENT_CACHE_FILE_PATTERN =
 const MAX_STORAGE_ENTRIES = 4_096;
 const CACHE_LEASE_HEARTBEAT_MS = 30_000;
 const CACHE_LEASE_STALE_MS = 5 * 60_000;
+const SESSION_HASH_TOKEN_HEX = 32;
 export const DEFAULT_PERSISTENT_CACHE_BYTES = 5 * 1024 * 1024 * 1024;
 export const MAX_PERSISTENT_CACHE_BYTES = 100 * 1024 * 1024 * 1024;
 
@@ -99,6 +100,13 @@ export function computeCacheGenerationId(
     engine.backendKind,
     engineRevision,
   ]);
+}
+
+function sessionHashToken(value: string): string {
+  if (!CACHE_GENERATION_PATTERN.test(value)) {
+    throw new TypeError("session storage requires a full SHA-256 identity");
+  }
+  return value.slice(0, SESSION_HASH_TOKEN_HEX);
 }
 
 async function boundedDirectoryEntries(directoryPath: string) {
@@ -507,7 +515,7 @@ export class SceneCacheManager {
         activeCacheRoot,
         this.mode === "persistent"
           ? `${cacheId}.dwg.cache`
-          : `${cacheId}.${randomBytes(8).toString("hex")}.dwg.cache`,
+          : `${sessionHashToken(cacheId)}.${randomBytes(8).toString("hex")}.dwg.cache`,
       );
 
       if (force && this.mode === "persistent") {
@@ -534,7 +542,9 @@ export class SceneCacheManager {
 
       const temporaryPath = path.join(
         activeCacheRoot,
-        `${cacheId}.${randomBytes(8).toString("hex")}.tmp`,
+        `${
+          this.mode === "session" ? sessionHashToken(cacheId) : cacheId
+        }.${randomBytes(8).toString("hex")}.tmp`,
       );
       const persistentPreviewPath =
         onPreview && this.engine.descriptor.capabilities.progressivePreview
@@ -542,7 +552,7 @@ export class SceneCacheManager {
               activeCacheRoot,
               this.mode === "persistent"
                 ? `${cacheId}.dwg.preview`
-                : `${cacheId}.${randomBytes(8).toString("hex")}.dwg.preview`,
+                : `${sessionHashToken(cacheId)}.${randomBytes(8).toString("hex")}.dwg.preview`,
             )
           : undefined;
       let previewHandedOff = false;
@@ -573,7 +583,11 @@ export class SceneCacheManager {
         persistentPreviewPath && !previewHandedOff
           ? path.join(
               activeCacheRoot,
-              `${cacheId}.${randomBytes(8).toString("hex")}.preview.tmp`,
+              `${
+                this.mode === "session"
+                  ? sessionHashToken(cacheId)
+                  : cacheId
+              }.${randomBytes(8).toString("hex")}.preview.tmp`,
             )
           : undefined;
       try {
@@ -734,7 +748,10 @@ export class SceneCacheManager {
     await mkdir(this.cacheRoot, { recursive: true, mode: 0o700 });
     if (this.mode === "session") {
       const sessionRoot = await this.ensureSessionRoot();
-      const generationRoot = path.join(sessionRoot, generationId);
+      const generationRoot = path.join(
+        sessionRoot,
+        sessionHashToken(generationId),
+      );
       await mkdir(generationRoot, { recursive: true, mode: 0o700 });
       await serializeStorageMaintenance(this.cacheRoot, async () => {
         await this.cleanupLegacyCacheFiles();

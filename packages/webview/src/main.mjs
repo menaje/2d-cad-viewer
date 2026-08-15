@@ -124,6 +124,10 @@ import {
 } from "./i18n.mjs?v=1.0.0";
 import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.26.0";
 import { effectiveFrameSetting } from "./frame-setting.mjs?v=1.26.0";
+import {
+  observePackagedDisplayState,
+  PACKAGED_DISPLAY_STATE_RESULT_GLOBAL,
+} from "./display-state-qualification.mjs?v=1.26.0";
 
 const standaloneQualificationParameters =
   typeof globalThis.acquireVsCodeApi === "function"
@@ -136,6 +140,30 @@ const standaloneQualificationLocale =
   standaloneQualificationParameters?.get("qualification-locale");
 const standaloneQualificationTheme =
   standaloneQualificationParameters?.get("qualification-theme");
+const packagedDisplayStateQualification =
+  document.body.dataset.displayStateQualification === "true";
+
+function clearPackagedDisplayStateObservation() {
+  if (packagedDisplayStateQualification) {
+    globalThis[PACKAGED_DISPLAY_STATE_RESULT_GLOBAL] = null;
+  }
+}
+
+function publishPackagedDisplayStateObservation(scene) {
+  if (!packagedDisplayStateQualification) {
+    return;
+  }
+  const match = /^([a-z0-9-]{1,80})\.cache$/u.exec(
+    activeDocumentName,
+  );
+  if (!match) {
+    return;
+  }
+  globalThis[PACKAGED_DISPLAY_STATE_RESULT_GLOBAL] = Object.freeze({
+    ...observePackagedDisplayState(scene),
+    caseId: match[1],
+  });
+}
 
 if (
   typeof standaloneQualificationLocale === "string" &&
@@ -6654,6 +6682,7 @@ function populateLayoutTabs(scene, source, revision) {
 }
 
 async function openCache(source, workerSource, cacheSha256) {
+  clearPackagedDisplayStateObservation();
   activeExportController?.abort();
   activeExportController = undefined;
   setExportPanelOpen(false);
@@ -6849,6 +6878,7 @@ async function openCache(source, workerSource, cacheSha256) {
       revision,
     );
     populateLayoutTabs(scene, source, revision);
+    publishPackagedDisplayStateObservation(scene);
     configurePlotStyleForView(scene, scene.activeView, revision);
     setControlsEnabled(true);
     discoverExternalReferences(

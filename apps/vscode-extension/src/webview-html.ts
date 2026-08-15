@@ -11,6 +11,7 @@ export interface WebviewHtmlOptions {
   scrollInputMode?: ScrollInputMode;
   mouseWheelZoomSensitivity?: number;
   trackpadPinchZoomSensitivity?: number;
+  displayStateQualification?: boolean;
 }
 
 export type MenuLabelMode = "hover" | "icons";
@@ -108,6 +109,7 @@ export function renderWebviewHtml(
     scrollInputMode,
     mouseWheelZoomSensitivity,
     trackpadPinchZoomSensitivity,
+    displayStateQualification,
   }: WebviewHtmlOptions,
 ): string {
   if (!/^[A-Za-z0-9_-]{16,}$/.test(nonce)) {
@@ -161,7 +163,7 @@ export function renderWebviewHtml(
     );
   const withHost = withLocale.replace(
     "<body>",
-    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}" data-render-resolution="${resolvedRenderResolution}" data-interaction-rendering="${resolvedInteractionRendering}" data-scroll-input-mode="${resolvedScrollInputMode}" data-mouse-wheel-zoom-sensitivity="${resolvedMouseWheelZoomSensitivity}" data-trackpad-pinch-zoom-sensitivity="${resolvedTrackpadPinchZoomSensitivity}">`,
+    `<body data-host="vscode" data-top-toolbar-labels="${resolvedTopToolbarLabels}" data-left-toolbar-labels="${resolvedLeftToolbarLabels}" data-render-resolution="${resolvedRenderResolution}" data-interaction-rendering="${resolvedInteractionRendering}" data-scroll-input-mode="${resolvedScrollInputMode}" data-mouse-wheel-zoom-sensitivity="${resolvedMouseWheelZoomSensitivity}" data-trackpad-pinch-zoom-sensitivity="${resolvedTrackpadPinchZoomSensitivity}"${displayStateQualification ? ' data-display-state-qualification="true"' : ""}>`,
   );
   const withStyles = withHost.replace(
     /<link\s+rel=["']stylesheet["']\s+href=["'][^"']+["']\s*\/?>/iu,

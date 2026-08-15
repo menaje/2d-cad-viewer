@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
+  buildDisplayStateMatrixFixtureCaches,
   buildDisplayStateMatrixReport,
   validateDisplayStateMatrix,
 } from "./qualify-display-state-matrix.mjs";
@@ -24,6 +26,26 @@ test("qualifies a deterministic redistributable display-state matrix", async () 
       (value) =>
         value.inventory.sourceEntities > 0 &&
         value.inventory.deferredEntities === 0,
+    ),
+    true,
+  );
+});
+
+test("exports the exact path-free caches for packaged host qualification", async () => {
+  const report = await buildDisplayStateMatrixReport();
+  const fixtures = buildDisplayStateMatrixFixtureCaches();
+
+  assert.equal(fixtures.length, 20);
+  assert.deepEqual(
+    fixtures.map(({ id, family }) => ({ id, family })),
+    report.cases.map(({ id, family }) => ({ id, family })),
+  );
+  assert.equal(
+    fixtures.every(
+      ({ cache }, index) =>
+        cache.byteLength === report.cases[index].source.bytes &&
+        createHash("sha256").update(cache).digest("hex") ===
+          report.cases[index].source.sha256,
     ),
     true,
   );
@@ -85,4 +107,3 @@ test("binds every saved state to the production display decision", async () => {
     ],
   );
 });
-

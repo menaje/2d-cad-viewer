@@ -340,6 +340,17 @@ committing a drawing or raster. This closes the local fixture and deterministic
 inventory/display-result gates. Browser captures are supplemental; exact
 packaged Windows VS Code execution remains a separate platform gate.
 
+On Windows x64, `scripts/qualify-windows-vscode-ui.mjs` supplies that platform
+gate. It installs the exact viewer and GPL companion VSIX files into an
+isolated latest-stable VS Code instance, then loads the same 20 generated
+caches through the packaged Webview. A token-scoped, read-only observation
+surface is enabled only for this qualification mode. The runner rejects any
+inventory or normalized display decision that differs from the local matrix
+and records the ordered matrix fingerprint together with both VSIX SHA-256
+values. The same run retains the 100%, 125%, 150% and 200% display-scale,
+normal/narrow layout and review-interaction checks. Paths, drawing names,
+source text and raster bytes are excluded from the report.
+
 This repository does not define product-to-product screenshot comparison as a
 completion workflow. If maintainers supply optional external observations,
 their reports pin product/version or observation time, source digest,
@@ -369,8 +380,9 @@ This corpus does **not** contain `FILLMODE=0`, `ATTMODE=0/2`,
 FRAME values 1/2 for every family, STB, or a complete XREF
 state matrix. Repository-generated state fixtures cover the listed local
 completion matrix where applicable; unsupported families remain explicit
-boundaries. A packaged Windows VS Code run from the current implementation
-remains pending as a separate platform gate.
+boundaries. Packaged Windows completion requires a fresh `status: "pass"`
+report from the current VSIX bytes; a local matrix report or an older package
+cannot substitute for it.
 
 ## Autodesk and format references
 

@@ -13,6 +13,7 @@ export const QUALIFICATION_CLOSE_AFTER_ENV =
   "DWG_VIEWER_QUALIFICATION_CLOSE_AFTER";
 export const QUALIFICATION_MODE_ENV =
   "DWG_VIEWER_QUALIFICATION_MODE";
+export const DISPLAY_STATE_QUALIFICATION_MODE = "display-state";
 
 export type QualificationCloseStage =
   | "conversion"
@@ -28,6 +29,19 @@ const SAFE_FIELD = /^[a-z][a-z0-9_]{0,47}$/u;
 const SAFE_STRING = /^[^/\\\r\n]{0,80}$/u;
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_EVENT_BYTES = 4 * 1024;
+
+export function displayStateQualificationEnabled(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const token = environment[QUALIFICATION_TOKEN_ENV]?.trim();
+  const drawingPath = environment[QUALIFICATION_DRAWING_ENV]?.trim();
+  return (
+    environment[QUALIFICATION_MODE_ENV]?.trim() ===
+      DISPLAY_STATE_QUALIFICATION_MODE &&
+    Boolean(token && TOKEN_PATTERN.test(token)) &&
+    Boolean(drawingPath && path.isAbsolute(drawingPath))
+  );
+}
 
 function validateFields(fields: QualificationFields): void {
   for (const [key, value] of Object.entries(fields)) {

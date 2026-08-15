@@ -68,6 +68,28 @@ test("renders independent toolbar preferences", () => {
   );
 });
 
+test("exposes display-state observation only for an explicit qualification", () => {
+  const ordinary = renderWebviewHtml(template, {
+    cspSource: "vscode-webview:",
+    nonce: "abcdefghijklmnopqrstuvwxyz",
+    stylesUri: "vscode-webview://test/styles.css",
+    scriptUri: "vscode-webview://test/main.mjs",
+  });
+  const qualification = renderWebviewHtml(template, {
+    cspSource: "vscode-webview:",
+    nonce: "abcdefghijklmnopqrstuvwxyz",
+    stylesUri: "vscode-webview://test/styles.css",
+    scriptUri: "vscode-webview://test/main.mjs",
+    displayStateQualification: true,
+  });
+
+  assert.doesNotMatch(ordinary, /data-display-state-qualification/u);
+  assert.match(
+    qualification,
+    /data-display-state-qualification="true"/u,
+  );
+});
+
 test("rejects automatic or unknown scroll input modes", () => {
   assert.equal(normalizeWebviewScrollInputMode("auto"), "mouse-zoom");
   assert.equal(normalizeWebviewScrollInputMode("unknown"), "mouse-zoom");
