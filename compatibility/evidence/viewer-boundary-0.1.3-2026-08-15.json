@@ -10,7 +10,7 @@
   "releaseControl": {
     "stage": "prerelease",
     "tag": "viewer-core-v0.1.3",
-    "tagPublicationApproved": true,
+    "tagPublicationApproved": false,
     "automaticStablePromotion": false
   },
   "developmentQualification": null,

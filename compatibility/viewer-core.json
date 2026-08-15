@@ -21,7 +21,7 @@
     "kind": "github-release-and-packages",
     "published": true,
     "releaseStage": "prerelease",
-    "tagPublicationApproved": true,
+    "tagPublicationApproved": false,
     "automaticStablePromotion": false,
     "packageVersions": {
       "viewerCore": "0.1.3",
