@@ -304,7 +304,7 @@ test("uses native Windows isolation and an inherited input handle", async () => 
   assert.doesNotMatch(hostSource, /stageWindowsInput|copyFile\(|stagedPath/u);
   assert.match(
     sceneCacheSource,
-    /block->blkisxref\s*\|\| \(block->xref_pname/u,
+    /block_is_external_reference \(block\)/u,
   );
 });
 
@@ -475,8 +475,34 @@ test("preserves saved presentation controls and XREF load state", async () => {
     sceneCacheSource,
     /model_annotation_scale[\s\S]*?copy_variable_dictionary_value \(dwg, "CANNOSCALE"\)/u,
   );
-  assert.match(sceneCacheSource, /block->xref_loaded/u);
-  assert.match(sceneCacheSource, /block->is_xref_resolved/u);
+  assert.match(
+    sceneCacheSource,
+    /loaded = !block->xref_loaded;/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /loaded \|\| block->is_xref_resolved/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /flags \|= block_xref_state_flags \(block\);/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /block->blkisxref \|\| block->xrefoverlaid[\s\S]*?block_xref_path_is_explicit \(block->xref_pname\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /strchr \(value, '\/'\) \|\| strchr \(value, '\\\\'\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /value\[length - 4u\] == '\.'[\s\S]*?value\[length - 1u\] == 'G'/u,
+  );
+  assert.doesNotMatch(
+    sceneCacheSource,
+    /if \(block->xref_loaded\)/u,
+  );
   assert.match(
     sceneCacheSource,
     /tables->presentation_settings >> 6/u,

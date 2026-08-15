@@ -149,11 +149,11 @@ export function blockExternalReferenceSavedState(block) {
   if (!blockExternalReferenceIsDiscoverable(block)) {
     return "not-xref";
   }
-  if (block.xrefLoaded === false) {
-    return "unloaded";
-  }
   if (block.xrefResolved === false) {
     return "unresolved";
+  }
+  if (block.xrefLoaded === false) {
+    return "unloaded";
   }
   return "enabled";
 }

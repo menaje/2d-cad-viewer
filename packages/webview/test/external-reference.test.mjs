@@ -68,6 +68,19 @@ test("discovers saved external references without automatically displaying unloa
     blockExternalReferenceIsDisplayable(unresolved),
     false,
   );
+  const unresolvedAndNotLoaded = {
+    ...base,
+    xrefLoaded: false,
+    xrefResolved: false,
+  };
+  assert.equal(
+    blockExternalReferenceSavedState(unresolvedAndNotLoaded),
+    "unresolved",
+  );
+  assert.equal(
+    blockExternalReferenceIsDisplayable(unresolvedAndNotLoaded),
+    false,
+  );
   assert.equal(
     blockExternalReferenceIsDiscoverable({ ...base, flags: 0 }),
     false,

@@ -37,7 +37,13 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   inventory does not reject valid pre-R2007 Korean drawings as malformed
   UTF-8;
 - XREF block records retain the original relative, drive, UNC or POSIX path
-  for host-side resolution without changing the source drawing;
+  for host-side resolution without changing the source drawing. The adapter
+  normalizes DWG's inverted BLOCK_HEADER Loaded Bit (`0` means loaded) into the
+  semantic Scene Cache loaded flag; a loaded XREF is also resolved, while the
+  common table resolved value distinguishes unloaded from unresolved when the
+  reference is not loaded. A missing `blkisxref` marker is recovered only when
+  the retained value has explicit path syntax or a `.dwg` suffix, so ordinary
+  block metadata is not promoted to an external reference;
 - LINE, ARC, CIRCLE, INSERT/MINSERT, LWPOLYLINE, 2D/3D POLYLINE and
   ELLIPSE source records plus SPLINE headers and knot/weight/control/fit pools
   are preserved;

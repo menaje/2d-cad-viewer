@@ -306,11 +306,19 @@ writer retains the path stored by the DWG—relative, Windows drive, UNC or
 POSIX—without converting it to the current machine's path syntax. The host
 resolves that portable source string and never rewrites the original drawing.
 Writers set bit 2 whenever LibreDWG identifies the block as an XREF or retains
-a non-empty external path. The v1.21 compatibility path also normalizes a
-record that has bit 4 and a non-empty path but lacks bit 2; this preserves XREF
-discovery for compatible caches written from LibreDWG revisions that omit
-`blkisxref` while retaining `xref_pname`. Version 1.22+ readers preserve the
-explicit XREF, loaded and resolved state without that legacy inference.
+an explicit path containing a separator or `.dwg` suffix. The bounded path
+check recovers LibreDWG revisions that omit `blkisxref` without promoting bare
+ordinary-block metadata such as a name or application marker. The v1.21
+compatibility path also normalizes a record that has bit 4 and a non-empty path
+but lacks bit 2. Version 1.22+ readers preserve the explicit XREF, loaded and
+resolved state without that legacy inference.
+The LibreDWG writer converts the raw BLOCK_HEADER Loaded Bit before writing
+these semantic flags because DWG stores zero for a loaded reference. A loaded
+reference always sets both bits 7 and 8. When the raw loaded bit is set, the
+common table resolved value selects unloaded (`loaded=false`, `resolved=true`)
+or unresolved (`loaded=false`, `resolved=false`). Consumers test resolved
+before loaded so the latter combination remains unresolved rather than being
+misreported as an intentional unload.
 
 ## Shared block-instance records
 

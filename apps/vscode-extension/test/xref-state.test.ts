@@ -11,7 +11,7 @@ test("only automatically loads an enabled saved XREF", () => {
     [{}, "enabled", true],
     [{ xrefLoaded: true, xrefResolved: true }, "enabled", true],
     [{ xrefLoaded: false, xrefResolved: true }, "unloaded", false],
-    [{ xrefLoaded: false, xrefResolved: false }, "unloaded", false],
+    [{ xrefLoaded: false, xrefResolved: false }, "unresolved", false],
     [{ xrefLoaded: true, xrefResolved: false }, "unresolved", false],
   ] as const) {
     const actual = xrefSavedState(fields);

@@ -9,11 +9,11 @@ export function xrefSavedState({
   xrefLoaded,
   xrefResolved,
 }: XrefSavedStateFields): XrefSavedState {
-  if (xrefLoaded === false) {
-    return "unloaded";
-  }
   if (xrefResolved === false) {
     return "unresolved";
+  }
+  if (xrefLoaded === false) {
+    return "unloaded";
   }
   return "enabled";
 }

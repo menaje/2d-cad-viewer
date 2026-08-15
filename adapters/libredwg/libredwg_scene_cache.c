@@ -4090,6 +4090,44 @@ write_layer_section (CacheWriter *writer, const CacheTables *tables,
 }
 
 static int
+block_xref_path_is_explicit (const char *value)
+{
+  size_t length;
+  if (!value || !value[0])
+    return 0;
+  if (strchr (value, '/') || strchr (value, '\\'))
+    return 1;
+  length = strlen (value);
+  return length >= 4u && value[length - 4u] == '.'
+         && (value[length - 3u] == 'd' || value[length - 3u] == 'D')
+         && (value[length - 2u] == 'w' || value[length - 2u] == 'W')
+         && (value[length - 1u] == 'g' || value[length - 1u] == 'G');
+}
+
+static int
+block_is_external_reference (const Dwg_Object_BLOCK_HEADER *block)
+{
+  return block->blkisxref || block->xrefoverlaid
+         || block_xref_path_is_explicit (block->xref_pname);
+}
+
+static uint32_t
+block_xref_state_flags (const Dwg_Object_BLOCK_HEADER *block)
+{
+  int loaded;
+  if (!block_is_external_reference (block))
+    return 0;
+
+  /* LibreDWG exposes the DWG BLOCK_HEADER Loaded Bit without semantic
+     normalization: zero means loaded. A loaded XREF is necessarily resolved;
+     for a non-loaded XREF the common table field remains the saved resolved
+     discriminator. */
+  loaded = !block->xref_loaded;
+  return (loaded ? 1u << 7 : 0u)
+         | ((loaded || block->is_xref_resolved) ? 1u << 8 : 0u);
+}
+
+static int
 write_block_section (CacheWriter *writer, const CacheTables *tables,
                      SectionEntry *entry)
 {
@@ -4141,27 +4179,24 @@ write_block_section (CacheWriter *writer, const CacheTables *tables,
       Dwg_Object_BLOCK_HEADER *block
           = tables->blocks[i].object->tio.object->tio.BLOCK_HEADER;
       uint32_t flags = 0;
+      int is_xref = block_is_external_reference (block);
       double base_point[3]
           = { block->base_pt.x, block->base_pt.y, block->base_pt.z };
       if (block->anonymous)
         flags |= 1u;
       if (block->hasattrs)
         flags |= 1u << 1;
-      if (block->blkisxref
-          || (block->xref_pname && block->xref_pname[0]))
+      if (is_xref)
         flags |= 1u << 2;
       if (block->xrefoverlaid)
         flags |= 1u << 3;
-      if (block->xref_pname && block->xref_pname[0])
+      if (is_xref && block->xref_pname && block->xref_pname[0])
         flags |= 1u << 4;
       if (block->explodable)
         flags |= 1u << 5;
       if (block->block_scaling == 0)
         flags |= 1u << 6;
-      if (block->xref_loaded)
-        flags |= 1u << 7;
-      if (block->is_xref_resolved)
-        flags |= 1u << 8;
+      flags |= block_xref_state_flags (block);
       if (!write_u64 (writer, tables->blocks[i].handle)
           || !write_u32 (writer, references[i * 4])
           || !write_u32 (writer, references[i * 4 + 1])
