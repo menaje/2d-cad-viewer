@@ -2,7 +2,7 @@
   "name": "dwg-viewer-vscode",
   "displayName": "2D CAD Viewer for VS Code",
   "description": "Open-source, local-first 2D CAD viewer compatible with the DWG file format, with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "menaje",
   "license": "MPL-2.0",
   "private": true,

@@ -1,6 +1,6 @@
 {
   "name": "2d-cad-viewer",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "Open-source, local-first 2D CAD viewer compatible with the DWG file format for VS Code",
   "license": "MPL-2.0",
