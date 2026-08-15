@@ -1,0 +1,114 @@
+{
+  "schema": "dwg-viewer-boundary-qualification/1",
+  "status": "passed-viewer-owned-boundary",
+  "asOf": "2026-08-15",
+  "scope": {
+    "repository": "menaje/2d-cad-viewer",
+    "externalConsumerQualification": "consumer-owned-not-executed",
+    "deploymentPerformed": false
+  },
+  "releaseControl": {
+    "stage": "prerelease",
+    "tag": "viewer-core-v0.1.3",
+    "tagPublicationApproved": true,
+    "automaticStablePromotion": false
+  },
+  "developmentQualification": null,
+  "publicPackages": {
+    "viewerCore": {
+      "package": "@menaje/viewer-core",
+      "version": "0.1.3",
+      "license": "MPL-2.0",
+      "sourceModules": 28,
+      "externalImports": [
+        "@menaje/viewer-render-protocol"
+      ],
+      "productBootstrapImports": 0
+    },
+    "renderProtocol": {
+      "package": "@menaje/viewer-render-protocol",
+      "version": "0.1.3",
+      "license": "MPL-2.0",
+      "sourceModules": 6,
+      "externalImports": [],
+      "productBootstrapImports": 0
+    },
+    "viewerUi": {
+      "package": "@menaje/viewer-ui",
+      "version": "0.1.3",
+      "license": "MPL-2.0",
+      "sourceModules": 5,
+      "externalImports": [],
+      "productBootstrapImports": 0
+    }
+  },
+  "artifacts": {
+    "viewerCore": {
+      "file": "menaje-viewer-core-0.1.3.tgz",
+      "publishedSha256": "f69cf8d08648a33906649442f0ac083456f97a6962bca0afe62b180a6e95c15f",
+      "publishedBytes": 55678,
+      "contentSha256": "f4106b57f684de45f527b351ac54830d83b9f743adb5de20eae3f110c227d6b3",
+      "entries": 32,
+      "runnerRepackByteIdentical": true
+    },
+    "renderProtocol": {
+      "file": "menaje-viewer-render-protocol-0.1.3.tgz",
+      "publishedSha256": "b6d2b07644dc5936d76ac2280b859c306f65c7976c08e5e4955fd790fb4f93ad",
+      "publishedBytes": 16642,
+      "contentSha256": "572a5745190d005dd85bd5b65243c0bfe78fed358fad56e79b0bdb4313ff2456",
+      "entries": 10,
+      "runnerRepackByteIdentical": true
+    },
+    "viewerUi": {
+      "file": "menaje-viewer-ui-0.1.3.tgz",
+      "publishedSha256": "86452348c0dd435193b10c3bc9d3944faa6b58a3b97bdf2b6992a70357d2870b",
+      "publishedBytes": 13834,
+      "contentSha256": "b4633688134285a0a90606ee180cd8d14c7e49963c44c35a6f5e88fb8d2520e3",
+      "entries": 9,
+      "runnerRepackByteIdentical": true
+    }
+  },
+  "artifactOnlyConsumer": {
+    "identities": {
+      "viewerCore": "menaje-viewer-core/0.1",
+      "renderProtocol": "menaje-viewer-render-protocol/0.1.0",
+      "viewerUi": "menaje-viewer-ui/0.1"
+    },
+    "conformance": {
+      "renderSourceProtocol": "0.1.0",
+      "renderSourceDisposed": true,
+      "serviceExternalIdentity": true,
+      "serviceLayerKinds": [
+        "base",
+        "live",
+        "added",
+        "modified",
+        "removed",
+        "diagnostic"
+      ],
+      "serviceRevisionEvents": 1,
+      "serviceDiagnosticBatches": 1,
+      "serviceDiagnostics": 1,
+      "serviceReplayRejected": true,
+      "renderDeltaRevision": "revision:delta-mock:3",
+      "stagedRenderDeltaRevision": "revision:delta-mock:3",
+      "stagedRenderDeltaRepresentation": "3d",
+      "stagedAtomicGeometryPickCommit": true,
+      "stagedPrepareFailureReleasedResources": true,
+      "stagedCancellationReleasedResources": true
+    },
+    "standalone": {
+      "openedWithoutExternalProduct": true,
+      "optionalIntegrationAbsent": true,
+      "hostDisposals": 1,
+      "presentationDisposals": 1
+    }
+  },
+  "productEntrypoints": {
+    "browser": "packages/webview/src/main.mjs",
+    "vscodeBundle": "packages/webview/src/main.mjs",
+    "runtime": "openViewerRuntime",
+    "source": "DwgSceneCacheSource",
+    "sharedEntrypoint": true
+  }
+}

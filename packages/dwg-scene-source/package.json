@@ -33,7 +33,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@menaje/viewer-render-protocol": "0.1.2"
+    "@menaje/viewer-render-protocol": "0.1.3"
   },
   "devDependencies": {
     "@menaje/viewer-core": "0.1.3"

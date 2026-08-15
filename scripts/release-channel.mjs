@@ -4,6 +4,20 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/;
+const VIEWER_PACKAGE_PROMOTION_PATHS = Object.freeze([
+  /^compatibility\/README\.md$/u,
+  /^compatibility\/viewer-core\.json$/u,
+  /^compatibility\/evidence\/viewer-boundary-\d+\.\d+\.\d+-\d{4}-\d{2}-\d{2}\.json$/u,
+  /^docs\/architecture\.md$/u,
+  /^docs\/distribution\.md$/u,
+  /^docs\/licensing\.md$/u,
+  /^docs\/adr\/ADR-0001-viewer-core-boundary\.md$/u,
+  /^packages\/(?:render-protocol|viewer-core|viewer-ui)\//u,
+  /^packages\/(?:dwg-scene-source|webview)\/package\.json$/u,
+  /^pnpm-lock\.yaml$/u,
+  /^scripts\/qualify-viewer-boundary\.mjs$/u,
+  /^scripts\/release-channel(?:\.test)?\.mjs$/u,
+]);
 
 export function parseVersion(value) {
   const match = VERSION_PATTERN.exec(value ?? "");
@@ -51,6 +65,101 @@ export function latestVersion(versions) {
   return [...versions].sort(compareVersions).at(-1);
 }
 
+export function validateViewerPackagePromotion({
+  changedPaths,
+  compatibility,
+  packageVersions,
+  priorPackageVersions = [],
+}) {
+  if (
+    changedPaths.length === 0 ||
+    changedPaths.some(
+      (changedPath) =>
+        !VIEWER_PACKAGE_PROMOTION_PATHS.some((pattern) =>
+          pattern.test(changedPath),
+        ),
+    )
+  ) {
+    return false;
+  }
+
+  const version = validateAlignedVersions(packageVersions);
+  const expectedVersions = {
+    viewerCore: version,
+    renderProtocol: version,
+    viewerUi: version,
+  };
+  assertExactVersions(
+    compatibility.distribution?.packageVersions,
+    expectedVersions,
+    "Viewer package distribution versions must match package manifests",
+  );
+  assertExactVersions(
+    {
+      viewerCore: compatibility.viewerCore?.version,
+      renderProtocol: compatibility.renderProtocol?.version,
+      viewerUi: compatibility.viewerUi?.version,
+    },
+    expectedVersions,
+    "Viewer package compatibility versions must match package manifests",
+  );
+  if (compatibility.distribution?.published !== true) {
+    throw new Error(
+      "Viewer package promotion must target a published distribution",
+    );
+  }
+  if (compatibility.distribution?.releaseStage !== "prerelease") {
+    throw new Error("Viewer package promotion must target the prerelease stage");
+  }
+  if (compatibility.distribution?.tagPublicationApproved !== true) {
+    throw new Error(
+      "Viewer package promotion requires explicit tag publication approval",
+    );
+  }
+  if (
+    compatibility.distribution?.tag !== `viewer-core-v${version}`
+  ) {
+    throw new Error(
+      `Viewer package tag must be viewer-core-v${version}`,
+    );
+  }
+  for (const [artifactName, artifact] of Object.entries(
+    compatibility.distribution?.artifacts ?? {},
+  )) {
+    if (!artifact.file?.endsWith(`-${version}.tgz`)) {
+      throw new Error(
+        `Viewer package artifact ${artifactName} does not match ${version}`,
+      );
+    }
+  }
+  if (
+    Object.keys(compatibility.distribution?.artifacts ?? {}).length !== 3
+  ) {
+    throw new Error(
+      "Viewer package promotion requires exactly three artifacts",
+    );
+  }
+
+  const previous = latestVersion(priorPackageVersions);
+  if (previous && compareVersions(version, previous) <= 0) {
+    throw new Error(
+      `Viewer package version ${version} must be greater than existing tag viewer-core-v${previous}`,
+    );
+  }
+  return true;
+}
+
+function assertExactVersions(actual, expected, message) {
+  const expectedEntries = Object.entries(expected);
+  if (
+    !actual ||
+    Object.keys(actual).length !== expectedEntries.length ||
+    expectedEntries.some(([key, value]) => actual[key] !== value)
+  ) {
+    throw new Error(message);
+  }
+}
+
 export function determineReleaseChannel({
   eventName,
   payload,
@@ -60,6 +169,7 @@ export function determineReleaseChannel({
   existingVersionSha,
   manualMode = "dry-run",
   fallbackSha,
+  viewerPackagePromotion = false,
 }) {
   const parsedVersion = parseVersion(version);
 
@@ -129,6 +239,21 @@ export function determineReleaseChannel({
 
   const previous = latestVersion(priorVersions);
   const comparison = previous ? compareVersions(version, previous) : 1;
+  if (
+    base === "prerelease" &&
+    head === "dev" &&
+    comparison === 0 &&
+    viewerPackagePromotion
+  ) {
+    return {
+      build: false,
+      channel: "viewer-package-promotion",
+      prerelease: false,
+      publish: false,
+      releaseSha,
+      version,
+    };
+  }
   const isSafeRetry =
     comparison === 0 &&
     payload.action === "closed" &&
@@ -160,6 +285,20 @@ function readRepositoryVersions(root) {
   };
 }
 
+function readViewerPackageVersions(root) {
+  return {
+    viewerCore: readJson(
+      resolve(root, "packages/viewer-core/package.json"),
+    ).version,
+    renderProtocol: readJson(
+      resolve(root, "packages/render-protocol/package.json"),
+    ).version,
+    viewerUi: readJson(
+      resolve(root, "packages/viewer-ui/package.json"),
+    ).version,
+  };
+}
+
 function readProductTagVersions() {
   const tags = execFileSync("git", ["tag", "--list", "v[0-9]*"], {
     encoding: "utf8",
@@ -169,6 +308,42 @@ function readProductTagVersions() {
     .map((tag) => tag.trim())
     .filter((tag) => /^v\d+\.\d+\.\d+$/u.test(tag))
     .map((tag) => tag.slice(1));
+}
+
+function readViewerPackageTagVersions() {
+  const tags = execFileSync(
+    "git",
+    ["tag", "--list", "viewer-core-v[0-9]*"],
+    { encoding: "utf8" },
+  );
+  return tags
+    .split(/\r?\n/u)
+    .map((tag) => tag.trim())
+    .filter((tag) => /^viewer-core-v\d+\.\d+\.\d+$/u.test(tag))
+    .map((tag) => tag.slice("viewer-core-v".length));
+}
+
+function readPullRequestChangedPaths(payload) {
+  const pullRequest = payload.pull_request;
+  if (!pullRequest) {
+    return [];
+  }
+  const releaseSha =
+    payload.action === "closed"
+      ? pullRequest.merge_commit_sha
+      : pullRequest.head?.sha;
+  const baseSha = pullRequest.base?.sha;
+  if (!baseSha || !releaseSha) {
+    throw new Error("pull request base and release commit SHAs are required");
+  }
+  return execFileSync(
+    "git",
+    ["diff", "--name-only", baseSha, releaseSha],
+    { encoding: "utf8" },
+  )
+    .split(/\r?\n/u)
+    .map((changedPath) => changedPath.trim())
+    .filter(Boolean);
 }
 
 function readTagCommit(version) {
@@ -215,6 +390,16 @@ function writeSummary(path, result) {
 function main() {
   const payload = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
   const version = validateAlignedVersions(readRepositoryVersions(process.cwd()));
+  const viewerPackagePromotion =
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    validateViewerPackagePromotion({
+      changedPaths: readPullRequestChangedPaths(payload),
+      compatibility: readJson(
+        resolve(process.cwd(), "compatibility/viewer-core.json"),
+      ),
+      packageVersions: readViewerPackageVersions(process.cwd()),
+      priorPackageVersions: readViewerPackageTagVersions(),
+    });
   const result = determineReleaseChannel({
     eventName: process.env.GITHUB_EVENT_NAME,
     existingVersionSha: readTagCommit(version),
@@ -224,6 +409,7 @@ function main() {
     priorVersions: readProductTagVersions(),
     repository: process.env.GITHUB_REPOSITORY,
     version,
+    viewerPackagePromotion,
   });
   writeOutputs(process.env.GITHUB_OUTPUT, result);
   writeSummary(process.env.GITHUB_STEP_SUMMARY, result);

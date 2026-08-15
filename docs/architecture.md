@@ -34,15 +34,15 @@ RenderSource
        -> @menaje/viewer-ui -> product DOM
 ```
 
-These packages are `0.1.2` public previews distributed as checksum-pinned
-artifacts in the `viewer-core-v0.1.2` GitHub release and through GitHub
+These packages are `0.1.3` public previews distributed as checksum-pinned
+artifacts in the `viewer-core-v0.1.3` GitHub release and through GitHub
 Packages. Their producer compatibility record, exact artifact digests, protocol
 window, and consumer manifests are recorded in
 [`compatibility/viewer-core.json`](../compatibility/viewer-core.json).
 The interaction-time detail pause/resume and additive async staged-delta API
-are qualified as the unpublished Viewer Core 0.1.3 development artifact in
-that manifest; they do not replace the immutable `viewer-core-v0.1.2` release
-bytes.
+are included in Viewer Core 0.1.3. The synchronous adapter path remains
+compatible, and the render protocol identity stays
+`menaje-viewer-render-protocol/0.1.0`.
 The canonical Scene Cache reader and bounded range sources now live in
 `packages/dwg-scene-source`; the legacy Webview paths are compatibility
 re-exports. The public `@menaje/dwg-scene-source` package exposes that

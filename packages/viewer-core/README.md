@@ -11,17 +11,17 @@ protocol과 Core를 함께 설치합니다.
 
 ```sh
 npm install \
-  https://github.com/menaje/dwg-viewer/releases/download/viewer-core-v0.1.2/menaje-viewer-render-protocol-0.1.2.tgz \
-  https://github.com/menaje/dwg-viewer/releases/download/viewer-core-v0.1.2/menaje-viewer-core-0.1.2.tgz
+  https://github.com/menaje/2d-cad-viewer/releases/download/viewer-core-v0.1.3/menaje-viewer-render-protocol-0.1.3.tgz \
+  https://github.com/menaje/2d-cad-viewer/releases/download/viewer-core-v0.1.3/menaje-viewer-core-0.1.3.tgz
 ```
 
 GitHub Packages를 사용할 때는 `@menaje` scope를
-`https://npm.pkg.github.com`에 연결하고 두 package의 exact `0.1.2`를
+`https://npm.pkg.github.com`에 연결하고 두 package의 exact `0.1.3`을
 설치합니다.
 
-현재 소스의 Viewer Core `0.1.3`은 additive async staged-delta API를 검증하는
-미배포 development artifact입니다. 공개된 `0.1.2` package와 artifact는
-교체하지 않으며, 기존 동기 adapter는 `0.1.3`에서도 그대로 동작합니다.
+Viewer Core `0.1.3` prerelease는 additive async staged-delta API를 포함합니다.
+기존 동기 adapter는 `0.1.3`에서도 그대로 동작하며, 소비자는 위 immutable
+release artifact와 checksum을 exact pin해야 합니다.
 
 ## RenderSource
 

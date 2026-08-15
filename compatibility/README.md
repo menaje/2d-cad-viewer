@@ -8,13 +8,12 @@ Host–Webview message 없이 사용할 수 있는 WebGL presentation과 DWG Sce
 Cache source package의 버전, 공개 mount, exact artifact digest와 publication
 승인을 별도로 기록한다. 제품 bootstrap은 이 공개 계약에 포함되지 않는다.
 `developmentQualification`은 아직 새 package tag로 배포하지 않은 소스의
-추가 public API와 검증을 기록한다. 현재 Viewer Core 0.1.3 개발 artifact는
-기존 동기 delta API와 호환되는 async prepare/atomic commit/rollback/dispose
-경계와 artifact-only staged 3D fixture를 포함한다. 개발 소스의 재현 가능한
-artifact digest는 이 항목에 별도로 고정하며, 기존 `distribution`의 immutable
-artifact digest를 바꾸거나 새 버전이 배포됐다는 뜻이 아니다. Viewer Core의
-현재 개발 항목은 상호작용 중 detail read 중단·최신 camera 재선택 lifecycle과
-staged Render Delta lifecycle이며, Viewer WebGL의 현재 개발 항목은 revision
+추가 public API와 검증이 있을 때만 기록한다. 개발 소스의 재현 가능한 artifact
+digest는 이 항목에 별도로 고정하며, 기존 `distribution`의 immutable artifact
+digest를 바꾸거나 새 버전이 배포됐다는 뜻이 아니다. Viewer Core 0.1.3의
+상호작용 중 detail read 중단·최신 camera 재선택 lifecycle과 기존 동기 delta
+API에 호환되는 async prepare/atomic commit/rollback/dispose 경계는 현재
+`distribution`으로 승격됐다. Viewer WebGL의 현재 개발 항목은 revision
 comparison mount다.
 
 - `public-preview`는 package/API가 공개 배포됐지만 아직 `0.x` compatibility
@@ -58,9 +57,9 @@ producer pin과 일치하는지 검증한다. `developmentQualification`이 있�
 artifact만 설치해
 RenderSource/Service fixture와 standalone runtime을 실행한다. Browser와
 VS Code가 같은 Webview entrypoint를 bundle하는지도 확인한다. 이 저장소가
-소유하지 않는 BIM/Spatial consumer qualification은 실행하거나 수정하지
-않으며 각 consumer manifest가 책임진다. 현재 고정 evidence는
-[`evidence/viewer-boundary-0.1.2-2026-08-04.json`](evidence/viewer-boundary-0.1.2-2026-08-04.json)에
+소유하지 않는 외부 consumer qualification은 실행하거나 수정하지 않으며 각
+consumer manifest가 책임진다. 현재 고정 evidence는
+[`evidence/viewer-boundary-0.1.3-2026-08-15.json`](evidence/viewer-boundary-0.1.3-2026-08-15.json)에
 있다.
 
 `native-document-adapter.json`은 raw DWG query/change/write backend의
