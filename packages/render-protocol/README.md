@@ -3,7 +3,7 @@
 Viewer Core가 raw Scene Cache source와 Service-backed source를 같은 경계에서
 열기 위한 source-neutral 계약입니다.
 
-현재 `0.1.2`는 checksum-pinned GitHub Release와 GitHub Packages에 배포되는
+현재 `0.1.3`은 checksum-pinned GitHub Release와 GitHub Packages에 배포되는
 public preview contract이며 다음을 검증합니다.
 
 - exact semantic-version negotiation
@@ -27,11 +27,11 @@ public preview contract이며 다음을 검증합니다.
 저장소의 `compatibility/viewer-core.json`에 고정되어 있습니다.
 
 ```sh
-npm install https://github.com/menaje/dwg-viewer/releases/download/viewer-core-v0.1.2/menaje-viewer-render-protocol-0.1.2.tgz
+npm install https://github.com/menaje/2d-cad-viewer/releases/download/viewer-core-v0.1.3/menaje-viewer-render-protocol-0.1.3.tgz
 ```
 
 GitHub Packages를 사용할 때는 `@menaje` scope를
-`https://npm.pkg.github.com`에 연결하고 exact `0.1.2`를 설치합니다.
+`https://npm.pkg.github.com`에 연결하고 exact `0.1.3`을 설치합니다.
 
 이 package는 Spatial Workspace, Agent method, credential, 실제 file path와
 기존 `dwg-*` Host–Webview message를 포함하지 않습니다.

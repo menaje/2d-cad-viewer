@@ -1,6 +1,6 @@
 {
   "name": "@menaje/viewer-render-protocol",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Source-neutral Viewer render source, snapshot, delta, identity, and range contracts",
   "license": "MPL-2.0",
   "private": false,
@@ -14,7 +14,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/menaje/dwg-viewer.git",
+    "url": "git+https://github.com/menaje/2d-cad-viewer.git",
     "directory": "packages/render-protocol"
   },
   "publishConfig": {

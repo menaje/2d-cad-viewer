@@ -6,6 +6,7 @@ import {
   determineReleaseChannel,
   latestVersion,
   parseVersion,
+  validateViewerPackagePromotion,
   validateAlignedVersions,
 } from "./release-channel.mjs";
 
@@ -83,6 +84,103 @@ test("routes an even-minor dev merge to stable preparation only", () => {
   });
   assert.equal(result.channel, "stable-preparation");
   assert.equal(result.publish, false);
+});
+
+test("routes an approved Viewer package-only promotion without product artifacts", () => {
+  const result = determineReleaseChannel({
+    ...common,
+    payload: pullRequestPayload({ base: "prerelease", head: "dev" }),
+    priorVersions: ["0.1.8"],
+    version: "0.1.8",
+    viewerPackagePromotion: true,
+  });
+  assert.deepEqual(result, {
+    build: false,
+    channel: "viewer-package-promotion",
+    prerelease: false,
+    publish: false,
+    releaseSha: "1111111111111111111111111111111111111111",
+    version: "0.1.8",
+  });
+});
+
+test("validates a bounded, new, and explicitly approved Viewer package promotion", () => {
+  const compatibility = {
+    viewerCore: { version: "0.1.3" },
+    renderProtocol: { version: "0.1.3" },
+    viewerUi: { version: "0.1.3" },
+    distribution: {
+      published: true,
+      releaseStage: "prerelease",
+      tagPublicationApproved: true,
+      packageVersions: {
+        viewerCore: "0.1.3",
+        renderProtocol: "0.1.3",
+        viewerUi: "0.1.3",
+      },
+      tag: "viewer-core-v0.1.3",
+      artifacts: {
+        viewerCore: { file: "menaje-viewer-core-0.1.3.tgz" },
+        renderProtocol: {
+          file: "menaje-viewer-render-protocol-0.1.3.tgz",
+        },
+        viewerUi: { file: "menaje-viewer-ui-0.1.3.tgz" },
+      },
+    },
+  };
+  const packageVersions = {
+    viewerCore: "0.1.3",
+    renderProtocol: "0.1.3",
+    viewerUi: "0.1.3",
+  };
+  assert.equal(
+    validateViewerPackagePromotion({
+      changedPaths: [
+        "compatibility/viewer-core.json",
+        "packages/viewer-core/package.json",
+        "scripts/release-channel.mjs",
+      ],
+      compatibility,
+      packageVersions,
+      priorPackageVersions: ["0.1.2"],
+    }),
+    true,
+  );
+  assert.equal(
+    validateViewerPackagePromotion({
+      changedPaths: ["packages/webview/src/main.mjs"],
+      compatibility,
+      packageVersions,
+      priorPackageVersions: ["0.1.2"],
+    }),
+    false,
+  );
+  assert.throws(
+    () =>
+      validateViewerPackagePromotion({
+        changedPaths: ["compatibility/viewer-core.json"],
+        compatibility: {
+          ...compatibility,
+          distribution: {
+            ...compatibility.distribution,
+            tagPublicationApproved: false,
+          },
+        },
+        packageVersions,
+        priorPackageVersions: ["0.1.2"],
+      }),
+    /explicit tag publication approval/u,
+  );
+  assert.throws(
+    () =>
+      validateViewerPackagePromotion({
+        changedPaths: ["compatibility/viewer-core.json"],
+        compatibility,
+        packageVersions,
+        priorPackageVersions: ["0.1.3"],
+      }),
+    /must be greater/u,
+  );
 });
 
 test("routes an even-minor prerelease merge to a stable release", () => {

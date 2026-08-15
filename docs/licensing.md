@@ -66,9 +66,9 @@ and include the official Exhibit A notice, README, and preferred source form.
 Mozilla permits that notice to be placed in a `LICENSE` file in a relevant
 directory. The historical `viewer-core-v0.1.1` packages add the complete
 official MPL text and separate project `NOTICE`. Both releases remain
-immutable. The superseding `viewer-core-v0.1.2` packages preserve that license
-payload and use platform-normalized archives whose actual hashes are verified
-by `pnpm run qualify:viewer-boundary`.
+immutable. The superseding `viewer-core-v0.1.2` and `viewer-core-v0.1.3`
+packages preserve that license payload and use platform-normalized archives
+whose actual hashes are verified by `pnpm run qualify:viewer-boundary`.
 
 The `viewer-webgl-v0.1.1` package train follows the same rule. Both package
 archives carry byte-identical copies of the repository's unmodified official

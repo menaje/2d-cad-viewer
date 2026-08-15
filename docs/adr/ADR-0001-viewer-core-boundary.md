@@ -4,11 +4,12 @@ status: accepted
 authority:
   - viewer-core-package-boundary
   - viewer-render-protocol-versioning
-last_reviewed: 2026-08-03
+last_reviewed: 2026-08-15
 decision_id: ADR-0001
 tracking:
   - https://github.com/menaje/2d-cad-viewer/issues/26
   - https://github.com/menaje/2d-cad-viewer/issues/30
+  - https://github.com/menaje/2d-cad-viewer/issues/48
 ---
 
 # ADR-0001: 독립 Viewer 제품과 공용 Viewer Core 경계
@@ -107,19 +108,18 @@ Viewer package version도 서로 독립적이다.
 - consumer는 package/version range와 실제 conformance 결과를 별도 manifest에
   pin한다.
 
-public preview package 0.1.0과 0.1.1은 기록으로 보존하고, 현재 preview
-0.1.2는 `viewer-core-v0.1.2` GitHub Release tarball과 GitHub Packages에
+public preview package 0.1.0, 0.1.1과 0.1.2는 기록으로 보존하고, 현재 preview
+0.1.3은 `viewer-core-v0.1.3` GitHub Release tarball과 GitHub Packages에
 함께 배포한다. producer manifest는 artifact SHA-256과 exact render
 protocol compatibility window를 기록하고, consumer는 자신의 lockfile과
 compatibility manifest에서 exact artifact를 pin한다. 0.x 범위를 벗어나는
 호환 주장은 cross-repository fixture 없이 하지 않는다.
 
 상호작용 중 detail streaming pause/resume과 async staged Render Delta
-lifecycle은 Viewer Core 0.1.3 개발 소스로 별도 qualification한다. 이 source
-artifact는 두 번 pack한 digest와 artifact-only consumer fixture를 통과하지만
-`publishedInDistribution: false`이며, immutable `viewer-core-v0.1.2` artifact를
-교체하거나 새 package가 배포됐다는 뜻이 아니다. 새 tag와 package publication은
-별도 promotion 승인이 있을 때만 수행한다.
+lifecycle은 Viewer Core 0.1.3 package 경계로 qualification한다. 세 package는
+두 번 pack한 digest와 artifact-only staged 3D consumer fixture를 통과하며,
+기존 동기 adapter와 wire protocol identity를 유지한다. 새 tag와 package
+publication은 매 version마다 별도 promotion 승인이 있을 때만 수행한다.
 
 ## Extraction 순서
 
@@ -302,10 +302,10 @@ source/service conformance와 외부 제품 없는 standalone runtime lifecycle�
 실행한다. Browser HTML과 VS Code bundle도 같은
 `packages/webview/src/main.mjs`에서 `DwgSceneCacheSource`와
 `openViewerRuntime()`을 사용해야 통과한다. 결과는
-[`viewer-boundary-0.1.2-2026-08-04.json`](../../compatibility/evidence/viewer-boundary-0.1.2-2026-08-04.json)에
+[`viewer-boundary-0.1.3-2026-08-15.json`](../../compatibility/evidence/viewer-boundary-0.1.3-2026-08-15.json)에
 고정한다.
 
-현재 `viewer-core-v0.1.2`는 prerelease로 유지한다. 새 tag publish는
+현재 `viewer-core-v0.1.3`은 prerelease로 유지한다. 새 tag publish는
 producer manifest의 `tagPublicationApproved`를 별도 변경하지 않으면
 workflow가 거부하며 stable 자동 승격은 없다. 이 qualification은
 `2d-cad-viewer`만 실행하고 BIM Explorer와 Coni Spatial 저장소를 수정하거나

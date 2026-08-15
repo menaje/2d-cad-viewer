@@ -83,6 +83,16 @@ preparation step: it runs the complete qualification and artifact build without
 publishing. After that succeeds, merging `prerelease` into `main` publishes the
 stable version.
 
+An independent Viewer package promotion may reuse the current VS Code product
+version on `dev` → `prerelease`. The release route accepts that exception only
+when every changed path belongs to the bounded Viewer package promotion set,
+all three package versions and compatibility records are aligned to a version
+newer than every existing `viewer-core-v<version>` tag, and the producer
+manifest explicitly approves that exact tag. The merge is classified as
+`viewer-package-promotion`, with product artifact build and publication both
+disabled. The separate Viewer package workflow performs publication only after
+the exact promoted commit receives its approved package tag.
+
 The `Release packages` workflow also has two non-publishing manual modes:
 `dry-run` builds and verifies every artifact, while `verify-auth` checks that
 the configured `VSCE_PAT` can publish under `menaje`.
@@ -238,3 +248,11 @@ approval flow for that specific file. Do not disable Gatekeeper globally.
 `@menaje/viewer-webgl` and `@menaje/dwg-scene-source` use
 `viewer-webgl-v<version>`. Their compatibility manifests, normalized archives,
 and release workflows remain independent of the VS Code product version.
+
+For a Viewer Core package publication, the three package manifests must have
+the same version, the producer manifest must pin each normalized archive's raw
+SHA-256, byte length, and content digest, and
+`pnpm run qualify:viewer-boundary` must match the checked-in evidence. The tag
+workflow additionally requires `tagPublicationApproved: true`, publishes the
+same exact versions to GitHub Packages, attaches the three tarballs and
+`SHA256SUMS` to the GitHub prerelease, and produces artifact attestations.

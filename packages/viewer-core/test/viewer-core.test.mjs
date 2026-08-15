@@ -452,9 +452,9 @@ test("keeps package versions and producer compatibility manifest aligned", async
     `viewer-core-v${manifest.distribution.packageVersions.viewerCore}`,
   );
   assert.deepEqual(manifest.distribution.packageVersions, {
-    viewerCore: "0.1.2",
-    renderProtocol: "0.1.2",
-    viewerUi: "0.1.2",
+    viewerCore: "0.1.3",
+    renderProtocol: "0.1.3",
+    viewerUi: "0.1.3",
   });
   for (const artifact of Object.values(
     manifest.distribution.artifacts,
@@ -473,37 +473,10 @@ test("keeps package versions and producer compatibility manifest aligned", async
     artifactOnlyStaged3dConsumer: "passed",
     command: "pnpm run qualify:viewer-boundary",
     evidence:
-      "compatibility/evidence/viewer-boundary-0.1.2-2026-08-04.json",
+      "compatibility/evidence/viewer-boundary-0.1.3-2026-08-15.json",
     externalConsumers: "consumer-owned",
   });
-  assert.deepEqual(
-    {
-      status: manifest.developmentQualification.status,
-      publishedInDistribution:
-        manifest.developmentQualification.publishedInDistribution,
-      sourceVersion:
-        manifest.developmentQualification.sourceVersion,
-      feature: manifest.developmentQualification.feature,
-      command: manifest.developmentQualification.command,
-    },
-    {
-      status: "passed",
-      publishedInDistribution: false,
-      sourceVersion: ViewerCoreVersion,
-      feature:
-        "interaction-detail-and-async-staged-render-delta-lifecycle",
-      command: "pnpm run qualify:viewer-boundary",
-    },
-  );
-  for (const artifact of Object.values(
-    manifest.developmentQualification.artifacts,
-  )) {
-    assert.match(artifact.file, /^menaje-viewer-.+\.tgz$/u);
-    assert.match(artifact.sha256, /^[a-f0-9]{64}$/u);
-    assert.match(artifact.contentSha256, /^[a-f0-9]{64}$/u);
-    assert.ok(Number.isSafeInteger(artifact.bytes));
-    assert.ok(artifact.bytes > 0);
-  }
+  assert.equal(manifest.developmentQualification, undefined);
   assert.equal(
     manifest.sources.mockRenderDelta,
     "delta-conformance",

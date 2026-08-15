@@ -30,7 +30,7 @@ const evidencePath = path.join(
   repositoryRoot,
   "compatibility",
   "evidence",
-  "viewer-boundary-0.1.2-2026-08-04.json",
+  "viewer-boundary-0.1.3-2026-08-15.json",
 );
 const emitOnly = process.argv.slice(2).includes("--emit");
 const unexpectedArguments = process.argv

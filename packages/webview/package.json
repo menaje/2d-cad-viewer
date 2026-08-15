@@ -36,9 +36,9 @@
   },
   "dependencies": {
     "@menaje/dwg-scene-source": "0.1.1",
-    "@menaje/viewer-render-protocol": "0.1.2",
+    "@menaje/viewer-render-protocol": "0.1.3",
     "@menaje/viewer-core": "0.1.3",
-    "@menaje/viewer-ui": "0.1.2",
+    "@menaje/viewer-ui": "0.1.3",
     "@mlightcad/shx-parser": "1.4.5",
     "earcut": "3.2.3",
     "emf-converter": "2.0.2"
