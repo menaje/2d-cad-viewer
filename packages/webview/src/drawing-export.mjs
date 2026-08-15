@@ -231,7 +231,7 @@ export function makeLayoutPngZipEntries(pages) {
   }
   const width = Math.max(2, String(pages.length).length);
   const manifest = [
-    "DWG Viewer layout PNG files",
+    "2D CAD Viewer layout PNG files",
     "PNG file\tDrawing layout name",
   ];
   const entries = pages.map((page, index) => {

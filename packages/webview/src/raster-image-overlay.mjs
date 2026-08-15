@@ -5,8 +5,11 @@ import {
   includePoint,
   transformPoint,
 } from "./math.mjs";
-import { effectiveClipBounds } from "./instance-graph.mjs?v=1.21.0";
-import { decodeCadOpacity } from "./cad-color.mjs";
+import { effectiveClipBounds } from "./instance-graph.mjs?v=1.26.0";
+import {
+  decodeCadColor,
+  decodeCadOpacity,
+} from "./cad-color.mjs";
 import {
   indexDwgRenderDeltaStyles,
   renderDeltaInstanceStyle,
@@ -30,8 +33,10 @@ import {
   viewportLayerColor,
   viewportStyleRow,
 } from "./viewport-layer-state.mjs";
+import { instanceIsVisible } from "./instance-visibility.mjs";
 
 const NO_LAYER = 0xffffffff;
+const BY_LAYER_ENTITY_COLOR = 1 << 24;
 const DEFAULT_MAXIMUM_SOURCE_IMAGES = 65_536;
 const DEFAULT_MAXIMUM_OCCURRENCES = 4_096;
 const DEFAULT_MAXIMUM_COMPRESSED_BYTES = 64 * 1024 * 1024;
@@ -196,7 +201,9 @@ export class RasterImageAssetStore {
       !Number.isSafeInteger(imageIndex) ||
       imageIndex < 0 ||
       !/^[a-f0-9]{64}$/u.test(resourceId) ||
-      !["image/jpeg", "image/png", "image/bmp"].includes(mimeType) ||
+      !["image/jpeg", "image/png", "image/bmp", "image/gif"].includes(
+        mimeType,
+      ) ||
       !Number.isSafeInteger(width) ||
       width <= 0 ||
       !Number.isSafeInteger(height) ||
@@ -671,6 +678,26 @@ function drawUnavailableImage(context, polygon) {
   context.stroke();
 }
 
+function drawImageFrame(context, polygon, color) {
+  if (polygon.length < 3 || !polygon.flat().every(Number.isFinite)) {
+    return false;
+  }
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.globalAlpha = 1;
+  context.filter = "none";
+  context.strokeStyle = `rgb(${color[0]} ${color[1]} ${color[2]})`;
+  context.lineWidth = Math.max(globalThis.devicePixelRatio ?? 1, 1);
+  context.setLineDash([]);
+  context.beginPath();
+  context.moveTo(polygon[0][0], polygon[0][1]);
+  for (let index = 1; index < polygon.length; index += 1) {
+    context.lineTo(polygon[index][0], polygon[index][1]);
+  }
+  context.closePath();
+  context.stroke();
+  return true;
+}
+
 function boundaryPoints(record, imageEntities) {
   if (record.clipVertexCount === 0) {
     return [];
@@ -776,6 +803,9 @@ export function calculateRasterImageBounds({
       occurrences < maximumOccurrences;
       instanceIndex += 1
     ) {
+      if (!instanceIsVisible(instances, instanceIndex)) {
+        continue;
+      }
       occurrences += 1;
       const matrixOffset = instanceIndex * 16;
       const matrix =
@@ -861,6 +891,9 @@ export class CanvasRasterImageOverlay {
       maximumSourceImages = DEFAULT_MAXIMUM_SOURCE_IMAGES,
       maximumOccurrences = DEFAULT_MAXIMUM_OCCURRENCES,
       minimumScreenDimension = DEFAULT_MINIMUM_SCREEN_DIMENSION,
+      imageFrame = 0,
+      rasterImageQualityHigh = true,
+      externalReferenceOverrides = false,
     },
   ) {
     const context = canvas.getContext("2d", { alpha: true });
@@ -912,6 +945,18 @@ export class CanvasRasterImageOverlay {
     this.displayLayers = displayLayers;
     this.sourceId = sourceId;
     this.sourceLabel = sourceLabel;
+    if (!Number.isInteger(imageFrame) || imageFrame < 0 || imageFrame > 2) {
+      throw new RangeError("IMAGEFRAME must be 0, 1, or 2");
+    }
+    this.imageFrame = imageFrame;
+    if (typeof rasterImageQualityHigh !== "boolean") {
+      throw new TypeError("IMAGEQUALITY must be a boolean");
+    }
+    this.rasterImageQualityHigh = rasterImageQualityHigh;
+    if (typeof externalReferenceOverrides !== "boolean") {
+      throw new TypeError("XREFOVERRIDE must be a boolean");
+    }
+    this.externalReferenceOverrides = externalReferenceOverrides;
     this.renderDeltaTransforms = Object.freeze([]);
     this.renderDeltaStyles = Object.freeze([]);
     this.renderDeltaTransformIndex =
@@ -977,6 +1022,7 @@ export class CanvasRasterImageOverlay {
       requestedImages: 0,
       decodingImages: 0,
       failedImages: 0,
+      imageFrames: 0,
       clipOperations: 0,
       xclipOperations: 0,
       truncated: false,
@@ -1104,8 +1150,10 @@ export class CanvasRasterImageOverlay {
     if (clear) {
       context.clearRect(0, 0, width, height);
     }
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = "high";
+    context.imageSmoothingEnabled = this.rasterImageQualityHigh;
+    context.imageSmoothingQuality = this.rasterImageQualityHigh
+      ? "high"
+      : "low";
     const metrics = {
       sourceImages: this.imageEntities.length,
       renderDeltaTransforms: this.renderDeltaTransforms.length,
@@ -1116,6 +1164,9 @@ export class CanvasRasterImageOverlay {
       requestedImages: 0,
       decodingImages: 0,
       failedImages: 0,
+      imageFrames: 0,
+      rasterImageQuality:
+        this.rasterImageQualityHigh ? "high" : "draft",
       clipOperations: 0,
       xclipOperations: 0,
       truncated: false,
@@ -1233,6 +1284,9 @@ export class CanvasRasterImageOverlay {
         instanceIndex < endInstanceIndex;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         const style = renderDeltaInstanceStyle(
           this.renderDeltaStyleIndex,
           instances,
@@ -1454,6 +1508,23 @@ export class CanvasRasterImageOverlay {
         );
         const imagePath = this.imageEntities.readPath(imageIndex);
         const embeddedPresentation = imagePath.startsWith("@embedded/");
+        const layerColor = viewportLayerColor(
+          this.instanceGraph,
+          viewportStyleRow(instances, instanceIndex),
+          layerIndex,
+          this.displayLayers?.[layerIndex]?.color ?? 0,
+        );
+        const effectiveColor = this.externalReferenceOverrides
+          ? BY_LAYER_ENTITY_COLOR
+          : record.color;
+        const frameColor = decodeCadColor(effectiveColor, {
+          layer: { color: layerColor },
+          byBlock: decodeCadColor(
+            style?.color ??
+              instances.colors?.[instanceIndex] ??
+              ((2 << 30) | 7),
+          ),
+        });
         if (asset.status === "missing") {
           const requested = this.requestAsset({
             cacheId: this.cacheId,
@@ -1461,10 +1532,36 @@ export class CanvasRasterImageOverlay {
             path: imagePath,
           });
           metrics.requestedImages += requested ? 1 : 0;
+          if (!embeddedPresentation) {
+            this.#drawImageFrame(
+              record,
+              matrix,
+              [topLeft, topRight, bottomRight, bottomLeft],
+              instances.clipIds?.[instanceIndex] ?? 0,
+              camera,
+              width,
+              height,
+              frameColor,
+              metrics,
+            );
+          }
           continue;
         }
         if (asset.status === "decoding") {
           metrics.decodingImages += 1;
+          if (!embeddedPresentation) {
+            this.#drawImageFrame(
+              record,
+              matrix,
+              [topLeft, topRight, bottomRight, bottomLeft],
+              instances.clipIds?.[instanceIndex] ?? 0,
+              camera,
+              width,
+              height,
+              frameColor,
+              metrics,
+            );
+          }
           continue;
         }
         if (asset.status === "error") {
@@ -1495,6 +1592,12 @@ export class CanvasRasterImageOverlay {
           continue;
         }
         context.save();
+        const imageQualityHigh =
+          embeddedPresentation || this.rasterImageQualityHigh;
+        context.imageSmoothingEnabled = imageQualityHigh;
+        context.imageSmoothingQuality = imageQualityHigh
+          ? "high"
+          : "low";
         this.#applyXClip(
           instances.clipIds?.[instanceIndex] ?? 0,
           camera,
@@ -1518,13 +1621,13 @@ export class CanvasRasterImageOverlay {
           0,
           Math.min(
             1,
-            decodeCadOpacity(record.color, {
+            decodeCadOpacity(effectiveColor, {
               layer: decodeCadOpacity(
                 viewportLayerColor(
                   this.instanceGraph,
                   viewportStyleRow(instances, instanceIndex),
                   layerIndex,
-                  this.layers?.[layerIndex]?.color ?? 0,
+                  this.displayLayers?.[layerIndex]?.color ?? 0,
                 ),
               ),
               byBlock: 1,
@@ -1552,6 +1655,19 @@ export class CanvasRasterImageOverlay {
         }
         context.drawImage(asset.bitmap, 0, 0);
         context.restore();
+        if (!embeddedPresentation) {
+          this.#drawImageFrame(
+            record,
+            matrix,
+            [topLeft, topRight, bottomRight, bottomLeft],
+            instances.clipIds?.[instanceIndex] ?? 0,
+            camera,
+            width,
+            height,
+            frameColor,
+            metrics,
+          );
+        }
         if (this.orderSurface && this.orderScratch) {
           const scratch = this.orderScratch.canvas;
           const scratchContext = this.orderScratch.context;
@@ -1566,6 +1682,10 @@ export class CanvasRasterImageOverlay {
           scratchContext.globalAlpha = 1;
           scratchContext.globalCompositeOperation = "source-over";
           scratchContext.filter = "none";
+          scratchContext.imageSmoothingEnabled = imageQualityHigh;
+          scratchContext.imageSmoothingQuality = imageQualityHigh
+            ? "high"
+            : "low";
           scratchContext.clearRect(0, 0, asset.width, asset.height);
           if (embeddedPresentation) {
             scratchContext.fillStyle = "#fff";
@@ -1612,6 +1732,10 @@ export class CanvasRasterImageOverlay {
             );
             this.context.globalAlpha = 1;
             this.context.filter = "none";
+            this.context.imageSmoothingEnabled = imageQualityHigh;
+            this.context.imageSmoothingQuality = imageQualityHigh
+              ? "high"
+              : "low";
             this.context.setTransform(
               (topRight[0] - topLeft[0]) / asset.width,
               (topRight[1] - topLeft[1]) / asset.width,
@@ -1765,6 +1889,43 @@ export class CanvasRasterImageOverlay {
     this.context.closePath();
     this.context.clip(record.clipMode === 1 ? "evenodd" : "nonzero");
     metrics.clipOperations += 1;
+  }
+
+  #drawImageFrame(
+    record,
+    matrix,
+    fallbackPolygon,
+    clipId,
+    camera,
+    width,
+    height,
+    color,
+    metrics,
+  ) {
+    if (this.imageFrame === 0) {
+      return;
+    }
+    let polygon = fallbackPolygon;
+    if (
+      record.clippingEnabled &&
+      (record.displayProperties & 4) !== 0 &&
+      record.clipVertexCount > 0
+    ) {
+      polygon = boundaryPoints(record, this.imageEntities).map(([x, y]) =>
+        worldToScreen(
+          imageWorldPoint(record, x, y, matrix),
+          camera,
+          width,
+          height,
+        ),
+      );
+    }
+    this.context.save();
+    this.#applyXClip(clipId, camera, width, height, metrics);
+    if (drawImageFrame(this.context, polygon, color)) {
+      metrics.imageFrames += 1;
+    }
+    this.context.restore();
   }
 
   #applyXClip(clipId, camera, width, height, metrics) {

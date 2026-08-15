@@ -1,7 +1,8 @@
 // Canonical Scene Cache reader shared by DwgSceneCacheSource and legacy Webview imports.
 export const CACHE_MAGIC = new Uint8Array([68, 87, 71, 83, 67, 78, 49, 0]);
 export const CACHE_VERSION_MAJOR = 1;
-export const CACHE_VERSION_MINOR = 21;
+export const CACHE_VERSION_MINOR = 26;
+export const MINIMUM_CACHE_VERSION_MINOR = 21;
 export const HEADER_SIZE = 64;
 export const DIRECTORY_ENTRY_SIZE = 40;
 export const CACHE_HEADER_FLAG_PREVIEW = 1;
@@ -48,6 +49,8 @@ export const TEXT_ANNOTATION_COLUMN_HEIGHT_RECORD_SIZE = 8;
 export const VIEWPORT_LAYER_OVERRIDE_RECORD_SIZE = 24;
 export const EMBEDDED_IMAGE_RECORD_SIZE = 40;
 export const EMBEDDED_IMAGE_BYTE_RECORD_SIZE = 1;
+export const CURVE_LINETYPE_SCALE_RECORD_SIZE = 16;
+export const CONSTRUCTION_LINE_RECORD_SIZE = 80;
 export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_RECORDS = 10_000;
 export const DEFAULT_MAX_DISPLAY_ORDER_IDENTITY_BYTES = 8 * 1024 * 1024;
 
@@ -101,8 +104,17 @@ export const SectionKind = Object.freeze({
   ViewportLayerOverrides: 58,
   EmbeddedImageRecords: 59,
   EmbeddedImageBytes: 60,
+  CurveLinetypeScales: 61,
+  ConstructionLines: 62,
 });
 const CURRENT_SECTION_KINDS = Object.freeze(Object.values(SectionKind));
+const LEGACY_SECTION_KINDS = Object.freeze(
+  CURRENT_SECTION_KINDS.filter(
+    (kind) =>
+      kind !== SectionKind.CurveLinetypeScales &&
+      kind !== SectionKind.ConstructionLines,
+  ),
+);
 
 export const GpuLineBatchKind = Object.freeze({
   ModelOverview: 0,
@@ -163,6 +175,8 @@ const FIXED_RECORD_SIZES = new Map([
   ],
   [SectionKind.EmbeddedImageRecords, EMBEDDED_IMAGE_RECORD_SIZE],
   [SectionKind.EmbeddedImageBytes, EMBEDDED_IMAGE_BYTE_RECORD_SIZE],
+  [SectionKind.CurveLinetypeScales, CURVE_LINETYPE_SCALE_RECORD_SIZE],
+  [SectionKind.ConstructionLines, CONSTRUCTION_LINE_RECORD_SIZE],
 ]);
 const MAX_METADATA_SECTION_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_STRING_BYTES = 1024 * 1024;
@@ -238,6 +252,7 @@ export const HatchFlags = Object.freeze({
   Gradient: 1 << 3,
   SingleColorGradient: 1 << 4,
   Truncated: 1 << 5,
+  BackgroundColor: 1 << 6,
 });
 
 export const HatchStyle = Object.freeze({
@@ -665,7 +680,7 @@ export class HatchSourceTable {
       offset + 176,
       "HATCH seed-point count",
     );
-    target.gradientReserved = this.entityView.getInt32(offset + 184, true);
+    target.backgroundColor = this.entityView.getUint32(offset + 184, true);
     target.definitionLineCount = this.entityView.getUint32(
       offset + 188,
       true,
@@ -868,6 +883,44 @@ class ChunkedFixedRecordTable {
       view: chunk.view,
       offset: (index - chunk.firstRecord) * this.recordSize,
     };
+  }
+
+  readHandle(index) {
+    const { view, offset } = this.locate(index);
+    return view.getBigUint64(offset, true);
+  }
+}
+
+class ConstructionLineSourceTable extends ChunkedFixedRecordTable {
+  readEntity(index, target) {
+    if (!target || typeof target !== "object") {
+      throw new TypeError("construction-line target must be an object");
+    }
+    const { view, offset } = this.locate(index);
+    target.index = index;
+    readPrimitiveCommon(view, offset, target);
+    target.point ??= [0, 0, 0];
+    target.direction ??= [0, 0, 0];
+    for (let axis = 0; axis < 3; axis += 1) {
+      target.point[axis] = view.getFloat64(offset + 32 + axis * 8, true);
+      target.direction[axis] = view.getFloat64(
+        offset + 56 + axis * 8,
+        true,
+      );
+    }
+    target.kind = (target.commonFlags & (1 << 1)) !== 0 ? "ray" : "xline";
+    if (
+      target.handle === 0n ||
+      (target.commonFlags & ~0x3) !== 0 ||
+      target.layerIndex === 0xffffffff ||
+      target.linetypeCode > 2047 ||
+      !target.point.every(Number.isFinite) ||
+      !target.direction.every(Number.isFinite) ||
+      Math.hypot(target.direction[0], target.direction[1]) <= 1e-12
+    ) {
+      throw new Error(`construction line ${index} is invalid`);
+    }
+    return target;
   }
 }
 
@@ -1683,14 +1736,20 @@ export class SceneCacheReader {
 
     const major = headerView.getUint16(8, true);
     const minor = headerView.getUint16(10, true);
-    if (major !== CACHE_VERSION_MAJOR || minor !== CACHE_VERSION_MINOR) {
+    if (
+      major !== CACHE_VERSION_MAJOR ||
+      minor < MINIMUM_CACHE_VERSION_MINOR ||
+      minor > CACHE_VERSION_MINOR
+    ) {
       throw new Error(`unsupported scene-cache version ${major}.${minor}`);
     }
     if (headerView.getUint32(12, true) !== HEADER_SIZE) {
       throw new Error("unexpected scene-cache header size");
     }
+    const requiredSectionKinds =
+      minor >= 23 ? CURRENT_SECTION_KINDS : LEGACY_SECTION_KINDS;
     const sectionCount = headerView.getUint32(16, true);
-    if (sectionCount !== CURRENT_SECTION_KINDS.length) {
+    if (sectionCount !== requiredSectionKinds.length) {
       throw new Error(`invalid scene-cache section count: ${sectionCount}`);
     }
     if (headerView.getUint32(20, true) !== DIRECTORY_ENTRY_SIZE) {
@@ -1770,9 +1829,9 @@ export class SceneCacheReader {
       sections.set(entry.kind, Object.freeze(entry));
       ranges.push({ start: entry.offset, end, kind: entry.kind });
     }
-    for (const kind of CURRENT_SECTION_KINDS) {
+    for (const kind of requiredSectionKinds) {
       if (!sections.has(kind)) {
-        throw new Error(`Scene Cache v1.21 is missing required section ${kind}`);
+        throw new Error(`Scene Cache is missing required section ${kind}`);
       }
     }
 
@@ -1802,7 +1861,7 @@ export class SceneCacheReader {
         !annotationContexts ||
         !annotationColumnHeights
       ) {
-        throw new Error("Scene Cache v1.21 is missing required text sections");
+        throw new Error("Scene Cache is missing required text sections");
       }
       validateStringTableDirectoryEntry(textStyles, TEXT_STYLE_RECORD_SIZE);
       validateStringTableDirectoryEntry(textEntities, TEXT_ENTITY_RECORD_SIZE);
@@ -1840,7 +1899,7 @@ export class SceneCacheReader {
         !hatchGradientColors ||
         !hatchSeedPoints
       ) {
-        throw new Error("Scene Cache v1.21 is missing required HATCH sections");
+        throw new Error("Scene Cache is missing required HATCH sections");
       }
       validateStringTableDirectoryEntry(
         hatchEntities,
@@ -1866,7 +1925,7 @@ export class SceneCacheReader {
       );
       if (!hatchPatternLines || !hatchPatternDashes) {
         throw new Error(
-          "Scene Cache v1.21 is missing required HATCH pattern sections",
+          "Scene Cache is missing required HATCH pattern sections",
         );
       }
       validateRecordSection(
@@ -1883,7 +1942,7 @@ export class SceneCacheReader {
       const solidEntities = sections.get(SectionKind.SolidEntities);
       if (!pointEntities || !solidEntities) {
         throw new Error(
-          "Scene Cache v1.21 is missing required POINT or SOLID sections",
+          "Scene Cache is missing required POINT or SOLID sections",
         );
       }
       validateRecordSection(pointEntities, POINT_ENTITY_RECORD_SIZE);
@@ -1893,7 +1952,7 @@ export class SceneCacheReader {
       const faceEntities = sections.get(SectionKind.FaceEntities);
       if (!faceEntities) {
         throw new Error(
-          "Scene Cache v1.21 is missing the required 3DFACE section",
+          "Scene Cache is missing the required 3DFACE section",
         );
       }
       validateRecordSection(faceEntities, FACE_ENTITY_RECORD_SIZE);
@@ -1905,7 +1964,7 @@ export class SceneCacheReader {
       );
       if (!wipeoutEntities || !wipeoutClipVertices) {
         throw new Error(
-          "Scene Cache v1.21 is missing required WIPEOUT sections",
+          "Scene Cache is missing required WIPEOUT sections",
         );
       }
       validateRecordSection(wipeoutEntities, WIPEOUT_ENTITY_RECORD_SIZE);
@@ -1919,7 +1978,7 @@ export class SceneCacheReader {
       const drawOrderEntries = sections.get(SectionKind.DrawOrderEntries);
       if (!drawOrderTables || !drawOrderEntries) {
         throw new Error(
-          "Scene Cache v1.21 is missing required draw-order sections",
+          "Scene Cache is missing required draw-order sections",
         );
       }
       validateRecordSection(
@@ -1938,7 +1997,7 @@ export class SceneCacheReader {
       );
       if (!insertClips || !insertClipVertices) {
         throw new Error(
-          "Scene Cache v1.21 is missing required INSERT XCLIP sections",
+          "Scene Cache is missing required INSERT XCLIP sections",
         );
       }
       validateRecordSection(insertClips, INSERT_CLIP_RECORD_SIZE);
@@ -1952,7 +2011,7 @@ export class SceneCacheReader {
       const linetypeDashes = sections.get(SectionKind.LinetypeDashes);
       if (!linetypes || !linetypeDashes) {
         throw new Error(
-          "Scene Cache v1.21 is missing required linetype sections",
+          "Scene Cache is missing required linetype sections",
         );
       }
       validateStringTableDirectoryEntry(linetypes, LINETYPE_RECORD_SIZE);
@@ -1987,7 +2046,7 @@ export class SceneCacheReader {
         !layerOverrides
       ) {
         throw new Error(
-          "Scene Cache v1.21 is missing required layout sections",
+          "Scene Cache is missing required layout sections",
         );
       }
       validateStringTableDirectoryEntry(layouts, LAYOUT_RECORD_SIZE);
@@ -2021,7 +2080,7 @@ export class SceneCacheReader {
       );
       if (!imageEntities || !imageClipVertices) {
         throw new Error(
-          "Scene Cache v1.21 is missing required IMAGE sections",
+          "Scene Cache is missing required IMAGE sections",
         );
       }
       validateStringTableDirectoryEntry(
@@ -2045,7 +2104,7 @@ export class SceneCacheReader {
       const imageEntities = sections.get(SectionKind.ImageEntities);
       if (!records || !bytes || !imageEntities) {
         throw new Error(
-          "Scene Cache v1.21 is missing required embedded IMAGE sections",
+          "Scene Cache is missing required embedded IMAGE sections",
         );
       }
       validateRecordSection(records, EMBEDDED_IMAGE_RECORD_SIZE);
@@ -2110,20 +2169,61 @@ export class SceneCacheReader {
       const globalLinetypeScale = view.getFloat64(80, true);
       const currentEntityLinetypeScale = view.getFloat64(88, true);
       const linetypeDisplayFlags = view.getUint32(96, true);
+      const presentationSettings = view.getUint32(100, true);
       if (
         !Number.isFinite(globalLinetypeScale) ||
         globalLinetypeScale <= 0 ||
         !Number.isFinite(currentEntityLinetypeScale) ||
         currentEntityLinetypeScale <= 0 ||
-        (linetypeDisplayFlags & ~1) !== 0 ||
-        view.getUint32(100, true) !== 0
+        (linetypeDisplayFlags & ~1) !== 0
       ) {
         throw new Error("drawing contains invalid linetype settings");
       }
+      if (
+        (this.header.minor < 22 && presentationSettings !== 0) ||
+        (this.header.minor >= 22 &&
+          ((presentationSettings &
+              ~(
+                this.header.minor >= 26
+                  ? 0x0fffffff
+                  : this.header.minor >= 25
+                    ? 0x1ffffff
+                  : this.header.minor >= 23
+                    ? 0x1fffff
+                    : 0x7fff
+              )) !==
+              0 ||
+            (this.header.minor < 23 &&
+              (presentationSettings & ~0x7fff) !== 0) ||
+            ((presentationSettings >>> 8) & 3) === 2 ||
+            ((presentationSettings >>> 10) & 3) === 2 ||
+            ((presentationSettings & (1 << 14)) === 0 &&
+              (presentationSettings & (3 << 12)) !== 0)))
+      ) {
+        throw new Error("drawing contains invalid presentation settings");
+      }
+      const currentPresentationSettings = this.header.minor >= 22;
+      const twoBitSetting = (
+        shift,
+        fallback,
+        available = currentPresentationSettings,
+      ) => {
+        if (!available) {
+          return fallback;
+        }
+        const value = (presentationSettings >>> shift) & 3;
+        return value === 3 ? null : value;
+      };
       let savedModelView = null;
       const savedViewFlags = view.getUint32(152, true);
-      const savedViewReserved = view.getUint32(156, true);
-      if ((savedViewFlags & ~1) !== 0 || savedViewReserved !== 0) {
+      const modelAnnotationScale =
+        this.header.minor >= 22 ? view.getFloat32(156, true) : 0;
+      if (
+        (savedViewFlags & ~1) !== 0 ||
+        (this.header.minor < 22 && view.getUint32(156, true) !== 0) ||
+        !Number.isFinite(modelAnnotationScale) ||
+        modelAnnotationScale < 0
+      ) {
         throw new Error("drawing contains invalid saved model-view flags");
       }
       if ((savedViewFlags & 1) !== 0) {
@@ -2171,6 +2271,47 @@ export class SceneCacheReader {
         globalLinetypeScale,
         currentEntityLinetypeScale,
         paperSpaceLinetypeScale: (linetypeDisplayFlags & 1) !== 0,
+        attributeDisplayMode: twoBitSetting(0, 1),
+        imageFrame: twoBitSetting(2, null),
+        xclipFrame: twoBitSetting(4, null),
+        oleFrame: twoBitSetting(6, null),
+        annotationAllVisible:
+          twoBitSetting(8, 1) !== 0,
+        modelSpaceLinetypeScale:
+          twoBitSetting(10, 0) === 1,
+        frame:
+          currentPresentationSettings &&
+          (presentationSettings & (1 << 14)) !== 0
+            ? (presentationSettings >>> 12) & 3
+            : null,
+        pdfFrame: twoBitSetting(15, null, this.header.minor >= 23),
+        dwfFrame: twoBitSetting(17, null, this.header.minor >= 23),
+        dgnFrame: twoBitSetting(19, null, this.header.minor >= 23),
+        quickTextMode:
+          this.header.minor >= 25 &&
+          (presentationSettings & (1 << 21)) !== 0,
+        splineFrame:
+          this.header.minor >= 25 &&
+          (presentationSettings & (1 << 22)) !== 0,
+        displaySilhouettes:
+          this.header.minor >= 25 &&
+          (presentationSettings & (1 << 23)) !== 0,
+        externalReferenceOverrides:
+          this.header.minor >= 25 &&
+          (presentationSettings & (1 << 24)) !== 0,
+        retainExternalReferenceLayers:
+          this.header.minor >= 26
+            ? (presentationSettings & (1 << 25)) !== 0
+            : true,
+        rasterImageQualityHigh:
+          this.header.minor >= 26
+            ? (presentationSettings & (1 << 26)) !== 0
+            : true,
+        displaySilhouettesInBlocks:
+          this.header.minor >= 26
+            ? (presentationSettings & (1 << 27)) !== 0
+            : true,
+        modelAnnotationScale,
         savedModelView,
         totalEntities: readSafeU64(view, 16, "drawing entity count"),
         serializedEntities: readSafeU64(view, 24, "serialized entity count"),
@@ -2327,8 +2468,33 @@ export class SceneCacheReader {
   async readBlocks() {
     return this.memoize("blocks", async () => {
       const section = this.getSection(SectionKind.Blocks);
-      return this.readStringTable(section, 64, (view, offset, readString, index) =>
-        Object.freeze({
+      return this.readStringTable(section, 64, (view, offset, readString, index) => {
+        const rawFlags = view.getUint32(offset + 24, true);
+        const xrefPath = readString(
+          view.getUint32(offset + 56, true),
+          view.getUint32(offset + 60, true),
+        );
+        // Scene Cache v1.21 could retain xref_pname while omitting blkisxref.
+        // Recover that legacy representation without overriding the explicit
+        // loaded/resolved XREF state introduced in v1.22.
+        const flags =
+          this.header.minor < 22 &&
+          xrefPath.length > 0 &&
+          (rawFlags & (1 << 4)) !== 0
+            ? rawFlags | (1 << 2)
+            : rawFlags;
+        const supportedFlags = this.header.minor >= 22 ? 0x1ff : 0x7f;
+        if ((flags & ~supportedFlags) !== 0) {
+          throw new Error(`block ${index} contains unsupported flags`);
+        }
+        const isExternalReference = (flags & (1 << 2)) !== 0;
+        if (
+          !isExternalReference &&
+          (flags & ((1 << 7) | (1 << 8))) !== 0
+        ) {
+          throw new Error(`block ${index} contains invalid XREF state`);
+        }
+        return Object.freeze({
           index,
           handle: view.getBigUint64(offset, true),
           name: readString(
@@ -2337,18 +2503,21 @@ export class SceneCacheReader {
           ),
           entityCount: view.getUint32(offset + 16, true),
           referenceCount: view.getUint32(offset + 20, true),
-          flags: view.getUint32(offset + 24, true),
+          flags,
+          xrefLoaded:
+            isExternalReference &&
+            (this.header.minor < 22 || (flags & (1 << 7)) !== 0),
+          xrefResolved:
+            isExternalReference &&
+            (this.header.minor < 22 || (flags & (1 << 8)) !== 0),
           units: view.getInt32(offset + 28, true),
           basePoint: ensureFiniteVector(
             readVec3F64(view, offset + 32),
             "block base point",
           ),
-          xrefPath: readString(
-            view.getUint32(offset + 56, true),
-            view.getUint32(offset + 60, true),
-          ),
-        }),
-      );
+          xrefPath,
+        });
+      });
     });
   }
 
@@ -2401,7 +2570,14 @@ export class SceneCacheReader {
                 plotType: view.getUint16(offset + 48, true),
                 standardScaleType: view.getUint16(offset + 50, true),
                 shadePlotType: view.getUint16(offset + 52, true),
-                reserved: view.getUint16(offset + 54, true),
+                annotationAllVisible:
+                  this.header.minor >= 24
+                    ? view.getUint16(offset + 54, true) !== 0
+                    : null,
+                reserved:
+                  this.header.minor >= 24
+                    ? view.getUint16(offset + 54, true) & ~1
+                    : view.getUint16(offset + 54, true),
                 standardScaleFactor: view.getFloat64(offset + 56, true),
                 paperUnits: view.getFloat64(offset + 64, true),
                 drawingUnits: view.getFloat64(offset + 72, true),
@@ -3013,15 +3189,42 @@ export class SceneCacheReader {
           columnHeightCount,
           `text annotation context ${index} column-height range`,
         );
-        if (
-          textKindsByHandle.get(handle) !== TextEntityKind.MText ||
+        const ownerKind = textKindsByHandle.get(handle);
+        const textContext = (flags & (1 << 3)) !== 0;
+        const validTextOwner =
+          ownerKind === TextEntityKind.Text ||
+          ownerKind === TextEntityKind.AttributeDefinition ||
+          ownerKind === TextEntityKind.Attribute;
+        const commonInvalid =
           !Number.isFinite(scale) ||
           scale <= 0 ||
+          !insertionPoint.every(Number.isFinite) ||
+          !xAxisDirection.every(Number.isFinite) ||
+          annotationView.getUint32(offset + 108, true) !== 0 ||
+          firstColumnHeight !== expectedFirstColumnHeight ||
+          columnHeightCount >
+            MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT ||
+          columnHeightEnd > annotationColumnHeights.length ||
+          annotationView.getBigUint64(offset + 144, true) !== 0n ||
+          annotationView.getBigUint64(offset + 152, true) !== 0n;
+        const textInvalid =
+          !validTextOwner ||
+          flags & ~0x9 ||
+          attachment < 0 ||
+          attachment > 5 ||
+          !Number.isFinite(rectangleHeight) ||
+          rectangleWidth !== 0 ||
+          extentsWidth !== 0 ||
+          extentsHeight !== 0 ||
+          columnType !== 0 ||
+          columnWidth !== 0 ||
+          columnGutter !== 0 ||
+          columnHeightCount !== 0;
+        const mtextInvalid =
+          ownerKind !== TextEntityKind.MText ||
           flags & ~0x7 ||
           attachment < 1 ||
           attachment > 9 ||
-          !insertionPoint.every(Number.isFinite) ||
-          !xAxisDirection.every(Number.isFinite) ||
           Math.hypot(...xAxisDirection) <= Number.EPSILON ||
           ![
             rectangleHeight,
@@ -3032,39 +3235,47 @@ export class SceneCacheReader {
             columnGutter,
           ].every((value) => Number.isFinite(value) && value >= 0) ||
           columnType < 0 ||
-          columnType > 2 ||
-          annotationView.getUint32(offset + 108, true) !== 0 ||
-          firstColumnHeight !== expectedFirstColumnHeight ||
-          columnHeightCount >
-            MAX_TEXT_ANNOTATION_COLUMN_HEIGHTS_PER_CONTEXT ||
-          columnHeightEnd > annotationColumnHeights.length ||
-          annotationView.getBigUint64(offset + 144, true) !== 0n ||
-          annotationView.getBigUint64(offset + 152, true) !== 0n
-        ) {
+          columnType > 2;
+        if (commonInvalid || (textContext ? textInvalid : mtextInvalid)) {
           throw new Error(
             `text annotation context ${index} contains invalid metadata`,
           );
         }
-        const context = Object.freeze({
-          scale,
-          isDefault: Boolean(flags & 1),
-          autoHeight: Boolean(flags & 2),
-          flowReversed: Boolean(flags & 4),
-          attachment,
-          insertionPoint: Object.freeze(insertionPoint),
-          xAxisDirection: Object.freeze(xAxisDirection),
-          rectangleHeight,
-          rectangleWidth,
-          extentsWidth,
-          extentsHeight,
-          columnType,
-          columnWidth,
-          columnGutter,
-          columnHeights: annotationColumnHeights.subarray(
-            firstColumnHeight,
-            columnHeightEnd,
-          ),
-        });
+        const context = textContext
+          ? Object.freeze({
+              kind: "text",
+              scale,
+              isDefault: Boolean(flags & 1),
+              horizontalAlignment: attachment,
+              insertionPoint: Object.freeze(insertionPoint),
+              alignmentPoint: Object.freeze(xAxisDirection),
+              rotation: rectangleHeight,
+              columnHeights: annotationColumnHeights.subarray(
+                firstColumnHeight,
+                columnHeightEnd,
+              ),
+            })
+          : Object.freeze({
+              kind: "mtext",
+              scale,
+              isDefault: Boolean(flags & 1),
+              autoHeight: Boolean(flags & 2),
+              flowReversed: Boolean(flags & 4),
+              attachment,
+              insertionPoint: Object.freeze(insertionPoint),
+              xAxisDirection: Object.freeze(xAxisDirection),
+              rectangleHeight,
+              rectangleWidth,
+              extentsWidth,
+              extentsHeight,
+              columnType,
+              columnWidth,
+              columnGutter,
+              columnHeights: annotationColumnHeights.subarray(
+                firstColumnHeight,
+                columnHeightEnd,
+              ),
+            });
         const contexts = annotationContextsByHandle.get(handle);
         if (contexts) {
           contexts.push(context);
@@ -3236,9 +3447,19 @@ export class SceneCacheReader {
         const flags = entityView.getUint32(offset + 48, true);
         const style = entityView.getUint16(offset + 52, true);
         const patternType = entityView.getUint16(offset + 54, true);
-        if (flags & ~0x3f || style > HatchStyle.Ignore || patternType > 2) {
+        if (flags & ~0x7f || style > HatchStyle.Ignore || patternType > 2) {
           throw new Error(
             `HATCH entity ${index} has unsupported flags or enum values`,
+          );
+        }
+        const backgroundColor = entityView.getUint32(offset + 184, true);
+        if (
+          flags & HatchFlags.BackgroundColor
+            ? backgroundColor >>> 30 !== 3
+            : backgroundColor !== 0
+        ) {
+          throw new Error(
+            `HATCH entity ${index} has an invalid background color`,
           );
         }
         const firstLoop = readSafeU64(
@@ -4177,6 +4398,15 @@ export class SceneCacheReader {
           [SectionKind.SolidEntities, SOLID_ENTITY_RECORD_SIZE, false],
           [SectionKind.FaceEntities, FACE_ENTITY_RECORD_SIZE, false],
           [SectionKind.ImageEntities, IMAGE_ENTITY_RECORD_SIZE, true],
+          ...(this.header.minor >= 23
+            ? [
+                [
+                  SectionKind.ConstructionLines,
+                  CONSTRUCTION_LINE_RECORD_SIZE,
+                  false,
+                ],
+              ]
+            : []),
         ].map(([kind, recordSize, stringTable]) => {
           const section = this.getSection(kind);
           if (stringTable) {
@@ -4412,13 +4642,49 @@ export class SceneCacheReader {
     });
   }
 
+  async readCurveLinetypeScales() {
+    return this.memoize("curve-linetype-scales", async () => {
+      if (this.header.minor < 23) {
+        return Object.freeze(new Map());
+      }
+      const section = this.getSection(SectionKind.CurveLinetypeScales);
+      validateRecordSection(section, CURVE_LINETYPE_SCALE_RECORD_SIZE);
+      const buffer = await this.readWholeMetadataSection(section);
+      const view = new DataView(buffer);
+      const scales = new Map();
+      for (let index = 0; index < section.recordCount; index += 1) {
+        const offset = index * section.recordSize;
+        const handle = view.getBigUint64(offset, true);
+        const scale = view.getFloat64(offset + 8, true);
+        if (
+          handle === 0n ||
+          !Number.isFinite(scale) ||
+          scale <= 0 ||
+          scales.has(handle)
+        ) {
+          throw new Error(`curve linetype scale ${index} is invalid`);
+        }
+        scales.set(handle, scale);
+      }
+      return Object.freeze(scales);
+    });
+  }
+
   async readPrimitiveSource() {
-    const [points, solids, faces, wipeouts, polylineSource] = await Promise.all([
+    const [
+      points,
+      solids,
+      faces,
+      wipeouts,
+      polylineSource,
+      curveLinetypeScales,
+    ] = await Promise.all([
       this.readPointEntities(),
       this.readSolidEntities(),
       this.readFaceEntities(),
       this.readWipeoutEntities(),
       this.readPolylineSource(),
+      this.readCurveLinetypeScales(),
     ]);
     return Object.freeze({
       points,
@@ -4427,6 +4693,7 @@ export class SceneCacheReader {
       wipeouts,
       polylines: polylineSource.polylines,
       polylineVertices: polylineSource.polylineVertices,
+      curveLinetypeScales,
     });
   }
 
@@ -4603,6 +4870,12 @@ export class SceneCacheReader {
       [SectionKind.SplineWeights, "SPLINE weights"],
       [SectionKind.SplineControlPoints, "SPLINE control points"],
       [SectionKind.SplineFitPoints, "SPLINE fit points"],
+      ...(this.header.minor >= 23
+        ? [
+            [SectionKind.CurveLinetypeScales, "curve linetype scales"],
+            [SectionKind.ConstructionLines, "construction lines"],
+          ]
+        : []),
     ].map(([kind, label]) => {
       const section = this.sections.get(kind);
       if (!section) {
@@ -4712,10 +4985,98 @@ export class SceneCacheReader {
         case SectionKind.SplineFitPoints:
           table = new SplinePointSourceTable(...arguments_, label);
           break;
+        case SectionKind.CurveLinetypeScales: {
+          table = new Map();
+          for (const chunk of chunks) {
+            for (let index = 0; index < chunk.recordCount; index += 1) {
+              const offset = index * section.recordSize;
+              const handle = chunk.view.getBigUint64(offset, true);
+              const scale = chunk.view.getFloat64(offset + 8, true);
+              if (
+                handle === 0n ||
+                !Number.isFinite(scale) ||
+                scale <= 0 ||
+                table.has(handle)
+              ) {
+                throw new Error(
+                  `curve linetype scale ${chunk.firstRecord + index} is invalid`,
+                );
+              }
+              table.set(handle, scale);
+            }
+          }
+          table = Object.freeze(table);
+          break;
+        }
+        case SectionKind.ConstructionLines:
+          table = new ConstructionLineSourceTable(
+            ...arguments_,
+            "construction lines",
+          );
+          for (let index = 0; index < table.length; index += 1) {
+            table.readEntity(index, {
+              point: [0, 0, 0],
+              direction: [0, 0, 0],
+            });
+          }
+          break;
         default:
           throw new Error(`unsupported curve source section ${kind}`);
       }
       tables.set(kind, table);
+    }
+    const curveLinetypeScales =
+      tables.get(SectionKind.CurveLinetypeScales) ?? new Map();
+    if (this.header.minor >= 23) {
+      const curveTables = [
+        tables.get(SectionKind.Arcs),
+        tables.get(SectionKind.Circles),
+        tables.get(SectionKind.PolylineHeaders),
+        tables.get(SectionKind.Ellipses),
+        tables.get(SectionKind.SplineHeaders),
+      ];
+      const constructionLines = tables.get(SectionKind.ConstructionLines);
+      const expectedCurveScaleCount = curveTables.reduce(
+        (total, table) => total + table.length,
+        constructionLines.length,
+      );
+      const sourceHandles = new Set();
+      for (const table of curveTables) {
+        for (let index = 0; index < table.length; index += 1) {
+          const handle = table.readHandle(index);
+          if (
+            handle === 0n ||
+            sourceHandles.has(handle) ||
+            !curveLinetypeScales.has(handle)
+          ) {
+            throw new Error(
+              "curve linetype-scale records do not cover the curve source",
+            );
+          }
+          sourceHandles.add(handle);
+        }
+      }
+      for (let index = 0; index < constructionLines.length; index += 1) {
+        const handle = constructionLines.readHandle(index);
+        if (
+          handle === 0n ||
+          sourceHandles.has(handle) ||
+          !curveLinetypeScales.has(handle)
+        ) {
+          throw new Error(
+            "curve linetype-scale records do not cover the construction-line source",
+          );
+        }
+        sourceHandles.add(handle);
+      }
+      if (
+        curveLinetypeScales.size !== expectedCurveScaleCount ||
+        sourceHandles.size !== expectedCurveScaleCount
+      ) {
+        throw new Error(
+          "curve linetype-scale records do not cover the curve source",
+        );
+      }
     }
     return Object.freeze({
       arcs: tables.get(SectionKind.Arcs),
@@ -4728,6 +5089,8 @@ export class SceneCacheReader {
       splineWeights: tables.get(SectionKind.SplineWeights),
       splineControlPoints: tables.get(SectionKind.SplineControlPoints),
       splineFitPoints: tables.get(SectionKind.SplineFitPoints),
+      constructionLines: tables.get(SectionKind.ConstructionLines),
+      curveLinetypeScales,
       byteLength,
       requestCount,
       maximumReadBytes,
@@ -5068,7 +5431,10 @@ export class SceneCacheReader {
 
   async readBatchVertices(
     batch,
-    { maximumBytes = MAX_DETAIL_BATCH_BYTES } = {},
+    {
+      maximumBytes = MAX_DETAIL_BATCH_BYTES,
+      signal,
+    } = {},
   ) {
     const section = this.getSection(SectionKind.GpuLineVertices);
     const byteLength = checkedMultiply(
@@ -5092,7 +5458,7 @@ export class SceneCacheReader {
       "GPU batch file offset",
     );
     const buffer = requireArrayBuffer(
-      await this.source.read(offset, byteLength),
+      await this.source.read(offset, byteLength, { signal }),
       byteLength,
       `GPU batch ${batch.id} vertices`,
     );

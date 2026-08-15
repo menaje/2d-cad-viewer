@@ -17,7 +17,14 @@ import {
   type SceneCacheTextMatch,
   type SceneCacheTextRecord,
 } from "./scene-cache-text-index";
-import { SceneCacheManager } from "./scene-cache-manager";
+import {
+  DEFAULT_PERSISTENT_CACHE_BYTES,
+  maintainDerivedCacheStorage,
+  normalizePersistentCacheBytes,
+  normalizeSceneCacheMode,
+  SceneCacheManager,
+  type PreparedCache,
+} from "./scene-cache-manager";
 import { isSceneEngineAbort } from "./scene-engine";
 
 export const TEXT_SEARCH_VIEW_ID = "dwgViewer.textSearch";
@@ -326,7 +333,7 @@ export class WorkspaceTextSearchController
     await this.search(query);
   }
 
-  private indexDirectory(): string {
+  private indexStorageRoot(): string {
     const root =
       this.context.storageUri ??
       vscode.Uri.joinPath(
@@ -337,9 +344,10 @@ export class WorkspaceTextSearchController
   }
 
   private async loadStoredIndex(
+    indexDirectory: string,
     cacheId: string,
   ): Promise<readonly SceneCacheTextRecord[] | undefined> {
-    const filePath = path.join(this.indexDirectory(), `${cacheId}.json`);
+    const filePath = path.join(indexDirectory, `${cacheId}.json`);
     try {
       const parsed = JSON.parse(await readFile(filePath, "utf8")) as
         | StoredTextIndex
@@ -369,14 +377,14 @@ export class WorkspaceTextSearchController
   }
 
   private async storeIndex(
+    indexDirectory: string,
     cacheId: string,
     records: readonly SceneCacheTextRecord[],
   ): Promise<void> {
     try {
-      const directory = this.indexDirectory();
-      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await mkdir(indexDirectory, { recursive: true, mode: 0o700 });
       await writeFile(
-        path.join(directory, `${cacheId}.json`),
+        path.join(indexDirectory, `${cacheId}.json`),
         JSON.stringify({
           version: INDEX_VERSION,
           cacheId,
@@ -394,19 +402,24 @@ export class WorkspaceTextSearchController
   private async loadIndex(
     cacheId: string,
     cachePath: string,
+    indexDirectory?: string,
   ): Promise<readonly SceneCacheTextRecord[]> {
     const memory = this.memoryIndexes.get(cacheId);
     if (memory) {
       return memory;
     }
-    const stored = await this.loadStoredIndex(cacheId);
-    if (stored) {
-      this.memoryIndexes.set(cacheId, stored);
-      return stored;
+    if (indexDirectory) {
+      const stored = await this.loadStoredIndex(indexDirectory, cacheId);
+      if (stored) {
+        this.memoryIndexes.set(cacheId, stored);
+        return stored;
+      }
     }
     const records = await readSceneCacheTextIndex(cachePath);
     this.memoryIndexes.set(cacheId, records);
-    void this.storeIndex(cacheId, records);
+    if (indexDirectory) {
+      void this.storeIndex(indexDirectory, cacheId, records);
+    }
     return records;
   }
 
@@ -541,89 +554,142 @@ export class WorkspaceTextSearchController
         return;
       }
       const engine = new LibreDwgNativeSceneEngine(adapterPath);
+      const sceneCacheMode = normalizeSceneCacheMode(
+        configuration.get<unknown>("sceneCacheMode", "session"),
+      );
+      const configuredMaximumGiB = configuration.get<unknown>(
+        "sceneCacheMaximumSizeGiB",
+        5,
+      );
+      const maximumPersistentBytes = normalizePersistentCacheBytes(
+        typeof configuredMaximumGiB === "number" &&
+          Number.isSafeInteger(configuredMaximumGiB)
+          ? configuredMaximumGiB * 1024 * 1024 * 1024
+          : DEFAULT_PERSISTENT_CACHE_BYTES,
+      );
       const manager = new SceneCacheManager(
         path.join(this.context.globalStorageUri.fsPath, "cache"),
         engine,
+        { mode: sceneCacheMode, maximumPersistentBytes },
       );
       const fileNodes: FileNode[] = [];
+      const indexStorageRoot = this.indexStorageRoot();
+      let indexGeneration: string | undefined;
+      let indexDirectory: string | undefined;
+      if (sceneCacheMode === "session") {
+        try {
+          indexDirectory = await maintainDerivedCacheStorage(
+            indexStorageRoot,
+            "session",
+          );
+        } catch {
+          this.output.appendLine("[TEXT_INDEX_STORAGE_MAINTENANCE_DEFERRED]");
+        }
+      }
       let failed = 0;
       let totalMatches = 0;
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: `DWG 문자 검색${
-            useRegularExpression ? " (정규식)" : ""
-          }: ${normalizedQuery}`,
-          cancellable: true,
-        },
-        async (progress, cancellationToken) => {
-          const controller = new AbortController();
-          const cancellation =
-            cancellationToken.onCancellationRequested(() =>
-              controller.abort(),
-            );
-          try {
-            for (let index = 0; index < files.length; index += 1) {
-              if (
-                controller.signal.aborted ||
-                totalMatches >= maximumResults
-              ) {
-                break;
-              }
-              const uri = files[index];
-              progress.report({
-                message: `${index + 1}/${files.length} ${path.basename(uri.fsPath)}`,
-                increment: 100 / files.length,
-              });
-              try {
-                const prepared = await manager.prepare(uri.fsPath, {
-                  signal: controller.signal,
-                });
-                const records = await this.loadIndex(
-                  prepared.cacheId,
-                  prepared.cachePath,
-                );
-                const matches = findSceneCacheTextMatches(
-                  records,
-                  normalizedQuery,
-                  {
-                    matchCase,
-                    wholeWord,
-                    useRegularExpression,
-                    maximumResults: maximumResults - totalMatches,
-                  },
-                ).map((match) =>
-                  Object.freeze({ ...match, uri }),
-                );
-                if (matches.length > 0) {
-                  fileNodes.push({
-                    type: "file",
-                    uri,
-                    matches,
-                  });
-                  totalMatches += matches.length;
-                  this.update(fileNodes);
-                }
-              } catch (error) {
+      try {
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `DWG 문자 검색${
+              useRegularExpression ? " (정규식)" : ""
+            }: ${normalizedQuery}`,
+            cancellable: true,
+          },
+          async (progress, cancellationToken) => {
+            const controller = new AbortController();
+            const cancellation =
+              cancellationToken.onCancellationRequested(() =>
+                controller.abort(),
+              );
+            try {
+              for (let index = 0; index < files.length; index += 1) {
                 if (
                   controller.signal.aborted ||
-                  isSceneEngineAbort(error)
+                  totalMatches >= maximumResults
                 ) {
                   break;
                 }
-                failed += 1;
-                this.output.appendLine(
-                  `[TEXT_SEARCH_FILE_FAILED] file=${path.basename(uri.fsPath)} error=${
-                    error instanceof Error ? error.message : "unknown"
-                  }`,
-                );
+                const uri = files[index];
+                progress.report({
+                  message: `${index + 1}/${files.length} ${path.basename(uri.fsPath)}`,
+                  increment: 100 / files.length,
+                });
+                let prepared: PreparedCache | undefined;
+                try {
+                  prepared = await manager.prepare(uri.fsPath, {
+                    signal: controller.signal,
+                  });
+                  if (
+                    sceneCacheMode === "persistent" &&
+                    indexGeneration !== prepared.storageGeneration
+                  ) {
+                    indexGeneration = prepared.storageGeneration;
+                    try {
+                      indexDirectory = await maintainDerivedCacheStorage(
+                        indexStorageRoot,
+                        "persistent",
+                        prepared.storageGeneration,
+                      );
+                    } catch {
+                      indexDirectory = undefined;
+                      this.output.appendLine(
+                        "[TEXT_INDEX_STORAGE_MAINTENANCE_DEFERRED]",
+                      );
+                    }
+                  }
+                  const records = await this.loadIndex(
+                    prepared.cacheId,
+                    prepared.cachePath,
+                    indexDirectory,
+                  );
+                  const matches = findSceneCacheTextMatches(
+                    records,
+                    normalizedQuery,
+                    {
+                      matchCase,
+                      wholeWord,
+                      useRegularExpression,
+                      maximumResults: maximumResults - totalMatches,
+                    },
+                  ).map((match) =>
+                    Object.freeze({ ...match, uri }),
+                  );
+                  if (matches.length > 0) {
+                    fileNodes.push({
+                      type: "file",
+                      uri,
+                      matches,
+                    });
+                    totalMatches += matches.length;
+                    this.update(fileNodes);
+                  }
+                } catch (error) {
+                  if (
+                    controller.signal.aborted ||
+                    isSceneEngineAbort(error)
+                  ) {
+                    break;
+                  }
+                  failed += 1;
+                  this.output.appendLine(
+                    `[TEXT_SEARCH_FILE_FAILED] file=${path.basename(uri.fsPath)} error=${
+                      error instanceof Error ? error.message : "unknown"
+                    }`,
+                  );
+                } finally {
+                  await prepared?.release();
+                }
               }
+            } finally {
+              cancellation.dispose();
             }
-          } finally {
-            cancellation.dispose();
-          }
-        },
-      );
+          },
+        );
+      } finally {
+        await manager.dispose();
+      }
       if (fileNodes.length === 0) {
         this.update([
           {

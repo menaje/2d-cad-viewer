@@ -69,8 +69,10 @@ export function plotStyleShownInLayout(layout) {
   );
 }
 
-export function resolveScreenPlotStyleEnabled(preference) {
-  return preference === true;
+export function resolveScreenPlotStyleEnabled(preference, layout) {
+  return preference === undefined
+    ? plotStyleShownInLayout(layout)
+    : preference === true;
 }
 
 export function makePlotStyleLineWeights(table) {

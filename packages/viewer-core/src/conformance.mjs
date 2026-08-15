@@ -8,6 +8,9 @@ import { openRenderSource } from "./render-source-session.mjs";
 import {
   ViewerRenderDeltaController,
 } from "./render-delta-controller.mjs";
+import {
+  MockStagedRenderDeltaAdapter,
+} from "./mock-staged-render-delta-adapter.mjs";
 
 async function expectProtocolError(promise, code, label) {
   try {
@@ -460,6 +463,326 @@ export async function runRenderDeltaConformance(createHarness) {
     await Promise.allSettled([
       Promise.resolve().then(() => subscription?.dispose()),
       Promise.resolve().then(() => controller?.dispose()),
+      Promise.resolve().then(() => session?.dispose()),
+      Promise.resolve().then(() => source.dispose()),
+    ]);
+  }
+}
+
+function assertNoStagedResources(adapter, label) {
+  const resources = adapter.snapshot().resources;
+  if (
+    resources.stagedRanges !== 0 ||
+    resources.stagedWorkers !== 0 ||
+    resources.stagedCpuBytes !== 0 ||
+    resources.stagedGpuBytes !== 0
+  ) {
+    throw new Error(`${label} retained staged resources`);
+  }
+}
+
+function assertNoRetainedResources(adapter, label) {
+  assertNoStagedResources(adapter, label);
+  if (adapter.snapshot().resources.activeGpuBytes !== 0) {
+    throw new Error(`${label} retained active GPU resources`);
+  }
+}
+
+export async function runStagedRenderDeltaConformance(createHarness) {
+  if (typeof createHarness !== "function") {
+    throw new TypeError(
+      "staged render delta conformance requires a harness factory",
+    );
+  }
+  const lifecycle = await runRenderSourceConformance(async () => {
+    const harness = await createHarness();
+    return harness?.source;
+  });
+  const harness = await createHarness();
+  if (
+    !harness ||
+    !harness.source ||
+    typeof harness.emitNext !== "function" ||
+    typeof harness.emit !== "function"
+  ) {
+    throw new TypeError(
+      "staged render delta harness requires source, emitNext(), and emit()",
+    );
+  }
+
+  const source = harness.source;
+  let session;
+  let subscription;
+  let controller;
+  const auxiliaryControllers = [];
+  try {
+    session = await openRenderSource(source);
+    const snapshot = await session.getSnapshot();
+    const adapter = new MockStagedRenderDeltaAdapter({
+      revisionId: snapshot.revisionId,
+      holdPrepare: true,
+    });
+    controller = new ViewerRenderDeltaController({
+      sourceSession: session,
+      snapshot,
+      adapter,
+    });
+    const received = [];
+    const errors = [];
+    subscription = await session.subscribeRenderDeltas(
+      async (delta) => {
+        const state = await controller.applyCommittedAsync(delta);
+        received.push(delta);
+        return state;
+      },
+      {
+        onError(error) {
+          errors.push(error);
+        },
+      },
+    );
+
+    const firstDelivery = harness.emitNext();
+    await adapter.prepareStarted;
+    if (
+      controller.revisionId !== snapshot.revisionId ||
+      session.revisionId !== snapshot.revisionId ||
+      adapter.snapshot().revisionId !== snapshot.revisionId ||
+      adapter.snapshot().geometryRevisionId !== snapshot.revisionId ||
+      adapter.snapshot().pickRevisionId !== snapshot.revisionId
+    ) {
+      throw new Error(
+        "asynchronous prepare changed the current scene before commit",
+      );
+    }
+    if (
+      adapter.snapshot().resources.stagedWorkers !== 1 ||
+      adapter.snapshot().resources.stagedCpuBytes <= 0 ||
+      adapter.snapshot().resources.stagedGpuBytes <= 0
+    ) {
+      throw new Error(
+        "staged conformance did not allocate bounded mock resources",
+      );
+    }
+    adapter.releasePrepare();
+    const first = await firstDelivery;
+    await subscription.whenIdle();
+    const committed = adapter.snapshot();
+    if (
+      !first ||
+      received.length !== 1 ||
+      errors.length !== 0 ||
+      controller.revisionId !== first.toRevisionId ||
+      session.revisionId !== first.toRevisionId ||
+      committed.revisionId !== first.toRevisionId ||
+      committed.geometryRevisionId !== first.toRevisionId ||
+      committed.pickRevisionId !== first.toRevisionId ||
+      committed.identities.length === 0
+    ) {
+      throw new Error(
+        "staged geometry and pick identity did not commit atomically",
+      );
+    }
+    assertNoStagedResources(adapter, "successful commit");
+
+    const prepareCount = committed.metrics.prepares;
+    await harness.emit(first);
+    await subscription.whenIdle();
+    if (
+      errors.at(-1)?.code !==
+        RenderProtocolDiagnosticCode.STALE_REVISION ||
+      adapter.snapshot().metrics.prepares !== prepareCount ||
+      controller.revisionId !== first.toRevisionId
+    ) {
+      throw new Error(
+        "stale staged delta reached prepare or changed the current scene",
+      );
+    }
+
+    const second = await harness.emitNext();
+    await subscription.whenIdle();
+    if (
+      !second ||
+      received.length !== 2 ||
+      controller.revisionId !== second.toRevisionId ||
+      adapter.snapshot().pickRevisionId !== second.toRevisionId
+    ) {
+      throw new Error("ordered staged delta did not recover after stale input");
+    }
+
+    const commitFailureAdapter = new MockStagedRenderDeltaAdapter({
+      revisionId: snapshot.revisionId,
+      expectedPayloadSha256: first.payload?.sha256 ?? null,
+      failCommit: true,
+    });
+    const commitFailureController = new ViewerRenderDeltaController({
+      sourceSession: { descriptor: session.descriptor },
+      snapshot,
+      adapter: commitFailureAdapter,
+    });
+    auxiliaryControllers.push(commitFailureController);
+    try {
+      await commitFailureController.applyCommittedAsync(first);
+      throw new Error("staged commit failure did not reject");
+    } catch (error) {
+      if (!/atomic commit failed/u.test(error.message)) {
+        throw error;
+      }
+    }
+    if (
+      commitFailureController.revisionId !== snapshot.revisionId ||
+      commitFailureAdapter.snapshot().metrics.rollbacks !== 1 ||
+      commitFailureAdapter.snapshot().metrics.transactionDisposals !== 1
+    ) {
+      throw new Error("staged commit failure did not roll back atomically");
+    }
+    assertNoStagedResources(commitFailureAdapter, "commit failure");
+
+    const prepareFailureAdapter = new MockStagedRenderDeltaAdapter({
+      revisionId: snapshot.revisionId,
+      failPrepare: true,
+    });
+    const prepareFailureController = new ViewerRenderDeltaController({
+      sourceSession: { descriptor: session.descriptor },
+      snapshot,
+      adapter: prepareFailureAdapter,
+    });
+    auxiliaryControllers.push(prepareFailureController);
+    try {
+      await prepareFailureController.applyCommittedAsync(first);
+      throw new Error("staged prepare failure did not reject");
+    } catch (error) {
+      if (!/geometry preparation failed/u.test(error.message)) {
+        throw error;
+      }
+    }
+    if (
+      prepareFailureController.revisionId !== snapshot.revisionId ||
+      prepareFailureAdapter.snapshot().metrics.prepares !== 1 ||
+      prepareFailureAdapter.snapshot().metrics.commits !== 0
+    ) {
+      throw new Error("staged prepare failure changed the current scene");
+    }
+    assertNoStagedResources(prepareFailureAdapter, "prepare failure");
+
+    const digest = first.payload?.sha256;
+    if (!digest) {
+      throw new Error(
+        "first staged conformance delta requires an opaque payload",
+      );
+    }
+    const mismatchAdapter = new MockStagedRenderDeltaAdapter({
+      revisionId: snapshot.revisionId,
+      expectedPayloadSha256:
+        `${digest[0] === "f" ? "e" : "f"}${digest.slice(1)}`,
+    });
+    const mismatchController = new ViewerRenderDeltaController({
+      sourceSession: { descriptor: session.descriptor },
+      snapshot,
+      adapter: mismatchAdapter,
+    });
+    auxiliaryControllers.push(mismatchController);
+    try {
+      await mismatchController.applyCommittedAsync(first);
+      throw new Error("staged payload digest mismatch did not reject");
+    } catch (error) {
+      if (!/digest mismatch/u.test(error.message)) {
+        throw error;
+      }
+    }
+    if (mismatchController.revisionId !== snapshot.revisionId) {
+      throw new Error("digest mismatch changed the current revision");
+    }
+    assertNoStagedResources(mismatchAdapter, "digest mismatch");
+
+    const cancellationAdapter = new MockStagedRenderDeltaAdapter({
+      revisionId: snapshot.revisionId,
+      holdPrepare: true,
+      ignoreAbortDuringPrepare: true,
+    });
+    const cancellationController = new ViewerRenderDeltaController({
+      sourceSession: { descriptor: session.descriptor },
+      snapshot,
+      adapter: cancellationAdapter,
+    });
+    auxiliaryControllers.push(cancellationController);
+    const abortController = new AbortController();
+    const cancelled = cancellationController.applyCommittedAsync(first, {
+      signal: abortController.signal,
+    });
+    await cancellationAdapter.prepareStarted;
+    abortController.abort(
+      new DOMException("staged conformance cancellation", "AbortError"),
+    );
+    cancellationAdapter.releasePrepare();
+    try {
+      await cancelled;
+      throw new Error("staged cancellation did not reject");
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        throw error;
+      }
+    }
+    if (
+      cancellationController.revisionId !== snapshot.revisionId ||
+      cancellationAdapter.snapshot().metrics.commits !== 0 ||
+      cancellationAdapter.snapshot().metrics.rollbacks !== 1 ||
+      cancellationAdapter.snapshot().metrics.transactionDisposals !== 1
+    ) {
+      throw new Error("staged cancellation did not fail closed");
+    }
+    assertNoStagedResources(cancellationAdapter, "cancellation");
+
+    await subscription.dispose();
+    await controller.disposeAsync();
+    await Promise.all(
+      auxiliaryControllers.map((candidate) => candidate.disposeAsync()),
+    );
+    assertNoRetainedResources(adapter, "terminal disposal");
+    assertNoRetainedResources(
+      commitFailureAdapter,
+      "commit-failure disposal",
+    );
+    assertNoRetainedResources(
+      prepareFailureAdapter,
+      "prepare-failure disposal",
+    );
+    assertNoRetainedResources(
+      mismatchAdapter,
+      "digest-mismatch disposal",
+    );
+    assertNoRetainedResources(
+      cancellationAdapter,
+      "cancellation disposal",
+    );
+    await session.dispose();
+    await source.dispose();
+
+    return Object.freeze({
+      ...lifecycle,
+      baseSnapshotId: snapshot.snapshotId,
+      representation:
+        snapshot.layers.find(
+          (layer) => layer.kind === "live",
+        )?.representation ?? null,
+      revisionId: second.toRevisionId,
+      deltaCount: received.length,
+      asynchronousPreparePreservedCurrentScene: true,
+      atomicGeometryPickCommit: true,
+      staleRejectedBeforePrepare: true,
+      prepareFailureReleasedResources: true,
+      commitFailureRolledBack: true,
+      digestMismatchRejected: true,
+      cancellationReleasedResources: true,
+      disposed: session.disposed,
+    });
+  } finally {
+    await Promise.allSettled([
+      Promise.resolve().then(() => subscription?.dispose()),
+      Promise.resolve().then(() => controller?.disposeAsync()),
+      ...auxiliaryControllers.map((candidate) =>
+        Promise.resolve().then(() => candidate.disposeAsync()),
+      ),
       Promise.resolve().then(() => session?.dispose()),
       Promise.resolve().then(() => source.dispose()),
     ]);

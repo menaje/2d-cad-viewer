@@ -4,7 +4,7 @@ This process-isolated adapter implements the `dwg-engine-adapter/1` inspection
 and conversion contract. It traverses LibreDWG's object model directly instead
 of creating a full JSON dump.
 
-The `convert` path writes Scene Cache v1.21 without a whole-drawing intermediate
+The `convert` path writes Scene Cache v1.26 without a whole-drawing intermediate
 model. It repeatedly traverses LibreDWG objects and streams sections and
 bounded GPU batches directly to a new cache file. For large drawings, it
 spills fixed-size detail records into private unnamed temporary files, sorts
@@ -14,8 +14,10 @@ selected worker; the temporary files are mode `0600`, close-on-exec, and
 removed automatically.
 GPU batch metadata and its packed 36-byte vertices are generated together in
 one geometry pass, with each bounded batch written as one vertex buffer rather
-than one field at a time. The final batch and vertex sections retain their
-existing deterministic byte layout.
+than one field at a time. The full-cache vertex body is written directly to
+its final range and only the small batch directory is staged and appended.
+Section bodies retain their deterministic byte layout even though those two
+physical ranges no longer follow kind order.
 HATCH sections use repeated bounded passes and retain at most one 65,536-point
 ring (about 1.5 MiB) while streaming. Pattern-definition lines and dash values
 are streamed in separate bounded passes, and no whole-drawing fill or pattern
@@ -26,12 +28,22 @@ The current conversion coverage is corpus-qualified rather than format-wide:
 
 - layer, linetype, block, style and entity strings are converted from the
   DWG code page to valid UTF-8 before serialization, including `ANSI_949`;
+- block names are read from each BLOCK entity, which is the canonical DXF
+  source, rather than trusting a duplicated LibreDWG BLOCK_HEADER name. This
+  keeps the active `*PAPER_SPACE` block distinct from inactive
+  `*PAPER_SPACE0...` layout blocks;
 - the anonymous `inspect` contract applies the same legacy code-page
   conversion before Hangul and corruption metrics, so private corpus
   inventory does not reject valid pre-R2007 Korean drawings as malformed
   UTF-8;
 - XREF block records retain the original relative, drive, UNC or POSIX path
-  for host-side resolution without changing the source drawing;
+  for host-side resolution without changing the source drawing. The adapter
+  normalizes DWG's inverted BLOCK_HEADER Loaded Bit (`0` means loaded) into the
+  semantic Scene Cache loaded flag; a loaded XREF is also resolved, while the
+  common table resolved value distinguishes unloaded from unresolved when the
+  reference is not loaded. A missing `blkisxref` marker is recovered only when
+  the retained value has explicit path syntax or a `.dwg` suffix, so ordinary
+  block metadata is not promoted to an external reference;
 - LINE, ARC, CIRCLE, INSERT/MINSERT, LWPOLYLINE, 2D/3D POLYLINE and
   ELLIPSE source records plus SPLINE headers and knot/weight/control/fit pools
   are preserved;
@@ -55,8 +67,9 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   closure; one HATCH remains capped at 65,536 segments and reports expose
   rendered boundary segments and any capped entities;
 - bounded HATCH entity records retain pattern/gradient metadata, closed `f64`
-  rings, gradient colors and seed points; rings are capped at 65,536 vertices
-  per HATCH and 1,048,576 vertices globally;
+  rings, gradient colors, seed points and the named
+  `HATCHBACKGROUNDCOLOR` application-data value; rings are capped at 65,536
+  vertices per HATCH and 1,048,576 vertices globally;
 - pattern-definition lines retain their resolved angle, base, offset and dash
   sequence in packed source sections; one HATCH is capped at 4,096 definition
   lines and 65,536 dash values, with global caps of 262,144 and 1,048,576;
@@ -66,8 +79,10 @@ The current conversion coverage is corpus-qualified rather than format-wide:
 - TRACE retains the same 1-2-4-3 perimeter order as SOLID, and finite RAY
   display extends only in its forward direction;
 - POLYLINE mesh rows and columns retain their declared M/N topology and closed
-  directions; MLINE display retains styled parallel elements, cut parameters,
-  start/end caps and joined miters;
+  directions; MLINE display retains styled parallel elements, start/end caps,
+  joined miters and qualified uncut style fills. A filled MLINE carrying area
+  fill parameters fails conversion closed until their exact boundary meaning
+  is qualified;
 - REGION, 3DSOLID and BODY display reads bounded SAT plus ACIS/ASM SAB topology
   and emits transformed straight, elliptic and exact rational NURBS edge
   chords. The checksum-pinned LibreDWG 0.14 source is patched during every
@@ -79,27 +94,58 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   ordinary line and text sections. This currently preserves the complete
   `ACAD_TABLE` display found in the private qualification corpus without
   enabling LibreDWG's unstable TABLE object decoder;
+- proxy display follows AutoCAD's default `PROXYSHOW=1` policy because that
+  registry preference is not stored in the DWG. Conversion reports the exact
+  supported opcode set: polyline (6), polygon (7), color (14), linetype (18),
+  TrueColor (22), lineweight (23), matrix push/pop (29–31), polyline with
+  normals (32), and Unicode text (38). A malformed stream or a proxy with no
+  supported display primitive is counted in
+  `coverage.deferred_reasons.unsupported_proxy_graphics`; no guessed geometry
+  or bounding box is substituted;
 - 3DFACE retains four WCS corners and all four invisible-edge bits; its current
   wireframe display emits only visible, non-degenerate edges;
 - WIPEOUT retains its image basis, display properties, exact rectangular or
   polygonal clip vertices, definition handles and the drawing-wide frame
   setting; a missing WIPEOUT variables object leaves only that frame setting
   unavailable while preserving independent LWDISPLAY, FILLMODE and model-space
-  state; enabled frames are displayed while masks remain explicitly
-  deferred until draw-order-aware rendering exists;
+  state. Valid masks share the normalized draw-order buckets used by lines,
+  HATCH, primitives and text; an invalid or over-limit mask plan fails closed
+  to ordinary geometry plus any enabled WIPEOUT frame;
 - IMAGE retains the IMAGEDEF path, insertion/U/V basis, source pixel size,
   brightness/contrast/fade, definition handles and exact rectangular or
-  polygonal clipping boundary for lazy JPG/PNG display;
+  polygonal clipping boundary for lazy JPG/PNG/BMP/DIB/GIF display;
+- PDF/DWF/DGN underlays are recognized as logical entities and reported under
+  `coverage.deferred_reasons.unsupported_underlays`; their content is not
+  claimed as serialized because the current 2D viewer has no qualified
+  underlay decoder;
+- Scene Cache v1.26 retains ATTMODE, FRAME, IMAGEFRAME, XCLIPFRAME, OLEFRAME,
+  PDFFRAME, DWFFRAME, DGNFRAME, ANNOALLVISIBLE, MSLTSCALE, the current model
+  CANNOSCALE factor, QTEXTMODE, SPLFRAME, DISPSILH, DISPSILHBLOCKS,
+  XREFOVERRIDE, VISRETAIN, raster IMAGEQUALITY and XREF loaded/resolved state.
+  Missing optional dictionary values remain explicitly unavailable instead of
+  being guessed; invalid saved ranges fail conversion.
+- Each model/paper layout also retains its saved ANNOALLVISIBLE value. Paper
+  layouts read AutoCAD's `AcadAnnoAV` LAYOUT application data; a duplicate or
+  malformed value fails conversion closed instead of guessing visibility. A
+  layout with no such application data uses AutoCAD's documented initial value
+  1 instead of being interpreted as an explicit off state.
 - `SORTENTSTABLE` objects retain their block owner plus entity/sort-handle
   pairs in deterministic, bounded sections that the Webview reads lazily;
 - layer and entity colors, lineweights and named linetypes are retained,
-  including bounded complex-linetype text/shape metadata;
+  including bounded complex-linetype text/shape metadata; pre-R13 fixed simple
+  dash arrays are normalized without interpreting them as modern complex-dash
+  records;
 - named paper-space layouts retain their paper settings, active viewport and
   bounded VIEWPORT records so every saved layout can be selected independently;
+- pre-R13 `TILEMODE=0` files without modern LAYOUT objects remain an explicit
+  paper-space presentation boundary; the adapter does not synthesize a layout
+  or mislabel model geometry as paper-space content;
 - LAYER extension dictionaries retain sparse per-viewport color, transparency,
   linetype and lineweight overrides, capped at 1,048,576 property records;
-- XLINE, MULTILEADER and classic LEADER geometry is displayed with bounded
-  approximations, including LEADER arrows and hook lines;
+- XLINE and RAY retain exact point/direction sources and are clipped as
+  infinite or half-infinite geometry for each camera, INSERT and XCLIP
+  occurrence. MULTILEADER and classic LEADER geometry is displayed with
+  bounded approximations, including LEADER arrows and hook lines;
 - OLE2FRAME accepts both observed embedded four-corner preamble markers,
   extracts bounded BMP/DIB presentations and reconstructs strictly validated
   chunked EMF presentations from Excel OLE previews; unsupported presentations
@@ -110,7 +156,10 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   fill/outline meshes, 3DFACE edges and enabled WIPEOUT frames under a
   combined 32 MiB GPU limit, then exits;
 - every unsupported logical entity is counted under
-  `coverage.deferred_entities`;
+  `coverage.deferred_entities`, with an exact partition in
+  `coverage.deferred_reasons` for unresolved DIMENSION pictures, underlays,
+  proxy graphics, unsupported 3D entities, invalid supported entities and
+  other unsupported families;
 - bounded SHX/BigFont and system-font fallback display is implemented in the
   Webview, including stored MTEXT WCS X-axis, attachment, columns and
   background fill plus bounded inline font/color/scale/slant/decorations and
@@ -119,8 +168,10 @@ The current conversion coverage is corpus-qualified rather than format-wide:
   top-to-bottom MTEXT flow. Single-line TEXT uses its OCS plane and
   preserves both raw placement points so the Webview can apply measured
   center/right/vertical justification, while endpoint width and direction are
-  reserved for Align/Fit. Multiline ATTRIB/ATTDEF records preserve their
-  embedded MTEXT insertion point and basis;
+  reserved for Align/Fit. Attribute MTEXT type 1 remains a single-line
+  ATTRIB/ATTDEF record. Types 2 and 4 preserve their finite embedded MTEXT
+  insertion point and basis, and normalize LibreDWG 0.14's reversed embedded
+  extent members to Scene Cache width/height semantics;
   external image baselines for every OCS/justification combination remain
   open in GitHub issues #5 and #7.
 
@@ -137,7 +188,7 @@ range-read limit.
 ## Progressive first frame
 
 When the VS Code host supplies both private preview paths, the same conversion
-process emits a Scene Cache v1.21 first-frame sidecar immediately after parsing
+process emits a Scene Cache v1.26 first-frame sidecar immediately after parsing
 and overview planning, before the disk-backed full-detail sort. The sidecar
 contains drawing/layer/block/INSERT and layout/viewport metadata, including
 viewport layer overrides, plus overview-only GPU line data; remaining required
@@ -165,16 +216,24 @@ graph or a higher parser memory class.
 ## Portable build and self-diagnosis
 
 The reproducible path downloads checksum-pinned LibreDWG and pkgconf sources,
-applies the repository's reviewed ACDS SAT/SAB and R2007 high-compression
-patches, builds a stripped adapter with LibreDWG linked statically under a new
-private directory, and writes the adapter to a new path. It never installs a
-system package:
+applies the repository's reviewed ACDS SAT/SAB, R2007 high-compression and
+seekable-stdin bulk-read patches, builds a stripped adapter with LibreDWG
+linked statically under a new private directory, and writes the adapter to a
+new path. It never installs a system package. `prepare.sh` is the stable
+dispatcher: shared acquisition, checksum, patch, configure, build, and publish
+logic lives in `scripts/prepare-common.sh`, while Linux, macOS, and Windows
+profiles under `scripts/platform/` own only target validation and flags:
 
 ```bash
 adapters/libredwg/prepare.sh \
   /private/tmp/dwg-viewer-libredwg-build \
   /private/tmp/libredwg-adapter
 ```
+
+On both Intel macOS x64 and Apple Silicon arm64, the macOS profile builds the
+pinned LibreDWG parser with `-O3 -DNDEBUG` unless the caller supplies explicit
+`CFLAGS`. Linux and Windows retain their existing compiler defaults. The
+adapter writer itself remains `-O3 -DNDEBUG` on every native target.
 
 Both paths must not already exist. A C11 compiler, `make`, `strip`, `tar` and
 a SHA-256 utility are required. `curl` is needed only when LibreDWG or a
@@ -231,7 +290,7 @@ working drawings are not accepted as repository fixtures.
 The R2004 round-trip qualification used the repository's
 [`generate-viewport-layer-overrides.py`](../../tests/fixtures/generate-viewport-layer-overrides.py)
 definition and a separate write-enabled LibreDWG 0.14 build. The read-only
-product adapter emitted a valid 49-section Scene Cache v1.21, and the canonical
+product adapter emitted a valid 51-section Scene Cache v1.26, and the canonical
 reader recovered true color `0xc040c4ff`, transparency `0x27000000`, `DASHED`
 and lineweight `50` on the original viewport handle. The write-enabled build is
 only a fixture producer; it is not part of the product or release package.
@@ -252,8 +311,8 @@ node adapters/libredwg/package.mjs \
 The packager refuses to overwrite a file, rejects a dynamic LibreDWG
 dependency, local build paths, a wrong source checksum or an incompatible
 doctor report. The archive includes the executable, unmodified GPL and MPL
-license texts, the DWG Viewer project notice, checksums, a machine-readable
-manifest, all adapter build sources (including both reviewed source patches)
+license texts, the 2D CAD Viewer project notice, checksums, a machine-readable
+manifest, all adapter build sources (including the reviewed source patches)
 and the exact LibreDWG 0.14 source archive.
 Fixed metadata and sorted entries make repeated packaging from the same target
 binary byte-identical. The included repository license, notice and package
@@ -308,13 +367,85 @@ exits.
 
 The native writer resolves LibreDWG object references before parallel work,
 sorts copied spatial records across available cores, and writes seven
-independent contiguous section groups concurrently before deterministic
-concatenation. The GPU section group fuses batch-directory and packed-vertex
-generation into one traversal and buffers each batch before writing.
+independent section groups concurrently. The largest GPU vertex group writes
+directly to the final cache; six smaller groups are concatenated
+deterministically from bounded private files. The GPU section group fuses
+batch-directory and packed-vertex generation into one traversal and buffers
+each batch before writing.
+
+On macOS x64 and arm64, each section writer also combines packed scalar fields
+in one bounded 64 KiB buffer before calling stdio. Every position check, seek
+and final publication flushes that buffer first. Section workers still own
+separate files, the direct-output worker still completes before finalization,
+and Windows and Linux retain their previous writer path.
+
+The remaining group staging is intentional. A physical-Windows A/B made the
+118,534,328-byte entity-geometry body write directly to the final cache. It
+removed 118,993,776 process-read bytes and 118,534,328 process-write bytes, but
+median wall time increased from 10,423 ms to 11,086 ms (+6.4%) and median
+adapter write time increased from 6,163 ms to 6,821 ms. Concurrent writes and
+final-file allocation outweighed the avoided copy, so that experiment was
+reverted and the six bounded group files remain.
 `DWG_VIEWER_CONVERSION_WORKERS=1..8` can override the automatic
 online-CPU count for qualification. The conversion report records the selected
 worker count, actual sort and section concurrency, coarse stages, spatial-sort
-sub-stages, and each section-group duration under `performance`.
+sub-stages, each section-group duration, parse-boundary and final current/peak
+working set and private bytes, plus Windows process I/O operations and bytes
+under `performance`.
+
+Use the path-free macOS x64/arm64 repeat benchmark with a new work directory
+and report path. Each run starts without a Scene Cache; a warmup controls
+source page-cache state without relabeling it as a cold-disk measurement:
+
+```bash
+node scripts/benchmark-macos-native.mjs \
+  --adapter /absolute/path/to/libredwg-adapter \
+  --fixture /absolute/path/to/fixture.dwg \
+  --work-root /new/private/benchmark-directory \
+  --report /new/private/benchmark-directory/report.json \
+  --source-location local-disk \
+  --mode full \
+  --warmups 1 \
+  --runs 3
+```
+
+Use `--mode progressive` to add preview-ready and preview-write timing. Reports
+contain no source path or artifact digest, enforce deterministic full/preview
+outputs internally and refuse to overwrite an existing report.
+
+The macOS and Windows repeat tools share bounded option parsing, output
+capture, deterministic report fingerprints, integer summaries, DWG validation,
+and exclusive report publication from `scripts/native-performance/core.mjs`.
+Their process launchers remain separate: Windows qualifies its inherited native
+file handle and Windows-only memory/I/O counters, while macOS qualifies direct
+file and progressive-preview behavior. Linux continues to use the common
+`dwg-converter benchmark` path because it has no separate input-transport
+contract; its compiler defaults remain isolated in the Linux build profile.
+
+The Linux adapter workflow also creates a genuinely large synthetic R2000 DWG
+from 100,000 generated `LINE` entities. It requires at least 5,000,000 input
+bytes, complete serialization with no deferrals, and two byte-identical Scene
+Caches plus identical normalized reports. The fixture-only write-enabled tool
+is built from the same checksum-pinned LibreDWG 0.14 archive and is never
+shipped. Generator, qualification and macOS allocation-probe commands are in
+[`tests/fixtures/README.md`](../../tests/fixtures/README.md); the current parser
+memory decision is in
+[`docs/libredwg-parser-memory.md`](../../docs/libredwg-parser-memory.md).
+That decision now includes exact object-vector slack and logical allocation
+families, source/decompressed-buffer lifetime, ACIS duplicate-payload
+attribution, two rejected structural prototypes and a deterministic macOS
+ASan/UBSan malformed-input sweep. Neither prototype met the fork-admission
+threshold, so no parser-memory patch is present in the product stack.
+
+On Apple Silicon arm64, a current-source paired comparison covered 159 inputs
+(25,488,871 bytes total, maximum 2,179,277 bytes), with three measured runs per
+input. Enabling both the macOS parser profile and 64 KiB writer buffer changed
+the median per-input wall time by -8.651%, parse time by -9.178%, write time by
+-16.477%, and adapter total time by -14.205%; median peak RSS increased 1.443%.
+All cache outputs were byte-identical across the compared O2/O3 and
+buffer-off/on variants. This is warm-page-cache small/medium-input evidence,
+not a replacement for rerunning the optimization-specific gate on the
+24,680,147-byte reference drawing.
 
 LibreDWG exposes block markers, polyline vertices and attached attributes as
 separate raw entities. The adapter keeps raw counts under `drawing.raw_*` and

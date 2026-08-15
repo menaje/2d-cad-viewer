@@ -16,7 +16,7 @@ DWG
 
 ## Viewer product and package boundary
 
-The raw DWG Viewer remains an independently installed product. The independent
+The raw 2D CAD Viewer remains an independently installed product. The independent
 `bim-explorer` is the second, 3D consumer, while Coni Spatial owns
 revision/change authority and embeds only compatible packages. Renderer reuse
 is through versioned Viewer Core packages rather than an installed extension,
@@ -39,6 +39,10 @@ artifacts in the `viewer-core-v0.1.2` GitHub release and through GitHub
 Packages. Their producer compatibility record, exact artifact digests, protocol
 window, and consumer manifests are recorded in
 [`compatibility/viewer-core.json`](../compatibility/viewer-core.json).
+The interaction-time detail pause/resume and additive async staged-delta API
+are qualified as the unpublished Viewer Core 0.1.3 development artifact in
+that manifest; they do not replace the immutable `viewer-core-v0.1.2` release
+bytes.
 The canonical Scene Cache reader and bounded range sources now live in
 `packages/dwg-scene-source`; the legacy Webview paths are compatibility
 re-exports. The public `@menaje/dwg-scene-source` package exposes that
@@ -57,6 +61,24 @@ batch kinds. `ViewerRendererController` validates redraw/camera/detail-target
 capabilities and coordinates root/XREF detail disposal.
 `DetailStreamingController` owns concurrency, byte-budgeted GPU caching,
 stale-work rejection, review geometry publication and redraw coalescing.
+Active pan, wheel zoom and window zoom now pause that controller before the
+interaction frame is drawn. The same lifecycle is applied to the root and
+every mounted XREF streamer. A pause retains already mounted bounded cache
+entries, invalidates the old selection revision and sends an `AbortSignal` to
+each in-flight range read. Sources that cannot interrupt an already-running
+read may still finish it, but the revision check prevents its payload from
+mounting a GPU resource or requesting a redraw. Camera changes are coalesced
+while paused; the first settled update selects only from the latest camera and
+resumes the existing distance-priority queue. Snapshots expose pause/resume,
+coalesced update, load start, cancellation, stale completion/mount, GPU upload
+and settled-detail latency counters without assigning a platform-wide
+performance claim to them.
+Wheel events use an explicit product-level mode instead of hardware inference:
+`mouse-zoom` maps every ordinary scroll to anchored zoom, while `trackpad-pan`
+maps every ordinary scroll to pan regardless of delta size or timing. A
+pixel-mode Ctrl wheel event remains the browser trackpad-pinch signal and zooms
+in either mode. The standalone toolbar toggles the same mode that the VS Code
+host persists as `dwgViewer.scrollInputMode`; no `auto` mode is exposed.
 `ViewerSelectionController` binds projected picks to the active
 session/revision/snapshot and publishes monotonic `selection.changed` Host
 events. Service-backed sources can additionally use revision-bound
@@ -80,6 +102,17 @@ source-neutral renderer adapter hook. `MockRenderDeltaSource` verifies that a
 stale replay cannot advance either source or overlay revision and that picking
 tracks the applied revision. The existing DWG WebGL vertex layouts remain
 renderer-adapter details rather than render-protocol fields.
+Asynchronous retained renderers use the additive staged adapter path. A slow
+`prepareDelta()` may allocate bounded range, worker, CPU and GPU resources but
+cannot mutate the visible scene. Its transaction exposes a synchronous atomic
+`commit()` plus asynchronous-capable `rollback()` and `dispose()` cleanup.
+Core rechecks cancellation and lifecycle after prepare, advances its retained
+overlay only after commit, and requires `disposeAsync()` while preparation is
+in flight. The reusable staged conformance proves geometry and pick/identity
+revision switch together and that prepare/commit failure, digest mismatch,
+stale input and cancellation preserve the last scene without retained staged
+resources. The existing opaque payload already carries source-specific 3D
+ranges, so the render wire protocol does not change.
 `DwgRenderDeltaAdapter` now consumes a
 digest/byte-bound decoded v6 packet containing 36-byte lines, 32-byte triangle
 fills, 32-byte POINT records, bounded UTF-8 JSON native-text records, 272-byte
@@ -265,9 +298,10 @@ reopen capability remain pre-write `blocked`, while the reference writer
 exercises intended-versus-reopened-observed receipt validation. The rejected
 WASM MEMFS candidate remains outside settings and the VSIX.
 
-The product writer, preview writer, benchmark validator and Webview reader now
-accept only Scene Cache v1.21. Lower version numbers in the milestone evidence
-below are historical development records, not supported runtime formats.
+The product and preview writers plus benchmark validator emit Scene Cache
+v1.26. The Webview reader accepts the explicit v1.21–v1.26 backward window;
+lower version numbers in the milestone evidence below are historical
+development records, not supported runtime formats.
 
 LibreDWG passes the conversion time and memory targets and matches the
 normalized geometry and Korean text fingerprint. It renders LINE and
@@ -314,6 +348,31 @@ geometric viewport ratio. Scene Cache v1.20 adds viewport-specific layer color,
 transparency, linetype and lineweight across WebGL and Canvas overlays. Scene
 Cache v1.21 adds bounded embedded OLE bitmap and EMF presentation previews,
 including recovered four-corner placement and an explicit unavailable marker.
+Scene Cache v1.22 preserves drawing presentation controls and XREF
+loaded/resolved state so the viewer can apply FILLMODE, ATTMODE,
+ANNOALLVISIBLE, FRAME-family settings and saved viewport activity rather than
+inferring visibility from geometry alone.
+Scene Cache v1.23 extends exact annotation representations to TEXT, ATTDEF and
+ATTRIB and retains per-entity linetype scale for high-zoom curve refinement.
+Scene Cache v1.24 preserves AutoCAD's independently saved model-space and
+paper-layout ANNOALLVISIBLE values, so selecting a layout does not reuse the
+setting from the DWG's active space. Paper layouts without `AcadAnnoAV`
+application data use AutoCAD's documented initial value 1 rather than an
+invented off state.
+Scene Cache v1.25 preserves QTEXTMODE, SPLFRAME, DISPSILH and XREFOVERRIDE.
+Canvas text substitutes bounded entity boxes for glyphs under QTEXTMODE;
+the deferred primitive worker restores 3DFACE invisible edges under SPLFRAME.
+HELIX control polygons and smoothed/polyface mesh presentation remain in the
+explicit 3D boundary. XREFOVERRIDE forces common external
+entity color, transparency, lineweight and linetype through the resolved root
+layer while preserving the host XREF insertion and layer mapping. DISPSILH is
+retained, but true 3D silhouette generation remains an explicit view-style
+boundary rather than guessed 2D geometry.
+Scene Cache v1.26 adds VISRETAIN, raster IMAGEQUALITY and DISPSILHBLOCKS.
+VISRETAIN=0 synchronizes exact prefix-qualified XREF layer display rows from
+the mounted child while preserving viewport overrides; IMAGEQUALITY selects
+high or uninterpolated Draft Canvas sampling. DISPSILHBLOCKS is retained but
+does not expand the explicit 3D silhouette boundary.
 Remaining exact CAD text layout and draw-order work are product-completeness
 gates on this selected engine, not an open parser choice.
 
@@ -349,7 +408,40 @@ interface without adding work to the drawing-open path. Cache identity includes
 the source fingerprint, Scene Cache version, engine ID/version, backend
 ID/kind, converter revision and canonical conversion options. Native and a
 future redesigned WASM backend therefore cannot silently reuse each other's
-cache.
+cache. On macOS, the resolved source path is normalized to NFC before the
+existing length-prefixed UTF-8 cache-identity hash. The original path remains
+unchanged for file I/O and presentation. A compatible cache or persistent
+preview created by an older raw-path identity is reused and promoted to the
+NFC identity with a same-directory atomic link when possible. Legacy lookup is
+limited to the supplied path, its NFD form and an NFC-equivalent filesystem
+real path. Other platforms retain their normalization-sensitive path identity
+because distinct byte names can identify distinct files there. This identity
+compatibility rule does not change the Scene Engine protocol or Scene Cache
+wire version.
+
+The VS Code host now separates cache identity from cache retention. Its default
+`session` mode writes full, preview and XREF Scene Caches into one private
+leased session directory, exposes them only through bounded range channels and
+deletes them after those channels close. Manager disposal waits for active
+conversions, while a path-free heartbeat makes crash leftovers eligible for a
+later bounded cleanup. Workspace text search releases each generated full
+cache immediately after its bounded text index has been extracted.
+
+The opt-in `persistent` mode stores cache files under a generation digest of
+the engine ID/version, backend ID/kind, implementation revision, Scene Engine
+contract and Scene Cache version. Opening a different engine generation
+removes inactive older generation directories; a fresh per-manager lease
+protects caches still used by another VS Code window. Returning to `session`
+mode removes every unleased persistent generation. The migration recognizes
+and removes only bounded legacy flat cache, preview and temporary filename
+patterns. When the last generation lease closes, cache/preview pairs are
+evicted oldest-first to the configured 1–100 GiB bound (5 GiB by default).
+Open range readers can temporarily exceed that bound but are never selected
+for eviction. Persistent text indexes use the same generation digest and are
+removed on engine change; session mode retains them only in memory. No private
+source path enters generation metadata, and Scene Cache v1.26, cache identity
+and protocol bytes are unchanged.
+
 Progress events are bound to the same engine/backend identity, while terminal
 failure and cancellation remain explicit. The WASM-shaped test implementation
 only qualifies this boundary; the rejected real probe is reproducible under
@@ -378,11 +470,21 @@ one LibreDWG parse
 ```
 
 The adapter publishes the preview only after closing it and creating a ready
-marker. The extension rechecks source and engine snapshots, opens a dedicated
-range channel and keeps the sidecar outside the reusable-cache namespace. The
-full cache retains its original atomic write, validation and cache identity.
-Preview failures are non-terminal, and editor close, retry, cancellation,
-render failure or the full first frame releases its channel and private file.
+marker. The extension rechecks source and engine snapshots, validates the
+preview header, and atomically commits it under a deterministic overview name
+derived from the full-cache identity. It remains outside the canonical
+full-cache namespace. The full cache retains its original atomic write,
+validation and cache identity. Preview failures are non-terminal; editor
+close, retry, cancellation, render failure or the full first frame releases
+the range channel while the validated overview remains reusable.
+
+On a later forced or interrupted full conversion, the extension publishes the
+stored overview before starting the converter and suppresses duplicate
+preview generation. It gives that reused overview up to 10 seconds to produce
+its first Webview frame before starting the full converter. This makes repeat
+recovery immediately displayable while the full cache is rebuilt. It does not
+reduce the initial uncached parse peak, because LibreDWG still retains its
+drawing object graph until the converter exits.
 
 The preview repeats the bounded overview traversal but does not copy the
 LibreDWG object graph or build full-detail geometry in memory. It contains the
@@ -415,6 +517,136 @@ than the default.
 DWG parsing runs outside the VS Code extension host and Webview. The converter
 writes a compact cache and exits, releasing transient parser memory. The
 Webview receives only visible chunks and display metadata.
+
+On Windows, the extension opens the source once and inherits that seekable
+read-only handle as the converter's standard input. Node.js neither copies the
+DWG into JavaScript buffers nor creates a hard-link/copy staging entry. Only
+the source size and six-byte DWG version travel in the environment, and the
+host rechecks size plus nanosecond modification time when conversion exits.
+The checksum-pinned LibreDWG source includes a small seekable-stdin patch:
+regular inherited handles use the existing sized bulk-read path instead of
+the upstream 4 KiB growable stream reader. Pipes retain the ordinary stream
+fallback. The original drawing path is not sent to the converter, cache or
+adapter report.
+
+Windows conversion telemetry records both current and process-peak working
+set/private bytes at the parse boundary and at completion, plus process I/O
+counters. This distinguishes parser-retained state from a later section-worker
+peak: lowering section concurrency cannot solve a memory peak that has already
+occurred, and a small parse-to-completion current-memory delta identifies the
+materialized LibreDWG object graph as the next optimization boundary. The
+pinned LibreDWG 0.14 reader has no supported selective or lazy object-decode
+mode to enable; `DWG_OPTS_MINIMAL` is declared but is not consumed by its DWG
+decoder. Reducing that graph is therefore a common engine/upstream task, not a
+Windows transport optimization. ETW/WPA is still required to attribute exact
+allocation stacks and system file-cache costs.
+
+The reproducible synthetic large-DWG gate and the current macOS arm64
+allocation/prototype decision are documented in
+[`libredwg-parser-memory.md`](libredwg-parser-memory.md). The local reference
+interning prototype reduced parse-boundary peak RSS by only about 6% and
+regressed median wall time by about 4%, so it is not part of the adapter patch
+stack. A second object-vector-growth prototype reduced final unused slot bytes
+from about 5.7 MB to 0.2 MB but left parse peak RSS unchanged and regressed
+median parse time by about 14%, so it was also removed. The source file and
+generic decompressed-section chains are already freed before `dwg_read_file`
+returns; selective decode, early payload release and lazy ACIS spans would need
+an upstream two-stage decoder with durable checked backing storage. A macOS
+arm64 ASan/UBSan sweep passed one valid public fixture and 24 deterministic
+malformed variants without a sanitizer diagnostic, unexpected signal or
+timeout; a separate forced-cancellation case removed its possible partial
+output.
+Unmeasured targets remain pending rather than inheriting these results.
+
+A physical Windows x64 qualification of the Scene Cache v1.26 writer used one
+anonymous 51,723,767-byte drawing, automatic eight-worker conversion, one
+warmup, and three measured processes per location. The mapped drive was a real
+remote SMB share and the UNC row addressed that same share directly. These are
+warm-cache measurements, not cold-start claims:
+
+| Source location | Wall time min / median / max | Median adapter write | Maximum peak private bytes |
+| --- | ---: | ---: | ---: |
+| local disk | 10,500 / 10,682 / 10,737 ms | 6,280 ms | 1,172,262,912 |
+| mapped SMB drive | 10,598 / 10,977 / 11,074 ms | 6,199 ms | 1,172,267,008 |
+| direct UNC | 10,193 / 10,220 / 10,726 ms | 5,918 ms | 1,172,250,624 |
+
+The mapped and direct-UNC medians stayed within 4.4% of local disk. All
+measured caches were 408,758,712 bytes and were byte-identical across locations;
+their normalized reports were also identical. The local writer reported
+632,766,212 read bytes and 985,199,191 write bytes per conversion. At the local
+parse boundary, median current private bytes were about 1,011.0 MB; completion
+median current private bytes were about 1,015.2 MB. That small post-parse delta
+confirms that the roughly 1.17 GB process peak is already a
+parser/materialized-graph cost rather than a Windows path-copy or late section
+worker cost.
+
+The largest remaining staged section group was also tested as a direct final
+cache write. It removed about 119.0 MB of process reads and 118.5 MB of writes,
+but local median wall time regressed from 10,423 ms to 11,086 ms (+6.4%) and
+median adapter write time regressed from 6,163 ms to 6,821 ms. The direct-write
+experiment was therefore removed; only the GPU vertex body retains direct
+placement, and the other six bounded groups remain staged.
+
+Issue [#43](https://github.com/menaje/2d-cad-viewer/issues/43) separately
+qualifies uncached Scene Cache generation on physical Intel macOS x64. Four
+alternating six-worker A/B pairs, with no Scene Cache present per run and a
+warm source page cache, reduced median process wall time from 7,792 ms to
+7,360 ms (-5.5%) and adapter write time from 3,962 ms to 3,555 ms (-10.3%).
+The entity-geometry section fell from 1,500 ms to 433 ms because its many
+packed scalar fields are combined in a bounded per-writer 64 KiB buffer before
+stdio. Median peak RSS remained in the same approximately 1.19 GB parser
+memory class.
+
+The pinned LibreDWG parser had previously retained its configure default of
+`-g -O2` even though the adapter writer used `-O3 -DNDEBUG`. In the Intel-only
+qualification, changing the parser profile shortened the progressive path's
+median parse time from 3,608 ms to 3,391 ms (-6.0%) and its preview-ready marker
+from 5,190 ms to 5,012 ms (-3.4%) across three alternating pairs. Baseline and
+candidate full caches and persistent previews were byte-identical. These are
+warm-page-cache, path-free measurements rather than cold-disk claims; the
+repeat tool records that distinction and never emits the private source path
+or artifact digest.
+
+The same two macOS-only settings are now enabled on Apple Silicon arm64 after a
+current-source paired comparison over 159 inputs (25,488,871 bytes total,
+maximum 2,179,277 bytes), with three measured runs per input. The combined
+`-O3 -DNDEBUG` parser profile and bounded writer changed the median per-input
+wall, parse, write, and adapter-total times by -8.651%, -9.178%, -16.477%, and
+-14.205%, respectively; median peak RSS increased 1.443%. All 159 caches were
+byte-identical across O2/O3 and buffer-off/on variants. This evidence covers
+small and medium inputs under a warm source page cache. The optimization-specific
+24,680,147-byte reference-drawing rerun remains a physical-platform gate, so no
+large-input arm64 threshold is inferred from the smaller corpus.
+
+The build boundary now reflects that ownership explicitly. `prepare.sh`
+dispatches to a Linux, macOS, or Windows profile, one common implementation owns
+source pins and patches, and only the macOS profile selects the optimized parser
+flags. The Scene Cache version, engine protocol, and atomic publication contract
+remain unchanged; Linux and Windows retain their previous writer and parser
+paths.
+
+The hosted viewer reports `dwg-visual-complete/1` after the full first frame,
+root text and raster setup, host font requests, embedded-image decoding, and
+every discovered XREF/image reference have reached a terminal state. Missing
+or invalid resources are terminal and are reported as issue counts rather
+than making completion impossible. View-dependent detail streaming does not
+block this drawing-level milestone; its current pending count is reported
+alongside the completion event. Completion checks are coalesced onto the
+first pending 80 ms timer so
+continuous detail updates cannot indefinitely postpone the terminal check.
+Root-scene deferred HATCH/primitive generation and view-dependent curve
+refinement remain
+post-frame quality upgrades and do not block this resource-completion marker;
+an XREF is not terminal until its child scene has mounted.
+The Windows qualification reporter can use `visual` as its close stage and
+records path-free XREF, image, and font totals with the host elapsed time.
+
+XREF discovery and Webview mounting use a bounded two-task queue. Cache
+preparation remains behind a separate one-task gate, so two already cached
+references can overlap their search and mount latency while Native converter
+processes can never overlap. Nested references retain the existing depth,
+cycle and total-reference limits, and cancellation rejects queued work before
+it can start.
 
 The `dwg-engine-adapter/1` benchmark boundary invokes `inspect` and `convert`
 in a new process for every run. It records process wall time, adapter-reported
@@ -862,8 +1094,27 @@ Large-drawing detail records are ordered by group and a 32-bit interleaved XY
 Morton key computed from each segment midpoint within that group's finite
 bounds. Original traversal order resolves key ties deterministically. The
 LibreDWG writer creates sorted 8,192-record runs in a private temporary file
-and performs one bounded k-way merge into a second file, so it never retains
-the complete spatial index or geometry set in memory.
+and performs one bounded k-way merge directly into the GPU line encoder. It
+does not materialize a second globally sorted temporary file, and it never
+retains the complete spatial index or geometry set in memory. Each merge run
+has a 64-record read buffer; compared with the earlier 16-record buffer this
+cuts Windows seek/read calls by four while adding at most 48 records per run.
+Windows opens this run store with the random-access cache hint; the other
+section and vertex staging files retain their sequential-access hint.
+Conversion telemetry reports run construction as `spatial_index_ms` and the
+streaming merge as `spatial_merge_ms`; the latter runs inside and therefore
+overlaps `gpu_section_group_ms`, while adapter total time remains the enclosing
+wall time. The full-cache writer streams packed GPU vertices directly into the
+final cache on that pass. Only the much smaller batch directory is staged and
+appended after the vertex body, eliminating the largest section-group
+temporary-to-final copy. Directory entries, not physical payload order,
+identify sections; the reader sorts physical ranges only for overlap
+validation. The overview-only artifact retains the simpler vertex staging
+path because its vertex payload is capped at 4 MiB. The six smaller section
+groups still use bounded temporary files so their encoders can run in
+parallel. Exact range planning was evaluated for the largest of them and
+regressed wall time, so no additional group should be direct-written without
+new platform evidence.
 
 Detail ranges are independently capped at 512 KiB. The Webview includes a
 byte-budgeted least-recently-used cache so viewport refinement can release

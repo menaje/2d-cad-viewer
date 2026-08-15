@@ -5,11 +5,14 @@ import earcut, { deviation } from "earcut";
 // the bit-16 invisibility flag.
 export const MASK_BUCKET_STYLE_SHIFT = 17;
 export const MAX_LOCAL_MASK_BUCKET = 0x7fff;
-export const MAX_GLOBAL_MASK_BUCKET = 10_000;
-// A root draw-order bucket is subdivided for XREF-local ordering. 1024 keeps
-// the resulting depth values distinguishable in a 24-bit depth buffer across
-// the complete root bucket range while leaving room in the RGB order map.
-export const DRAW_ORDER_SUBDIVISIONS = 1024;
+const MAXIMUM_RGB_ORDER_VALUE = 0xff_ffff;
+// Root and block-local order use the same 15-bit capacity. The RGB overlay
+// reserves zero as its fallback sentinel and subdivides every root bucket for
+// XREF-local ordering using all remaining lossless 24-bit integer values.
+export const MAX_GLOBAL_MASK_BUCKET = MAX_LOCAL_MASK_BUCKET;
+export const DRAW_ORDER_SUBDIVISIONS = Math.floor(
+  (MAXIMUM_RGB_ORDER_VALUE - 1) / MAX_GLOBAL_MASK_BUCKET,
+);
 
 const DEFAULT_MAXIMUM_DEPTH = 64;
 const DEFAULT_MAXIMUM_EVENTS = 250_000;

@@ -21,6 +21,7 @@ import {
   runLibreDwgAdapter,
 } from "../src/native-cache";
 import {
+  canonicalCacheSourcePath,
   computeCacheId,
   SceneCacheManager,
 } from "../src/scene-cache-manager";
@@ -84,6 +85,31 @@ test("cache identity is deterministic and changes with source metadata", () => {
   );
 });
 
+test("normalizes canonically equivalent macOS cache paths before UTF-8 hashing", () => {
+  const composed = "/drawings/한글/도면.dwg";
+  const decomposed = composed.normalize("NFD");
+  const identity = {
+    sourcePath: composed,
+    sourceSize: 100n,
+    sourceMtimeNs: 200n,
+    engine: LIBREDWG_NATIVE_ENGINE_DESCRIPTOR,
+    engineRevision: "adapter-revision-1",
+  };
+
+  assert.equal(
+    canonicalCacheSourcePath(composed, "darwin"),
+    canonicalCacheSourcePath(decomposed, "darwin"),
+  );
+  assert.equal(
+    computeCacheId(identity, "darwin"),
+    computeCacheId({ ...identity, sourcePath: decomposed }, "darwin"),
+  );
+  assert.notEqual(
+    computeCacheId(identity, "linux"),
+    computeCacheId({ ...identity, sourcePath: decomposed }, "linux"),
+  );
+});
+
 test("adapter revision follows executable contents instead of its path", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "dwg-engine-revision-"));
   context.after(() => rm(root, { recursive: true, force: true }));
@@ -92,8 +118,11 @@ test("adapter revision follows executable contents instead of its path", async (
   await writeFile(firstPath, "same native adapter bytes");
   await writeFile(movedPath, "same native adapter bytes");
 
-  const first = await new LibreDwgNativeSceneEngine(firstPath).snapshot();
+  const firstEngine = new LibreDwgNativeSceneEngine(firstPath);
+  const first = await firstEngine.snapshot();
+  const repeated = await firstEngine.snapshot();
   const moved = await new LibreDwgNativeSceneEngine(movedPath).snapshot();
+  assert.equal(first.revision, repeated.revision);
   assert.equal(first.revision, moved.revision);
   assert.match(first.revision, /^[a-f0-9]{64}$/u);
 
@@ -109,7 +138,7 @@ test("adapter report requires the expected schema, validation, and size", () => 
       status: "ok",
       cache: {
         format_major: 1,
-        format_minor: 21,
+        format_minor: 26,
         size_bytes: 5,
         validated: true,
       },
@@ -124,7 +153,7 @@ test("adapter report requires the expected schema, validation, and size", () => 
           status: "ok",
           cache: {
             format_major: 1,
-            format_minor: 21,
+            format_minor: 26,
             size_bytes: 4,
             validated: true,
           },
@@ -160,7 +189,7 @@ test("adapter report returns validated conversion performance", () => {
         status: "ok",
         cache: {
           format_major: 1,
-          format_minor: 21,
+          format_minor: 26,
           size_bytes: "5",
           validated: true,
         },
@@ -213,7 +242,7 @@ test("doctor report requires the adapter, cache, engine, and license contract", 
       license: "GPL-3.0-or-later",
       linkage: "static",
     },
-    cache: { schema: "dwg-scene-cache/1.21" },
+    cache: { schema: "dwg-scene-cache/1.26" },
     target: { platform: "darwin", architecture: "arm64" },
   };
   assert.deepEqual(
@@ -284,7 +313,7 @@ if (process.env.DWG_DOCTOR_TEST_MODE === "slow") {
       license: "GPL-3.0-or-later",
       linkage: "static"
     },
-    cache: { schema: "dwg-scene-cache/1.21" },
+    cache: { schema: "dwg-scene-cache/1.26" },
     target: { platform: "test", architecture: "test" }
   }) + "\\n");
 }
@@ -379,9 +408,17 @@ test(
       adapterScript,
       `
 const fs = require("node:fs");
+const input = process.argv[3];
 const output = process.argv[4];
 const preview = process.env.DWG_VIEWER_PREVIEW_PATH;
 const ready = process.env.DWG_VIEWER_PREVIEW_READY_PATH;
+if (
+  input !== "-" ||
+  process.env.DWG_VIEWER_INPUT_TRANSPORT !== "inherited-file-handle" ||
+  process.env.DWG_VIEWER_STDIN_SOURCE_SIZE !== "13" ||
+  process.env.DWG_VIEWER_STDIN_SOURCE_VERSION !== "AC1015" ||
+  fs.readFileSync(0, "utf8") !== "AC1015drawing"
+) process.exit(14);
 fs.writeFileSync(preview, "preview");
 fs.writeFileSync(ready, "");
 setTimeout(() => {
@@ -391,7 +428,7 @@ setTimeout(() => {
     status: "ok",
     cache: {
       format_major: 1,
-      format_minor: 21,
+      format_minor: 26,
       size_bytes: 5,
       validated: true,
     },
@@ -436,6 +473,12 @@ setTimeout(() => {
     assert.equal(previewCount, 1);
     assert.equal(performanceCount, 1);
     assert.equal(await readFile(outputPath, "utf8"), "cache");
+    assert.equal(
+      (await readdir(unicodeRoot)).some((name) =>
+        name.startsWith(".dwg-input-"),
+      ),
+      false,
+    );
   },
 );
 
@@ -460,26 +503,28 @@ if (
   process.env.DWG_VIEWER_ADAPTER_PROTOCOL !== "dwg-engine-adapter/1" ||
   process.env.DWG_VIEWER_BENCHMARK_PHASE !== "convert"
 ) process.exit(12);
-const source = fs.readFileSync(input === "-" ? 0 : input, "utf8");
 if (
-  input === "-" &&
-  (
-    process.env.DWG_VIEWER_STDIN_SOURCE_SIZE !== String(Buffer.byteLength(source)) ||
-    process.env.DWG_VIEWER_STDIN_SOURCE_VERSION !== source.slice(0, 6)
-  )
+  input !== "-" ||
+  process.env.DWG_VIEWER_INPUT_TRANSPORT !== "inherited-file-handle"
+) process.exit(14);
+const source = fs.readFileSync(0, "utf8");
+if (
+  process.env.DWG_VIEWER_STDIN_SOURCE_SIZE !==
+    String(Buffer.byteLength(source)) ||
+  process.env.DWG_VIEWER_STDIN_SOURCE_VERSION !== source.slice(0, 6)
 ) process.exit(13);
 const mode = source.slice(6);
 const cache = Buffer.alloc(64);
 Buffer.from("DWGSCN1\\0", "binary").copy(cache, 0);
 cache.writeUInt16LE(1, 8);
-cache.writeUInt16LE(21, 10);
+cache.writeUInt16LE(26, 10);
 fs.writeFileSync(output, cache);
 const report = () => process.stdout.write(JSON.stringify({
   schema: "dwg-scene-cache/1",
   status: "ok",
   cache: {
     format_major: 1,
-    format_minor: 21,
+    format_minor: 26,
     size_bytes: 64,
     validated: true
   }
@@ -496,6 +541,7 @@ else report();
         argumentPrefix: [adapterScript],
         platform: "win32",
       }),
+      { mode: "persistent" },
     );
     const unsupportedPhases: SceneEngineProgressPhase[] = [];
     await assert.rejects(
@@ -516,7 +562,7 @@ else report();
     assert.equal(first.reused, false);
     const firstCache = await readFile(first.cachePath);
     assert.equal(firstCache.readUInt16LE(8), 1);
-    assert.equal(firstCache.readUInt16LE(10), 21);
+    assert.equal(firstCache.readUInt16LE(10), 26);
     assert.deepEqual(firstPhases, [
       "checking",
       "parsing",
@@ -541,7 +587,7 @@ else report();
       signal: new AbortController().signal,
     });
     assert.equal(migrated.reused, false);
-    assert.equal((await readFile(migrated.cachePath)).readUInt16LE(10), 21);
+    assert.equal((await readFile(migrated.cachePath)).readUInt16LE(10), 26);
 
     const rebuilt = await manager.prepare(sourcePath, {
       force: true,
@@ -557,7 +603,7 @@ else report();
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
     await writeFile(sourcePath, "AC1015changed");
-    await assert.rejects(changedInput, /CACHE_INPUT_CHANGED/u);
+    await assert.rejects(changedInput, /INPUT_CHANGED/u);
     assert.equal(changedPhases.at(-1), "failed");
 
     await writeFile(sourcePath, "AC1015slow");
@@ -574,6 +620,12 @@ else report();
     assert.equal(cancelledPhases.at(-1), "cancelled");
     assert.equal(
       (await readdir(cacheRoot)).some((name) => name.endsWith(".tmp")),
+      false,
+    );
+    assert.equal(
+      (await readdir(cacheRoot)).some((name) =>
+        name.startsWith(".dwg-input-"),
+      ),
       false,
     );
   },

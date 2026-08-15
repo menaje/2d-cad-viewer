@@ -26,6 +26,11 @@ import { chromium } from "playwright-core";
 
 import { writeQualificationDriver } from "../apps/vscode-extension/scripts/qualify-extension-host.mjs";
 import { EN_MESSAGES } from "../packages/webview/src/locales/en.mjs";
+import {
+  buildDisplayStateMatrixFixtureCaches,
+  buildDisplayStateMatrixReport,
+  validateDisplayStateMatrix,
+} from "./qualify-display-state-matrix.mjs";
 
 const execFile = promisify(execFileCallback);
 const {
@@ -33,6 +38,12 @@ const {
   runVSCodeCommand,
 } = vscodeTestElectron;
 const REPORT_SCHEMA = "dwg-windows-vscode-ui-qualification/1";
+const PACKAGED_DISPLAY_STATE_SCHEMA =
+  "dwg-packaged-windows-display-state-matrix/1";
+const PACKAGED_DISPLAY_STATE_OBSERVATION_SCHEMA =
+  "dwg-packaged-display-state-observation/1";
+const PACKAGED_DISPLAY_STATE_RESULT_GLOBAL =
+  "__dwgPackagedDisplayStateQualificationResult";
 export const WINDOWS_UI_EXTENSION_ID = "menaje.dwg-viewer-vscode";
 export const WINDOWS_UI_COMPANION_EXTENSION_ID =
   "menaje.dwg-viewer-libredwg";
@@ -147,6 +158,113 @@ export function parseWindowsUiArguments(values) {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function jsonSha256(value) {
+  return createHash("sha256")
+    .update(JSON.stringify(value))
+    .digest("hex");
+}
+
+export function validatePackagedDisplayStateMatrix(
+  expected,
+  observed,
+) {
+  validateDisplayStateMatrix(expected);
+  assert.equal(observed?.schema, PACKAGED_DISPLAY_STATE_SCHEMA);
+  assert.equal(observed.status, "pass");
+  assert.equal(observed.cacheSchema, expected.cacheSchema);
+  assert.equal(observed.cases.length, expected.cases.length);
+  assert.deepEqual(observed.cases, expected.cases);
+  assert.equal(observed.fingerprint, expected.fingerprint);
+  assert.equal(observed.fingerprint, jsonSha256(observed.cases));
+  return true;
+}
+
+async function loadPackagedDisplayStateFixture(frame, fixture) {
+  const base64 = Buffer.from(fixture.cache).toString("base64");
+  await frame.locator("#cache-file").evaluate(
+    (input, value) => {
+      const binary = atob(value.base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      const transfer = new DataTransfer();
+      transfer.items.add(
+        new File([bytes], `${value.id}.cache`, {
+          type: "application/vnd.dwg-scene-cache",
+          lastModified: 0,
+        }),
+      );
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    { base64, id: fixture.id },
+  );
+  await frame.waitForFunction(
+    ({ globalName, id }) =>
+      globalThis[globalName]?.caseId === id,
+    {
+      globalName: PACKAGED_DISPLAY_STATE_RESULT_GLOBAL,
+      id: fixture.id,
+    },
+    { timeout: FRAME_TIMEOUT_MS },
+  );
+  return frame.evaluate(
+    (globalName) =>
+      JSON.parse(JSON.stringify(globalThis[globalName])),
+    PACKAGED_DISPLAY_STATE_RESULT_GLOBAL,
+  );
+}
+
+async function qualifyPackagedDisplayStateMatrix(frame) {
+  const enabled = await frame.evaluate(
+    () => document.body.dataset.displayStateQualification === "true",
+  );
+  assert.equal(
+    enabled,
+    true,
+    "packaged Webview omitted the display-state qualification gate",
+  );
+  const expected = await buildDisplayStateMatrixReport();
+  const fixtures = buildDisplayStateMatrixFixtureCaches();
+  assert.equal(fixtures.length, expected.cases.length);
+  const cases = [];
+  for (let index = 0; index < fixtures.length; index += 1) {
+    const fixture = fixtures[index];
+    const expectedCase = expected.cases[index];
+    assert.equal(fixture.id, expectedCase.id);
+    assert.equal(fixture.family, expectedCase.family);
+    const observation = await loadPackagedDisplayStateFixture(
+      frame,
+      fixture,
+    );
+    assert.equal(
+      observation.schema,
+      PACKAGED_DISPLAY_STATE_OBSERVATION_SCHEMA,
+    );
+    assert.equal(observation.cacheSchema, expected.cacheSchema);
+    const observedCase = Object.freeze({
+      id: fixture.id,
+      family: fixture.family,
+      source: expectedCase.source,
+      inventory: observation.inventory,
+      display: observation.display[fixture.family],
+    });
+    assert.deepEqual(observedCase.inventory, expectedCase.inventory);
+    assert.deepEqual(observedCase.display, expectedCase.display);
+    cases.push(observedCase);
+  }
+  const report = Object.freeze({
+    schema: PACKAGED_DISPLAY_STATE_SCHEMA,
+    status: "pass",
+    cacheSchema: expected.cacheSchema,
+    cases: Object.freeze(cases),
+    fingerprint: jsonSha256(cases),
+  });
+  validatePackagedDisplayStateMatrix(expected, report);
+  return report;
 }
 
 async function ensureFile(filePath) {
@@ -896,6 +1014,7 @@ async function runScale({
   privateRoot,
   scaleFactor,
   vscodeExecutablePath,
+  qualifyDisplayState,
 }) {
   const scalePercent = Math.round(scaleFactor * 100);
   const userData = path.join(privateRoot, `user-data-${scalePercent}`);
@@ -912,7 +1031,10 @@ async function runScale({
     DWG_VIEWER_QUALIFICATION_DRAWING: drawingPath,
     DWG_VIEWER_QUALIFICATION_TOKEN:
       randomBytes(32).toString("hex"),
+    DWG_VIEWER_QUALIFICATION_MODE: "display-state",
   };
+  delete environment.DWG_VIEWER_QUALIFICATION_REPORT;
+  delete environment.DWG_VIEWER_QUALIFICATION_CLOSE_AFTER;
   delete environment.ELECTRON_RUN_AS_NODE;
   const child = spawn(
     vscodeExecutablePath,
@@ -988,6 +1110,9 @@ async function runScale({
         }),
       );
     }
+    const displayStateMatrix = qualifyDisplayState
+      ? await qualifyPackagedDisplayStateMatrix(frame)
+      : undefined;
     return {
       scalePercent,
       requestedDeviceScaleFactor: scaleFactor,
@@ -996,6 +1121,7 @@ async function runScale({
       interaction,
       layout,
       widths,
+      displayStateMatrix,
     };
   } finally {
     await browser?.close().catch(() => undefined);
@@ -1118,26 +1244,31 @@ export async function qualifyWindowsVsCodeUi(options) {
     );
 
     const cases = [];
+    let displayStateMatrix;
     for (const scaleFactor of SCALE_FACTORS) {
-      cases.push(
-        await runScale({
-          drawingPath: options.drawingPath,
-          driverDirectory,
-          extensionsDirectory,
-          outputDirectory: options.outputDirectory,
-          privateRoot,
-          scaleFactor,
-          vscodeExecutablePath,
-        }),
-      );
+      const scaleResult = await runScale({
+        drawingPath: options.drawingPath,
+        driverDirectory,
+        extensionsDirectory,
+        outputDirectory: options.outputDirectory,
+        privateRoot,
+        qualifyDisplayState: scaleFactor === SCALE_FACTORS[0],
+        scaleFactor,
+        vscodeExecutablePath,
+      });
+      displayStateMatrix ??= scaleResult.displayStateMatrix;
+      const { displayStateMatrix: _displayStateMatrix, ...scaleCase } =
+        scaleResult;
+      cases.push(scaleCase);
     }
+    assert.ok(displayStateMatrix);
     const report = {
       schema: REPORT_SCHEMA,
       status: "pass",
       target: {
         platform: process.platform,
         architecture: process.arch,
-        os: "windows-2025-runner",
+        os: `${os.type()} ${os.release()}`,
         vscodeChannel: "stable",
         vscodeVersion,
         packagedVsixInstalled: true,
@@ -1154,7 +1285,14 @@ export async function qualifyWindowsVsCodeUi(options) {
         ),
         pathDisclosure: "none",
       },
+      displayStateMatrix,
       cases,
+      cleanup: {
+        perScaleProcessTreeTermination: "enforced",
+        perScaleProfileRemoval: "enforced",
+        privateRootRemoval: "enforced-before-success-return",
+      },
+      pathsIncluded: false,
     };
     await writeJsonExclusive(
       path.join(options.outputDirectory, "report.json"),
@@ -1175,6 +1313,7 @@ async function main() {
       status: report.status,
       target: report.target,
       scales: report.cases.map((entry) => entry.scalePercent),
+      displayStateCases: report.displayStateMatrix.cases.length,
     })}\n`,
   );
 }

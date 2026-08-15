@@ -39,7 +39,7 @@ terms control.
 | `@mlightcad/shx-parser` 1.4.5 | MIT | Bundled into the Webview; its copyright and full MIT permission notice are included in `THIRD_PARTY_NOTICES.md` |
 | Earcut 3.2.3 | ISC | Bundled into the Webview; its copyright and full ISC permission notice are included in `THIRD_PARTY_NOTICES.md` |
 | emf-converter 2.0.2 | Apache-2.0 | Bundled into the Webview for local, bounded OLE EMF preview rendering; its complete unmodified Apache license text and attribution notice are included in `THIRD_PARTY_NOTICES.md` |
-| DWG Viewer LibreDWG adapter source | MPL-2.0 | Included as corresponding adapter source in the separate engine archive |
+| 2D CAD Viewer LibreDWG adapter source | MPL-2.0 | Included as corresponding adapter source in the separate engine archive |
 | Linked LibreDWG adapter executable and GNU LibreDWG 0.14 | GPL-3.0-or-later | Published only in separate platform artifacts with the GPL text, exact LibreDWG source, adapter source, build scripts, manifest, and checksums |
 | ACadSharp benchmark adapter source | MPL-2.0 | Development and qualification only; not part of the selected viewer runtime |
 | ACadSharp 3.6.51 | MIT | Optional process-isolated benchmark dependency; not bundled in the VSIX |

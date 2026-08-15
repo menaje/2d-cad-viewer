@@ -80,7 +80,9 @@ export function makeLinetypeTextureData(linetypes) {
           );
     headers[offset + 1] = dashCursor;
     headers[offset + 2] = count;
-    headers[offset + 3] = definition.flags & 1 ? 1 : 0;
+    headers[offset + 3] =
+      (definition.flags & 1 ? 1 : 0) +
+      (definition.alignment === 65 ? 2 : 0);
     for (let index = 0; index < count; index += 1) {
       dashes[dashCursor] = sourceDashes[index].length;
       dashCursor += 1;

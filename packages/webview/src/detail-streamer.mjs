@@ -13,6 +13,7 @@ import {
   GpuLineBatchKind,
 } from "./scene-cache.mjs";
 import { effectiveClipBounds } from "./instance-graph.mjs";
+import { instanceIsVisible } from "./instance-visibility.mjs";
 
 const DEFAULT_CACHE_BYTES = 256 * 1024 * 1024;
 const DEFAULT_VISIBLE_BYTES = 256 * 1024 * 1024;
@@ -74,6 +75,9 @@ function candidateForInstances(
   const clipBoundsCache = new Map();
   let distance = Infinity;
   for (let index = 0; index < instances.count; index += 1) {
+    if (!instanceIsVisible(instances, index)) {
+      continue;
+    }
     transformedBounds2D(
       batch.bounds,
       instances.data,
@@ -264,8 +268,8 @@ export class DetailStreamer extends DetailStreamingController {
             { maximumBytes },
           );
         },
-        loadCandidate(candidate) {
-          return reader.readBatchVertices(candidate.batch);
+        loadCandidate(candidate, { signal } = {}) {
+          return reader.readBatchVertices(candidate.batch, { signal });
         },
         mountCandidate(candidate, vertices) {
           return renderer.addDetailBatch(

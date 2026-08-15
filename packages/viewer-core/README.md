@@ -19,6 +19,10 @@ GitHub Packages를 사용할 때는 `@menaje` scope를
 `https://npm.pkg.github.com`에 연결하고 두 package의 exact `0.1.2`를
 설치합니다.
 
+현재 소스의 Viewer Core `0.1.3`은 additive async staged-delta API를 검증하는
+미배포 development artifact입니다. 공개된 `0.1.2` package와 artifact는
+교체하지 않으며, 기존 동기 adapter는 `0.1.3`에서도 그대로 동작합니다.
+
 ## RenderSource
 
 Source는 다음을 제공합니다.
@@ -67,12 +71,23 @@ Render ID만 보관합니다.
   hard limit
 - stale/out-of-order 입력 전 상태 보존과 idempotent disposal
 
-선택적 renderer adapter는 동기·원자적인 `applyDelta()`,
-`rollbackPreview()`, `promotePreview()`, `dispose()` 경계만 구현합니다.
-DWG 36-byte vertex layout이나 Spatial packet 의미는 Core 계약에 포함되지
-않습니다. `MockRenderDeltaSource`와
-`runRenderDeltaConformance()`가 ordered apply, stale replay 거부, pick map
-revision과 disposal을 검증합니다.
+기존 2D renderer adapter는 동기·원자적인 `applyDelta()`,
+`rollbackPreview()`, `promotePreview()`, `dispose()` 경계를 계속 사용합니다.
+비동기 renderer는 additive `prepareDelta(delta, { signal })` 경계를 구현하고
+`ViewerRenderDeltaController.applyCommittedAsync()`를 사용합니다.
+`prepareDelta()`는 화면 상태를 바꾸지 않은 채 다음 transaction을 반환해야
+하며 transaction은 `commit()`, `rollback()`, `dispose()`를 제공합니다.
+`commit()`만 동기적이고 원자적입니다. 성공 시 geometry와 pick/identity를 같은
+revision으로 한 번에 교체하고 staged resource ownership을 adapter로 이전합니다.
+prepare가 transaction을 반환하기 전에 실패하면 adapter가 자체 staged 자원을
+정리해야 하며, 반환 뒤의 실패·stale·취소는 Core가 rollback과 dispose를 모두
+await합니다. 준비 중 종료에는 `disposeAsync()`를 사용합니다.
+
+DWG vertex layout이나 특정 3D packet 의미는 Core 계약에 포함되지 않습니다.
+`MockRenderDeltaSource`, `MockStagedRenderDeltaAdapter`,
+`runRenderDeltaConformance()`와 `runStagedRenderDeltaConformance()`가 ordered
+apply, stale replay, 느린 prepare 중 상태 보존, geometry/pick 원자 commit,
+digest mismatch, commit failure, cancellation과 terminal disposal을 검증합니다.
 
 `ViewerRenderDiffController`는 제품이 제공하는 compact base Render ID
 membership index와 총 개수만 사용해 현재 delta의 net 상태를 `added`,

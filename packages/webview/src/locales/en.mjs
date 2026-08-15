@@ -6,16 +6,22 @@ export const EN_MESSAGES = Object.freeze({
   "common.image": "Image",
   "common.noPath": "(no path)",
   "common.unknownError": "Unknown error",
-  "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.21",
+  "page.title": "2D CAD Viewer",
+  "page.eyebrow": "2D CAD Viewer · Scene Cache v1.26",
   "page.heading": "Large drawing first-frame verifier",
-  "page.hostHeading": "DWG drawing viewer",
+  "page.hostHeading": "2D CAD Viewer",
   "toolbar.more.open": "Open drawing tools",
   "toolbar.more.close": "Close drawing tools",
   "toolbar.more.title": "Drawing tools",
   "toolbar.controls": "Drawing view controls",
   "toolbar.zoomOut": "Zoom out",
   "toolbar.fit": "Fit drawing",
+  "toolbar.trackpadMode.off": "Mouse zoom",
+  "toolbar.trackpadMode.on": "Trackpad pan",
+  "toolbar.trackpadMode.enable":
+    "Enable trackpad mode: scrolling pans the drawing",
+  "toolbar.trackpadMode.disable":
+    "Disable trackpad mode: scrolling zooms the drawing",
   "toolbar.layers": "Layers",
   "toolbar.fonts": "Fonts",
   "toolbar.fontsWithIssues": "Fonts ({count})",
@@ -28,6 +34,7 @@ export const EN_MESSAGES = Object.freeze({
   "toolbar.plotStyle": "Plot style",
   "toolbar.plotStyle.select": "Choose plot style",
   "toolbar.plotStyle.none": "No plot style",
+  "toolbar.plotStyle.named": "STB unsupported",
   "toolbar.plotStyle.on": "Plot style on",
   "toolbar.plotStyle.off": "Plot style off",
   "toolbar.plotStyle.searching": "Finding plot style",
@@ -47,6 +54,8 @@ export const EN_MESSAGES = Object.freeze({
     "A CTB file with the same name could not be found.",
   "toolbar.plotStyle.unavailable.unavailable":
     "Open the DWG in VS Code to find its CTB automatically.",
+  "toolbar.plotStyle.unavailable.named":
+    "Named STB plot styles are identified but are not rendered by this 2D viewer.",
   "toolbar.plotStyle.unavailable.fallback":
     "The CTB plot style is unavailable.",
   "toolbar.plotStyle.selectHint":
@@ -201,6 +210,8 @@ export const EN_MESSAGES = Object.freeze({
   "xrefs.state.converting": "Converting",
   "xrefs.state.decoding": "Preparing display",
   "xrefs.state.ready": "Connected",
+  "xrefs.state.unloaded": "Unloaded",
+  "xrefs.state.unresolved": "Unresolved",
   "xrefs.state.missing": "Missing",
   "xrefs.state.ambiguous": "Selection required",
   "xrefs.state.cycle": "Reference cycle",
@@ -213,6 +224,7 @@ export const EN_MESSAGES = Object.freeze({
   "xrefs.empty": "This drawing has no external drawing or image references.",
   "xrefs.imageName": "Image · {name}",
   "xrefs.noStoredPath": "No stored path",
+  "xrefs.loadSession": "Load for this session",
   "xrefs.selectFile": "Choose file",
   "xrefs.resolution.relative":
     "Connected from a path relative to the drawing.",

@@ -24,6 +24,8 @@ export const MAX_PRIMITIVE_GPU_BYTES =
 
 const MAX_BATCH_VERTICES = 24_576;
 const MAX_POSITION_ERROR = 1e-3;
+const MAX_NATIVE_HAIRLINE_WIDTH = MAX_POSITION_ERROR;
+const GPU_STYLE_WIDE_POLYLINE_FILL = 1 << 4;
 const GPU_STYLE_INVISIBLE = 1 << 16;
 const WIPEOUT_BACKGROUND_COLOR =
   ((3 << 30) | (14 << 16) | (16 << 8) | 19) >>> 0;
@@ -84,12 +86,11 @@ function triangleIsUsable(points) {
   const crossX = firstY * secondZ - firstZ * secondY;
   const crossY = firstZ * secondX - firstX * secondZ;
   const crossZ = firstX * secondY - firstY * secondX;
-  let scale = 1;
-  for (const point of points) {
-    for (const coordinate of point) {
-      scale = Math.max(scale, Math.abs(coordinate));
-    }
-  }
+  const scale = Math.max(
+    1,
+    Math.hypot(firstX, firstY, firstZ),
+    Math.hypot(secondX, secondY, secondZ),
+  );
   return Math.hypot(crossX, crossY, crossZ) > scale * scale * 1e-12;
 }
 
@@ -305,7 +306,15 @@ function writePackedPrimitives(
       firstVertex,
       Math.min(firstVertex + maximumChunkVertices, points.length),
     );
-    if (!builder.write(owner, chunk, attributes, handle)) {
+    if (
+      !builder.write(
+        owner,
+        chunk,
+        (view, offset, index) =>
+          attributes(view, offset, firstVertex + index),
+        handle,
+      )
+    ) {
       return false;
     }
   }
@@ -354,6 +363,41 @@ function solidFillAttributes(entity, maskOrder) {
     view.setUint32(offset + 16, entity.color >>> 0, true);
     view.setUint32(offset + 20, entity.color >>> 0, true);
     view.setFloat32(offset + 24, 0, true);
+    view.setUint32(offset + 28, style >>> 0, true);
+  };
+}
+
+function widePolylineFillAttributes(
+  entity,
+  maskOrder,
+  patternDistances,
+  linetypeScale,
+) {
+  const linetypeCode =
+    Number.isInteger(entity.linetypeCode) &&
+    entity.linetypeCode >= 0 &&
+    entity.linetypeCode <= 2047
+      ? entity.linetypeCode
+      : 0;
+  const scale =
+    Number.isFinite(linetypeScale) && linetypeScale > 0
+      ? linetypeScale
+      : 1;
+  const style = encodeMaskBucket(
+    GPU_STYLE_WIDE_POLYLINE_FILL |
+      (linetypeCode << 5) |
+      (entity.commonFlags & 1 ? GPU_STYLE_INVISIBLE : 0),
+    maskBucketFor(maskOrder, entity.ownerHandle, entity.handle),
+  );
+  return (view, offset, index) => {
+    const patternDistance = patternDistances[index] / scale;
+    if (!Number.isFinite(patternDistance) || patternDistance < 0) {
+      throw new RangeError("wide polyline pattern distance is invalid");
+    }
+    view.setUint32(offset + 12, entity.layerIndex, true);
+    view.setUint32(offset + 16, entity.color >>> 0, true);
+    view.setUint32(offset + 20, entity.color >>> 0, true);
+    view.setFloat32(offset + 24, patternDistance, true);
     view.setUint32(offset + 28, style >>> 0, true);
   };
 }
@@ -408,6 +452,7 @@ export function buildPrimitiveMeshes(
     maximumWipeoutMaskGpuBytes = MAX_WIPEOUT_MASK_GPU_BYTES,
     wipeoutFrame = null,
     fillMode = true,
+    splineFrame = false,
     maskOrder = null,
   } = {},
 ) {
@@ -438,6 +483,9 @@ export function buildPrimitiveMeshes(
   }
   if (typeof fillMode !== "boolean") {
     throw new TypeError("drawing FILLMODE must be a boolean");
+  }
+  if (typeof splineFrame !== "boolean") {
+    throw new TypeError("drawing SPLFRAME must be a boolean");
   }
   requireBudget(
     maximumPointGpuBytes,
@@ -555,6 +603,7 @@ export function buildPrimitiveMeshes(
     renderedFaces: 0,
     renderedFaceEdges: 0,
     hiddenFaceEdges: 0,
+    restoredFaceEdges: 0,
     skippedDegenerateFaceEdges: 0,
     sourceWipeouts: source.wipeouts.length,
     deferredWipeoutMasks: 0,
@@ -738,7 +787,12 @@ export function buildPrimitiveMeshes(
     }
     const mesh = fillMode ? solidFillMesh : surfaceOutlineMesh;
     const attributes = fillMode
-      ? solidFillAttributes(polyline, maskOrder)
+      ? widePolylineFillAttributes(
+          polyline,
+          maskOrder,
+          geometry.fillPatternDistances,
+          source.curveLinetypeScales?.get(polyline.handle) ?? 1,
+        )
       : solidOutlineAttributes(polyline, maskOrder);
     if (
       !writePackedPrimitives(
@@ -760,7 +814,13 @@ export function buildPrimitiveMeshes(
       metrics.renderedOutlineWidePolylines += 1;
       metrics.widePolylineOutlineVertices += points.length;
     }
-    if (geometry.allDrawableEdgesWide) {
+    // Filled quads narrower than the primitive position-error budget can
+    // rasterize to zero pixels at normal zoom. Keep the native CAD line as a
+    // hairline fallback while retaining the fill for close zoom levels.
+    if (
+      geometry.allDrawableEdgesWide &&
+      geometry.maximumDrawableWidth > MAX_NATIVE_HAIRLINE_WIDTH
+    ) {
       lineReplacementHandles.push(polyline.handle);
     }
   }
@@ -780,9 +840,12 @@ export function buildPrimitiveMeshes(
     let rendered = false;
     const attributes = solidOutlineAttributes(face, maskOrder);
     for (let edge = 0; edge < QUADRILATERAL_EDGES.length; edge += 1) {
-      if (face.invisibleEdges & (1 << edge)) {
+      if (!splineFrame && (face.invisibleEdges & (1 << edge)) !== 0) {
         metrics.hiddenFaceEdges += 1;
         continue;
+      }
+      if (splineFrame && (face.invisibleEdges & (1 << edge)) !== 0) {
+        metrics.restoredFaceEdges += 1;
       }
       const [start, end] = QUADRILATERAL_EDGES[edge];
       if (pointsNear(face.corners[start], face.corners[end])) {

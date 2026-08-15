@@ -1,17 +1,18 @@
-# DWG Viewer for VS Code
+# 2D CAD Viewer for VS Code
 
 Open, inspect, search, measure, and export DWG drawings without leaving
 VS Code.
 
-DWG Viewer is an open-source, local-first, read-only viewer built for large
-drawings, Korean SHX/BigFont text, external references, and paper-space
-layouts. Your drawings and fonts stay on your computer.
+2D CAD Viewer is an open-source, local-first, read-only viewer compatible with
+the DWG file format. It is built for large drawings, Korean SHX/BigFont text,
+external references, and paper-space layouts. Your drawings and fonts stay on
+your computer.
 
 > This is an early public release. Editing and DWG saving are not available,
 > and the viewer currently supports Linux x64, macOS arm64, macOS Intel x64,
 > and Windows x64.
 
-## Why we built DWG Viewer
+## Why we built 2D CAD Viewer
 
 Opening a DWG just to check one detail should not interrupt the work around it.
 A conventional viewer or CAD workflow often means leaving the current
@@ -19,10 +20,10 @@ workspace, launching another application, waiting for it to become ready, and
 then repeating part of that wait for each drawing. A few seconds at a time can
 become a real loss of focus when many files need to be reviewed.
 
-DWG Viewer was built around VS Code's existing file workflow. Select a drawing
-in the Explorer and open it directly in an editor tab, next to the files and
-code you are already using. Local conversion and a private reusable cache are
-designed to minimize the time to a useful view and make repeat opens faster.
+2D CAD Viewer was built around VS Code's existing file workflow. Select a
+drawing in the Explorer and open it directly in an editor tab, next to the files
+and code you are already using. Local conversion and a private reusable cache
+are designed to minimize the time to a useful view and make repeat opens faster.
 
 This extension does not try to replace a full CAD editor. It aims to remove as
 much friction as possible from quick inspection, search, measurement, and
@@ -48,8 +49,13 @@ of starting a separate task.
 
 ### Comfortable navigation on mouse and trackpad
 
-- Click-drag or two-finger scroll to pan.
-- Use the mouse wheel or a trackpad pinch to zoom around the pointer.
+- The default **Mouse zoom** mode zooms around the pointer for every ordinary
+  scroll, including a detented wheel, smooth-scrolling wheel, or Magic Mouse.
+- Turn on **Trackpad pan** in the toolbar to make every ordinary scroll pan,
+  regardless of speed. Trackpad pinch zoom remains available in both modes.
+- Hardware is not detected automatically, so a slowing trackpad gesture never
+  changes from pan to zoom mid-gesture.
+- Click-drag always pans in either mode.
 - Drag a window to zoom, return to the fitted view, move through previous and
   next views, and save named view bookmarks.
 - The top-right and left tool shelves can independently remain icon-only or
@@ -102,7 +108,7 @@ of starting a separate task.
 
 ### Installation
 
-Install **DWG Viewer for VS Code** from the VS Code Marketplace. The extension
+Install **2D CAD Viewer for VS Code** from the VS Code Marketplace. The extension
 prepares the exact version-matched native converter for the current platform
 from the matching GitHub Release in the background. It verifies the declared
 size and SHA-256 digest and runs a bounded self-diagnosis before use. Open a
@@ -111,27 +117,34 @@ size and SHA-256 digest and runs a bounded self-diagnosis before use. Open a
 For a manual or offline installation, download
 `dwg-viewer-vscode-<version>.vsix` and the matching
 `dwg-viewer-native-converter-<version>-<platform>` from
-[GitHub Releases](https://github.com/menaje/dwg-viewer/releases). Install the
+[GitHub Releases](https://github.com/menaje/2d-cad-viewer/releases). Install the
 VSIX with **Extensions: Install from VSIX...**, then select the downloaded
 converter only when the automatic release download is unavailable.
 
-You can repeat the installed converter check at any time with **DWG Viewer:
+You can repeat the installed converter check at any time with **2D CAD Viewer:
 LibreDWG 변환기 진단**. The manual converter-selection command remains an
 offline fallback and never overrides a healthy version-managed converter.
 
 For checksums, provenance verification, macOS security approval, and
 platform-specific commands, see the
-[distribution and installation guide](https://github.com/menaje/dwg-viewer/blob/main/docs/distribution.md).
+[distribution and installation guide](https://github.com/menaje/2d-cad-viewer/blob/main/docs/distribution.md).
 
 ## Everyday use
 
-- **Pan:** click-drag or use a two-finger trackpad scroll.
-- **Zoom:** use the mouse wheel, trackpad pinch, or window-zoom tool.
+- **Choose scroll behavior:** keep **Scroll Input Mode** on `mouse-zoom` (the
+  default) to zoom with every ordinary wheel or Magic Mouse scroll. Turn on
+  **Trackpad pan** in the toolbar, or choose `trackpad-pan` in settings, to pan
+  with every ordinary scroll. There is no automatic hardware detection.
+- **Pan:** click-drag, or use a two-finger scroll in `trackpad-pan` mode.
+- **Zoom:** use ordinary scrolling in `mouse-zoom` mode, a trackpad pinch in
+  either mode, or the window-zoom tool.
 - **Tune zoom response:** adjust **Mouse Wheel Zoom Sensitivity** and
-  **Trackpad Pinch Zoom Sensitivity** independently in the DWG Viewer settings.
+  **Trackpad Pinch Zoom Sensitivity** independently in the 2D CAD Viewer
+  settings.
 - **Find a tool:** hover or focus a shelf to expand all of its tool names.
 - **Choose compact menus:** set **Top Toolbar Labels** and **Left Toolbar
-  Labels** under the DWG Viewer settings to `icons` or `hover` independently.
+  Labels** under the 2D CAD Viewer settings to `icons` or `hover`
+  independently.
 - **Tune high-DPI rendering:** keep **Render Resolution** on `auto` to reuse a
   bounded pixel budget with MSAA disabled, choose `performance` for the lowest
   pixel budget, or `quality` for full redraw quality and MSAA.
@@ -172,7 +185,7 @@ resource.
 After the first drawing frame, the viewer looks only for fonts requested by
 the drawing. It checks stored paths, the drawing folder, bounded project
 locations, and folders you add through **글꼴 → 글꼴 폴더 추가** or
-**DWG Viewer: SHX 글꼴 폴더 추가**.
+**2D CAD Viewer: SHX 글꼴 폴더 추가**.
 
 The font panel distinguishes connected, substituted, ambiguous, missing,
 unreadable, and malformed files. You can choose a replacement without exposing
@@ -197,7 +210,7 @@ equally ranked files.
 ## Privacy, license, and source
 
 The VSIX is licensed under MPL-2.0. Its complete source form is available in
-the [menaje/dwg-viewer repository](https://github.com/menaje/dwg-viewer),
+the [menaje/2d-cad-viewer repository](https://github.com/menaje/2d-cad-viewer),
 along with build scripts and third-party notices. The packaged `LICENSE.txt`
 contains Mozilla's unmodified MPL 2.0 text, while `NOTICE` contains the project
 copyright notice.
@@ -212,21 +225,27 @@ not load LibreDWG into the extension host.
 
 Release artifacts are reproducibly built and include SHA-256 checksums and
 GitHub build-provenance attestations. Details are in the
-[distribution guide](https://github.com/menaje/dwg-viewer/blob/main/docs/distribution.md).
+[distribution guide](https://github.com/menaje/2d-cad-viewer/blob/main/docs/distribution.md).
 The component-level license map and review rules are in the
-[licensing guide](https://github.com/menaje/dwg-viewer/blob/main/docs/licensing.md).
+[licensing guide](https://github.com/menaje/2d-cad-viewer/blob/main/docs/licensing.md).
+
+## Trademark notice
+
+Autodesk, AutoCAD, and DWG are registered trademarks or trademarks of Autodesk,
+Inc. This project is independently developed and is not affiliated with,
+authorized by, endorsed by, or sponsored by Autodesk.
 
 ## For contributors and integrations
 
 User documentation stays separate from implementation contracts:
 
-- [Architecture](https://github.com/menaje/dwg-viewer/blob/main/docs/architecture.md)
-- [Engine decision](https://github.com/menaje/dwg-viewer/blob/main/docs/engine-decision.md)
-- [Licensing policy](https://github.com/menaje/dwg-viewer/blob/main/docs/licensing.md)
-- [LibreDWG native converter](https://github.com/menaje/dwg-viewer/tree/main/adapters/libredwg)
-- [Viewer Core](https://github.com/menaje/dwg-viewer/tree/main/packages/viewer-core)
-- [Render protocol](https://github.com/menaje/dwg-viewer/tree/main/packages/render-protocol)
-- [Viewer UI](https://github.com/menaje/dwg-viewer/tree/main/packages/viewer-ui)
+- [Architecture](https://github.com/menaje/2d-cad-viewer/blob/main/docs/architecture.md)
+- [Engine decision](https://github.com/menaje/2d-cad-viewer/blob/main/docs/engine-decision.md)
+- [Licensing policy](https://github.com/menaje/2d-cad-viewer/blob/main/docs/licensing.md)
+- [LibreDWG native converter](https://github.com/menaje/2d-cad-viewer/tree/main/adapters/libredwg)
+- [Viewer Core](https://github.com/menaje/2d-cad-viewer/tree/main/packages/viewer-core)
+- [Render protocol](https://github.com/menaje/2d-cad-viewer/tree/main/packages/render-protocol)
+- [Viewer UI](https://github.com/menaje/2d-cad-viewer/tree/main/packages/viewer-ui)
 
 Run the full repository verification with:
 

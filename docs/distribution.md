@@ -34,7 +34,7 @@ and GitHub's
 
 ## Automatic installation model
 
-Installing **DWG Viewer for VS Code** activates the extension after VS Code
+Installing **2D CAD Viewer for VS Code** activates the extension after VS Code
 startup. The extension then:
 
 1. selects `linux-x64`, `darwin-arm64`, `darwin-x64`, or `win32-x64` from the
@@ -46,14 +46,14 @@ startup. The extension then:
 5. writes the executable under the extension's private global storage, keyed by
    viewer version, platform, and digest;
 6. runs `doctor` and requires the expected platform, architecture, adapter
-   protocol, and Scene Cache `dwg-scene-cache/1.21`; and
+   protocol, and Scene Cache `dwg-scene-cache/1.26`; and
 7. reuses the verified local executable on later starts.
 
 The converter runs as a separate operating-system process. Updating the viewer
 selects a new version-bound catalog and storage directory, so an independently
 updated or older converter cannot silently produce an incompatible cache. If a
 previous `1.18` cache is found, the cache header check removes and rebuilds it
-with the current `1.21` writer.
+with the current `1.26` writer.
 
 A configured adapter path, environment override, or historical engine
 extension is considered only when automatic installation is unavailable. Every
@@ -129,7 +129,7 @@ four source-complete archives. Generate the version-bound catalog first:
 ```bash
 node scripts/create-engine-catalog.mjs \
   --directory /absolute/path/release-assets \
-  --version 0.1.7 \
+  --version 0.1.8 \
   --output /absolute/path/engine-assets.json
 ```
 
@@ -142,7 +142,7 @@ DWG_VIEWER_ENGINE_CATALOG=/absolute/path/engine-assets.json \
 pnpm --dir apps/vscode-extension exec vsce package \
   --pre-release \
   --no-dependencies \
-  --out /absolute/new/path/dwg-viewer-vscode-0.1.7.vsix
+  --out /absolute/new/path/dwg-viewer-vscode-0.1.8.vsix
 ```
 
 Use the checksum-pinned preparation and deterministic packager in
@@ -167,24 +167,24 @@ shasum -a 256 -c SHA256SUMS
 With GitHub CLI, verify provenance for the files you intend to use:
 
 ```bash
-gh attestation verify dwg-viewer-vscode-0.1.7.vsix \
-  --repo menaje/dwg-viewer
-gh attestation verify dwg-viewer-native-converter-0.1.7-darwin-arm64 \
-  --repo menaje/dwg-viewer
+gh attestation verify dwg-viewer-vscode-0.1.8.vsix \
+  --repo menaje/2d-cad-viewer
+gh attestation verify dwg-viewer-native-converter-0.1.8-darwin-arm64 \
+  --repo menaje/2d-cad-viewer
 gh attestation verify dwg-viewer-libredwg-0.14-darwin-arm64.tar.gz \
-  --repo menaje/dwg-viewer
+  --repo menaje/2d-cad-viewer
 ```
 
 ## Install
 
-From Marketplace, install only **DWG Viewer for VS Code**. The automatic flow
+From Marketplace, install only **2D CAD Viewer for VS Code**. The automatic flow
 above prepares the correct converter; there is no engine extension to select or
 install.
 
 For a manual VSIX installation:
 
 ```bash
-code --install-extension dwg-viewer-vscode-0.1.7.vsix
+code --install-extension dwg-viewer-vscode-0.1.8.vsix
 ```
 
 If the target computer cannot reach GitHub Releases, copy the matching raw
@@ -192,17 +192,17 @@ converter from another verified computer. On Linux or macOS, make only that
 file executable and run its self-test:
 
 ```bash
-chmod 700 dwg-viewer-native-converter-0.1.7-darwin-arm64
-./dwg-viewer-native-converter-0.1.7-darwin-arm64 doctor
+chmod 700 dwg-viewer-native-converter-0.1.8-darwin-arm64
+./dwg-viewer-native-converter-0.1.8-darwin-arm64 doctor
 ```
 
 On Windows, run:
 
 ```powershell
-.\dwg-viewer-native-converter-0.1.7-win32-x64.exe doctor
+.\dwg-viewer-native-converter-0.1.8-win32-x64.exe doctor
 ```
 
-Then run **DWG Viewer: LibreDWG 변환기 선택** and choose that verified file.
+Then run **2D CAD Viewer: LibreDWG 변환기 선택** and choose that verified file.
 The command is an offline fallback; it does not replace a healthy automatically
 managed converter.
 

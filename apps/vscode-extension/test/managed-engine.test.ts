@@ -27,13 +27,13 @@ function catalog(overrides: Record<string, unknown> = {}): string {
   return `${JSON.stringify({
     schema: ENGINE_ASSET_CATALOG_SCHEMA,
     viewerVersion,
-    repository: "menaje/dwg-viewer",
+    repository: "menaje/2d-cad-viewer",
     releaseTag: `v${viewerVersion}`,
     engine: {
       id: "libredwg",
       version: "0.14",
       protocol: "dwg-engine-adapter/1",
-      cacheSchema: "dwg-scene-cache/1.21",
+      cacheSchema: "dwg-scene-cache/1.26",
       license: "GPL-3.0-or-later",
     },
     targets: {
@@ -107,7 +107,7 @@ test("downloads, validates, installs, and reuses the exact engine", async (conte
       downloads += 1;
       assert.equal(
         url,
-        `https://github.com/menaje/dwg-viewer/releases/download/v0.1.4/dwg-viewer-native-converter-${viewerVersion}-${target}`,
+        `https://github.com/menaje/2d-cad-viewer/releases/download/v0.1.4/dwg-viewer-native-converter-${viewerVersion}-${target}`,
       );
       return {
         ok: true,
@@ -147,14 +147,18 @@ test("downloads, validates, installs, and reuses the exact engine", async (conte
   assert.equal(second.reused, true);
   assert.deepEqual(await readFile(first.adapterPath), engineBytes);
   assert.equal(downloads, 1);
-  assert.equal(diagnoses >= 2, true);
+  assert.equal(diagnoses, 2);
   assert.match(first.sourceUrl, /dwg-viewer-libredwg-0\.14-darwin-arm64/u);
 
-  await writeFile(first.adapterPath, Buffer.from("corrupt"));
+  await writeFile(
+    first.adapterPath,
+    Buffer.alloc(engineBytes.byteLength, 0x78),
+  );
   const repaired = await manager.ensure();
   assert.equal(repaired.reused, false);
   assert.deepEqual(await readFile(repaired.adapterPath), engineBytes);
   assert.equal(downloads, 2);
+  assert.equal(diagnoses, 4);
 });
 
 test("rejects a download whose digest differs from the catalog", async (context) => {

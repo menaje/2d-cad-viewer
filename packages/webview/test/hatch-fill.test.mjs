@@ -92,6 +92,58 @@ test("triangulates a bounded gradient HATCH with a nested hole", async () => {
   assert.equal(maximumMix, 1);
 });
 
+test("omits HATCH fills when drawing FILLMODE is disabled", async () => {
+  const { metadata, source, instanceGraph } = await hatchFixture();
+  const result = buildHatchFillMesh(
+    source,
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: false },
+  );
+
+  assert.equal(result.metrics.sourceHatches, 1);
+  assert.equal(result.metrics.renderedHatches, 0);
+  assert.equal(result.metrics.vertices, 0);
+  assert.equal(result.vertices.byteLength, 0);
+  assert.equal(result.batches.length, 0);
+});
+
+test("fills a pattern HATCH background before its foreground pattern", async () => {
+  const { metadata, source, instanceGraph } = await hatchFixture();
+  const backgroundColor = ((3 << 30) | 0x12_34_56) >>> 0;
+  const backgroundSource = {
+    length: source.length,
+    readEntity(index, target) {
+      source.readEntity(index, target);
+      target.flags = 1 << 6;
+      target.backgroundColor = backgroundColor;
+      return target;
+    },
+    readLoop: source.readLoop.bind(source),
+    readVertex: source.readVertex.bind(source),
+  };
+  const result = buildHatchFillMesh(
+    backgroundSource,
+    metadata.blocks,
+    instanceGraph,
+  );
+
+  assert.equal(result.metrics.patternHatches, 1);
+  assert.equal(result.metrics.backgroundHatches, 1);
+  assert.equal(result.metrics.renderedHatches, 1);
+  assert.equal(result.metrics.triangles, 8);
+  const view = new DataView(result.vertices.buffer);
+  for (
+    let offset = 0;
+    offset < result.vertices.byteLength;
+    offset += HATCH_FILL_VERTEX_STRIDE
+  ) {
+    assert.equal(view.getUint32(offset + 16, true), backgroundColor);
+    assert.equal(view.getUint32(offset + 20, true), backgroundColor);
+    assert.equal(view.getFloat32(offset + 24, true), 0);
+  }
+});
+
 test("stops HATCH triangulation at the caller GPU budget", async () => {
   const { metadata, source, instanceGraph } = await hatchFixture();
   const result = buildHatchFillMesh(

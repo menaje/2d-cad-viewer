@@ -9,6 +9,7 @@ import {
   patchLineMaskBuckets,
   ROOT_RENDER_DELTA_SCENE_ID,
   selectInteractiveInstanceIndices,
+  validatedPreferredView,
   WebGlLineRenderer,
 } from "../src/renderer.mjs";
 import { curveRefinementCameraKey } from "../src/curve-contract.mjs";
@@ -41,6 +42,33 @@ import {
   NESTED_INSTANCE_LAYERS,
   nestedInstanceGraph,
 } from "./nested-instance-graph-fixture.mjs";
+
+test("accepts a saved view that intersects line-only construction geometry", () => {
+  const view = {
+    center: [0, 0, 0],
+    height: 20,
+    width: 50,
+    twist: 0,
+  };
+  const bounds = {
+    min: [0, -1_000, 0],
+    max: [0, 10, 0],
+  };
+
+  assert.deepEqual(validatedPreferredView(view, bounds, 1_000, 500), {
+    origin: [0, 0, 0],
+    worldHeight: 25,
+  });
+  assert.equal(
+    validatedPreferredView(
+      { ...view, center: [100, 0, 0] },
+      bounds,
+      1_000,
+      500,
+    ),
+    null,
+  );
+});
 
 function makeFakeGl() {
   let nextId = 0;
@@ -162,6 +190,7 @@ function makeFakeGl() {
     bufferSubData(_target, offset, value) {
       calls.bufferSubData.push({
         offset,
+        buffer: ArrayBuffer.isView(value) ? value.buffer : value,
         byteLength: value.byteLength,
       });
     },
@@ -358,6 +387,49 @@ function sharedBlockInstances(handles = [0x2an, 0x2bn]) {
     length: handles.length,
   });
 }
+
+test("omits block occurrences hidden by an ancestor INSERT", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const instances = Object.freeze({
+    ...sharedBlockInstances(),
+    visibilityNodeIds: new Uint32Array([0, 1]),
+    visibilityValues: new Uint8Array([1, 0]),
+  });
+  const renderer = new WebGlLineRenderer(canvas);
+  const blockBatch = {
+    ...batch({
+      id: 0,
+      kind: GpuLineBatchKind.BlockDefinition,
+      lodLevel: 0,
+      firstVertex: 0,
+    }),
+    blockIndex: 1,
+  };
+
+  renderer.renderOverview({
+    batches: [blockBatch],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: {
+      instancesByBlock: new Map([[1, instances]]),
+      insertsByOwner: new Map(),
+    },
+    vertices: lineVerticesForHandles([0x99n]),
+  });
+
+  assert.deepEqual(calls.drawArraysInstanced, [
+    { mode: gl.LINES, first: 0, count: 2, instances: 1 },
+  ]);
+  renderer.dispose();
+});
 
 test("limits fitted bounds and packs camera-relative INSERT clips", () => {
   const clipNodes = [
@@ -1129,6 +1201,82 @@ test("draws layout viewport linetypes with their paper-space scales", () => {
   renderer.dispose();
 });
 
+test("uploads standalone LINE extents for A-aligned short patterns", () => {
+  const { gl, calls } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const buffer = new ArrayBuffer(72);
+  const view = new DataView(buffer);
+  for (let endpoint = 0; endpoint < 2; endpoint += 1) {
+    const offset = endpoint * 36;
+    view.setFloat32(offset, endpoint * 0.5, true);
+    view.setUint32(offset + 12, 0, true);
+    view.setUint32(offset + 16, 7, true);
+    view.setUint32(offset + 28, 3 << 5, true);
+    view.setFloat32(offset + 32, endpoint * 0.5, true);
+  }
+  const renderer = new WebGlLineRenderer(canvas);
+
+  renderer.renderOverview({
+    batches: [
+      batch({
+        id: 0,
+        kind: GpuLineBatchKind.ModelOverview,
+        lodLevel: 0,
+        firstVertex: 0,
+      }),
+    ],
+    layers: [{ color: 0, flags: 0 }],
+    linetypes: [
+      {
+        code: 3,
+        alignment: 65,
+        patternLength: 1,
+        flags: 0,
+        dashes: [{ length: 0.5 }, { length: -0.5 }],
+      },
+    ],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: { buffer, byteLength: 72, vertexCount: 2 },
+  });
+
+  const upload = calls.bufferData.find(
+    ({ byteLength, usage }) =>
+      byteLength === 72 && usage === gl.STATIC_DRAW,
+  );
+  assert.ok(upload);
+  assert.notEqual(upload.buffer, buffer);
+  assert.ok(new DataView(upload.buffer).getUint32(12, true) >>> 16);
+  assert.equal(new DataView(buffer).getUint32(12, true), 0);
+  assert.equal(
+    calls.uniform1i
+      .filter(({ name }) => name === "u_aTypeLineExtentsPacked")
+      .at(-1).value,
+    1,
+  );
+  assert.ok(
+    calls.shaderSources.some((source) =>
+      source.includes("v_aTypeLineExtent < patternLength"),
+    ),
+  );
+  renderer.updateLineVertexResource(
+    renderer.overviewScene.resource,
+    { buffer, byteLength: 72, vertexCount: 2, recordSize: 36 },
+  );
+  assert.ok(
+    new DataView(calls.bufferSubData.at(-1).buffer).getUint32(12, true) >>>
+      16,
+  );
+  renderer.dispose();
+});
+
 test("rejects a saved model view that does not intersect drawable geometry", () => {
   const { gl } = makeFakeGl();
   const canvas = {
@@ -1409,6 +1557,46 @@ test("renders and fits a drawing whose only drawable content is an IMAGE", () =>
   renderer.dispose();
 });
 
+test("opens a text-only drawing from its saved model view", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  const rendered = renderer.renderOverview({
+    batches: [],
+    layers: [{ color: 0, flags: 0 }],
+    instanceGraph: { instancesByBlock: new Map() },
+    vertices: {
+      buffer: new ArrayBuffer(0),
+      byteLength: 0,
+      vertexCount: 0,
+    },
+    preferredView: {
+      center: [23, 9, 0],
+      height: 20,
+      width: 50,
+      twist: 0,
+    },
+  });
+
+  assert.deepEqual(rendered.camera.origin, [23, 9, 0]);
+  assert.equal(rendered.camera.worldHeight, 25);
+  assert.deepEqual(renderer.overviewScene.bounds, {
+    min: [-2, -3.5, 0],
+    max: [48, 21.5, 0],
+  });
+  assert.equal(rendered.drawCalls, 0);
+  assert.equal(rendered.submittedVertices, 0);
+  renderer.dispose();
+});
+
 test("redraws overview and independently uploaded detail vertex ranges", () => {
   const { gl, calls } = makeFakeGl();
   const canvas = {
@@ -1531,6 +1719,42 @@ test("redraws overview and independently uploaded detail vertex ranges", () => {
   renderer.dispose();
 });
 
+test("plot preview hides no-plot layers without changing screen visibility", () => {
+  const { gl } = makeFakeGl();
+  const canvas = {
+    clientWidth: 200,
+    clientHeight: 100,
+    width: 0,
+    height: 0,
+    getContext(name) {
+      return name === "webgl2" ? gl : null;
+    },
+  };
+  const renderer = new WebGlLineRenderer(canvas);
+  renderer.setLayers([
+    { color: 0, flags: 1 << 3 },
+    { color: 0, flags: 0 },
+  ]);
+
+  assert.deepEqual(renderer.getLayerVisibility(), [true, true]);
+  assert.deepEqual(renderer.getDisplayLayerVisibility(), [true, true]);
+
+  const lineWeights = new Int16Array(256);
+  lineWeights.fill(-1);
+  renderer.setPlotStyle(renderer.aciPalette, lineWeights);
+
+  assert.deepEqual(renderer.getLayerVisibility(), [true, true]);
+  assert.deepEqual(renderer.getDisplayLayerVisibility(), [true, false]);
+
+  renderer.setLayerVisibility(1, true);
+  assert.deepEqual(renderer.getDisplayLayerVisibility(), [true, false]);
+
+  renderer.clearPlotStyle(renderer.aciPalette);
+  assert.deepEqual(renderer.getLayerVisibility(), [true, true]);
+  assert.deepEqual(renderer.getDisplayLayerVisibility(), [true, true]);
+  renderer.dispose();
+});
+
 test("wide polyline meshes suppress only their matching native centerlines", () => {
   const { gl, calls } = makeFakeGl();
   const canvas = {
@@ -1543,6 +1767,13 @@ test("wide polyline meshes suppress only their matching native centerlines", () 
     },
   };
   const renderer = new WebGlLineRenderer(canvas);
+  assert.ok(
+    calls.shaderSources.some(
+      (source) =>
+        source.includes("widePolylineLinetypeVisible") &&
+        source.includes("uniform usampler2D u_layerLinetypes"),
+    ),
+  );
   const overviewBatch = {
     ...batch({
       id: 0,

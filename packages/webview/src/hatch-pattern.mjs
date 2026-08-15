@@ -846,6 +846,7 @@ export function buildHatchPatternMesh(
     maximumIntersectionTests = MAX_HATCH_PATTERN_INTERSECTION_TESTS,
     minimumSpacingPixels = MIN_HATCH_PATTERN_SPACING_PIXELS,
     maskOrder = null,
+    fillMode = true,
   } = {},
 ) {
   if (
@@ -874,6 +875,9 @@ export function buildHatchPatternMesh(
     maximumSegments < 1
   ) {
     throw new RangeError("HATCH pattern GPU limits are invalid");
+  }
+  if (typeof fillMode !== "boolean") {
+    throw new TypeError("drawing FILLMODE must be a boolean");
   }
 
   const blockIndexByHandle = new Map(
@@ -915,6 +919,14 @@ export function buildHatchPatternMesh(
       0,
     ),
   };
+
+  if (!fillMode) {
+    const result = mesh.finish();
+    return Object.freeze({
+      ...result,
+      metrics: Object.freeze(metrics),
+    });
+  }
 
   for (let entityIndex = 0; entityIndex < source.length; entityIndex += 1) {
     source.readEntity(entityIndex, entity);

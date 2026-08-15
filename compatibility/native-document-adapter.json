@@ -10,7 +10,7 @@
     "backendKind": "native-process",
     "status": "query-preview",
     "index": {
-      "projection": "Scene Cache v1.21 source records",
+      "projection": "Scene Cache v1.26 source records",
       "storage": "packed typed arrays",
       "maximumEntries": 1000000,
       "maximumSourceBytes": 268435456,
@@ -100,12 +100,12 @@
     ],
     "windows": "qualified",
     "windowsQualification": {
-      "workflowRun": "https://github.com/menaje/dwg-viewer/actions/runs/30866825947",
+      "workflowRun": "https://github.com/menaje/2d-cad-viewer/actions/runs/30866825947",
       "commit": "3b0663577a032a605c6244e7299a95f978548b89",
       "evidence": "compatibility/evidence/windows-qualification-2026-08-04.json"
     }
   },
   "tracking": [
-    "https://github.com/menaje/dwg-viewer/issues/28"
+    "https://github.com/menaje/2d-cad-viewer/issues/28"
   ]
 }

@@ -7,3 +7,6 @@ export {
 export {
   MockRenderDeltaSource,
 } from "./mock-render-delta-source.mjs";
+export {
+  MockStagedRenderDeltaAdapter,
+} from "./mock-staged-render-delta-adapter.mjs";

@@ -3,6 +3,8 @@ import {
   CACHE_HEADER_FLAG_PREVIEW,
   CACHE_VERSION_MINOR,
   CIRCLE_RECORD_SIZE,
+  CONSTRUCTION_LINE_RECORD_SIZE,
+  CURVE_LINETYPE_SCALE_RECORD_SIZE,
   DIRECTORY_ENTRY_SIZE,
   DRAW_ORDER_ENTRY_RECORD_SIZE,
   DRAW_ORDER_TABLE_RECORD_SIZE,
@@ -134,10 +136,77 @@ function makeEllipseSection() {
   };
 }
 
+function makeCurveLinetypeScaleSection(
+  includeReviewCurves,
+  constructionLines,
+  curveLinetypeScales,
+) {
+  const rows = curveLinetypeScales ?? [
+    ...(includeReviewCurves
+      ? [
+        [0x501, 2],
+        [0x502, 0.5],
+        [0x503, 1.25],
+      ]
+      : []),
+    ...constructionLines.map((line) => [line.handle, line.scale ?? 1]),
+  ];
+  const buffer = new ArrayBuffer(
+    CURVE_LINETYPE_SCALE_RECORD_SIZE * rows.length,
+  );
+  const view = new DataView(buffer);
+  rows.forEach(([handle, scale], index) => {
+    const offset = index * CURVE_LINETYPE_SCALE_RECORD_SIZE;
+    writeU64(view, offset, handle);
+    view.setFloat64(offset + 8, scale, true);
+  });
+  return {
+    kind: SectionKind.CurveLinetypeScales,
+    recordSize: CURVE_LINETYPE_SCALE_RECORD_SIZE,
+    recordCount: rows.length,
+    flags: 0,
+    buffer,
+  };
+}
+
+function makeConstructionLineSection(rows) {
+  const buffer = new ArrayBuffer(
+    CONSTRUCTION_LINE_RECORD_SIZE * rows.length,
+  );
+  const view = new DataView(buffer);
+  rows.forEach((row, index) => {
+    const offset = index * CONSTRUCTION_LINE_RECORD_SIZE;
+    writePrimitiveCommon(view, offset, {
+      handle: row.handle,
+      ownerHandle: row.ownerHandle ?? 100,
+      color: row.color ?? 0,
+      invisible: row.invisible ?? false,
+    });
+    view.setUint16(
+      offset + 26,
+      (row.invisible ? 1 : 0) |
+        (row.kind === "ray" ? 1 << 1 : 0) |
+        (row.extraFlags ?? 0),
+      true,
+    );
+    writeVec3(view, offset + 32, row.point ?? [0, 0, 0]);
+    writeVec3(view, offset + 56, row.direction ?? [1, 0, 0]);
+  });
+  return {
+    kind: SectionKind.ConstructionLines,
+    recordSize: CONSTRUCTION_LINE_RECORD_SIZE,
+    recordCount: rows.length,
+    flags: 0,
+    buffer,
+  };
+}
+
 function makeDrawingSection(
   rawDisplaySettings = 0,
   globalLinetypeScale = 1,
   savedModelView = null,
+  presentationSettings = 0,
+  modelAnnotationScale = 0,
 ) {
   const recordSize = 160;
   const buffer = new ArrayBuffer(recordSize);
@@ -151,6 +220,7 @@ function makeDrawingSection(
   view.setFloat64(80, globalLinetypeScale, true);
   view.setFloat64(88, 1, true);
   view.setUint32(96, 1, true);
+  view.setUint32(100, presentationSettings, true);
   if (savedModelView) {
     writeVec3(view, 104, savedModelView.center);
     view.setFloat64(128, savedModelView.height, true);
@@ -158,6 +228,7 @@ function makeDrawingSection(
     view.setFloat64(144, savedModelView.twist ?? 0, true);
     view.setUint32(152, 1, true);
   }
+  view.setFloat32(156, modelAnnotationScale, true);
   return {
     kind: SectionKind.Drawing,
     recordSize,
@@ -270,7 +341,12 @@ function makeLayerSection() {
   };
 }
 
-function makeBlockSection() {
+function makeBlockSection({
+  minorVersion,
+  paperBlockName,
+  xrefLoaded,
+  xrefResolved,
+}) {
   const rows = [
     {
       handle: 100,
@@ -280,7 +356,7 @@ function makeBlockSection() {
     },
     {
       handle: 101,
-      name: "BLOCK_A",
+      name: paperBlockName,
       xrefPath: "",
       basePoint: [10, 0, 0],
     },
@@ -322,6 +398,20 @@ function makeBlockSection() {
     view.setUint32(offset + 20, row.handle === 100 ? 0 : 1, true);
     if (row.xrefPath) {
       view.setUint32(offset + 24, 1 << 2, true);
+      if (minorVersion >= 22 && xrefLoaded) {
+        view.setUint32(
+          offset + 24,
+          view.getUint32(offset + 24, true) | (1 << 7),
+          true,
+        );
+      }
+      if (minorVersion >= 22 && xrefResolved) {
+        view.setUint32(
+          offset + 24,
+          view.getUint32(offset + 24, true) | (1 << 8),
+          true,
+        );
+      }
     }
     writeVec3(view, offset + 32, row.basePoint);
     view.setUint32(offset + 56, stringCursor, true);
@@ -588,6 +678,7 @@ function makeHatchEntitySection() {
   view.setFloat64(offset + 160, 0, true);
   writeU64(view, offset + 168, 0);
   writeU64(view, offset + 176, 1);
+  view.setUint32(offset + 184, 0, true);
   view.setUint32(offset + 188, 2, true);
   new Uint8Array(buffer, stringOffset, pattern.byteLength).set(pattern);
   new Uint8Array(
@@ -1351,7 +1442,12 @@ function makeLinetypeDashSection() {
   };
 }
 
-function makeLayoutSection() {
+function makeLayoutSection(
+  plotStyleName,
+  minorVersion,
+  modelAnnotationAllVisible,
+  layoutAnnotationAllVisible,
+) {
   const rows = [
     {
       handle: 1000,
@@ -1361,6 +1457,7 @@ function makeLayoutSection() {
       viewportCount: 0,
       tabOrder: 0,
       name: "Model",
+      annotationAllVisible: modelAnnotationAllVisible,
       paperWidth: 210,
       paperHeight: 297,
     },
@@ -1371,7 +1468,9 @@ function makeLayoutSection() {
       firstViewport: 0,
       viewportCount: 2,
       tabOrder: 1,
+      flags: 1,
       name: "배치1",
+      annotationAllVisible: layoutAnnotationAllVisible,
       paperWidth: 420,
       paperHeight: 297,
     },
@@ -1380,7 +1479,7 @@ function makeLayoutSection() {
     SectionKind.Layouts,
     LAYOUT_RECORD_SIZE,
     rows,
-    (row) => [row.name, "monochrome.ctb", "ISO_A3", "DWG To PDF.pc3"],
+    (row) => [row.name, plotStyleName, "ISO_A3", "DWG To PDF.pc3"],
     (view, offset, row, references) => {
       writeU64(view, offset, row.handle);
       writeU64(view, offset + 8, row.blockHandle);
@@ -1388,6 +1487,10 @@ function makeLayoutSection() {
       writeU64(view, offset + 24, row.firstViewport);
       view.setUint32(offset + 32, row.viewportCount, true);
       view.setUint16(offset + 36, row.tabOrder, true);
+      view.setUint16(offset + 38, row.flags ?? 0, true);
+      if (minorVersion >= 24) {
+        view.setUint16(offset + 54, row.annotationAllVisible ? 1 : 0, true);
+      }
       view.setFloat64(offset + 56, 1, true);
       view.setFloat64(offset + 64, 1, true);
       view.setFloat64(offset + 72, 1, true);
@@ -1625,16 +1728,72 @@ export function makeFixtureCache({
   lineWeightDisplay = false,
   fillMode = true,
   modelSpaceActive = true,
+  attributeDisplayMode = 1,
+  imageFrame = null,
+  xclipFrame = 2,
+  oleFrame = null,
+  annotationAllVisible = true,
+  modelSpaceLinetypeScale = false,
+  modelAnnotationScale = 1,
+  frame = null,
+  pdfFrame = null,
+  dwfFrame = null,
+  dgnFrame = null,
+  quickTextMode = false,
+  splineFrame = false,
+  displaySilhouettes = false,
+  externalReferenceOverrides = false,
+  retainExternalReferenceLayers = true,
+  rasterImageQualityHigh = true,
+  displaySilhouettesInBlocks = true,
+  xrefLoaded = true,
+  xrefResolved = true,
   globalLinetypeScale = 1,
   savedModelView = null,
   wipeoutRecordCount = WIPEOUT_ROWS.length,
   includeReviewCurves = false,
+  constructionLines = [],
+  curveLinetypeScales = null,
   viewportLayerOverrides = [],
   embeddedImageBytes = null,
   embeddedImageMime = 1,
   embeddedImageWidth = 2,
   embeddedImageHeight = 2,
+  layoutPlotStyle = "monochrome.ctb",
+  layoutAnnotationAllVisible = true,
+  paperBlockName = "BLOCK_A",
 } = {}) {
+  const encodeTwoBitSetting = (value) =>
+    value === null ? 3 : value;
+  let presentationSettings =
+    minorVersion >= 22
+      ? encodeTwoBitSetting(attributeDisplayMode) |
+        (encodeTwoBitSetting(imageFrame) << 2) |
+        (encodeTwoBitSetting(xclipFrame) << 4) |
+        (encodeTwoBitSetting(oleFrame) << 6) |
+        (encodeTwoBitSetting(annotationAllVisible ? 1 : 0) << 8) |
+        (encodeTwoBitSetting(modelSpaceLinetypeScale ? 1 : 0) << 10) |
+        (frame === null ? 0 : (frame << 12) | (1 << 14))
+      : 0;
+  if (minorVersion >= 23) {
+    presentationSettings |=
+      (encodeTwoBitSetting(pdfFrame) << 15) |
+      (encodeTwoBitSetting(dwfFrame) << 17) |
+      (encodeTwoBitSetting(dgnFrame) << 19);
+  }
+  if (minorVersion >= 25) {
+    presentationSettings |=
+      (quickTextMode ? 1 << 21 : 0) |
+      (splineFrame ? 1 << 22 : 0) |
+      (displaySilhouettes ? 1 << 23 : 0) |
+      (externalReferenceOverrides ? 1 << 24 : 0);
+  }
+  if (minorVersion >= 26) {
+    presentationSettings |=
+      (retainExternalReferenceLayers ? 1 << 25 : 0) |
+      (rasterImageQualityHigh ? 1 << 26 : 0) |
+      (displaySilhouettesInBlocks ? 1 << 27 : 0);
+  }
   const sections = [
     makeDrawingSection(
       (wipeoutFrame === null ? 3 : wipeoutFrame) |
@@ -1643,9 +1802,16 @@ export function makeFixtureCache({
         (modelSpaceActive ? 1 << 4 : 0),
       globalLinetypeScale,
       savedModelView,
+      presentationSettings,
+      minorVersion >= 22 ? modelAnnotationScale : 0,
     ),
     makeLayerSection(),
-    makeBlockSection(),
+    makeBlockSection({
+      minorVersion,
+      paperBlockName,
+      xrefLoaded,
+      xrefResolved,
+    }),
     makeTextStyleSection(),
     makeEmptySection(SectionKind.Lines, LINE_RECORD_SIZE),
     ...(includeReviewCurves
@@ -1696,7 +1862,12 @@ export function makeFixtureCache({
     makeInsertClipVertexSection(),
     makeLinetypeSection(),
     makeLinetypeDashSection(),
-    makeLayoutSection(),
+    makeLayoutSection(
+      layoutPlotStyle,
+      minorVersion,
+      annotationAllVisible,
+      layoutAnnotationAllVisible,
+    ),
     makeViewportSection(),
     makeViewportFrozenLayerSection(),
     makeViewportClipVertexSection(),
@@ -1711,6 +1882,16 @@ export function makeFixtureCache({
       height: embeddedImageHeight,
     }),
     makeEmbeddedImageByteSection(embeddedImageBytes),
+    ...(minorVersion >= 23
+      ? [
+          makeCurveLinetypeScaleSection(
+            includeReviewCurves,
+            constructionLines,
+            curveLinetypeScales,
+          ),
+          makeConstructionLineSection(constructionLines),
+        ]
+      : []),
   ];
   const directoryOffset = HEADER_SIZE;
   const directoryLength = sections.length * DIRECTORY_ENTRY_SIZE;

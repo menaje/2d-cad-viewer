@@ -3,8 +3,8 @@
 Status: rejected for product use on 2026-08-01.
 
 This directory reproduces issue
-[#17](https://github.com/menaje/dwg-viewer/issues/17)'s real LibreDWG 0.14
-WASM probe. It compiles the same C Scene Cache v1.21 writer used by the Native
+[#17](https://github.com/menaje/2d-cad-viewer/issues/17)'s real LibreDWG 0.14
+WASM probe. It compiles the same C Scene Cache v1.26 writer used by the Native
 adapter. It does not add a selectable backend, automatic fallback or VSIX
 asset.
 
@@ -49,7 +49,7 @@ node adapters/libredwg/wasm/probe.mjs \
 ```
 
 For a small fixture, compare the WASM output hash with a cache made by the
-current Native v1.21 adapter:
+current Native v1.26 adapter:
 
 ```bash
 node adapters/libredwg/wasm/probe.mjs \

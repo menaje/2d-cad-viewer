@@ -6,6 +6,7 @@ import {
   encodedDrawOrderColor,
   resizeDrawOrderSurface,
 } from "../src/draw-order-overlay.mjs";
+import { MAX_GLOBAL_MASK_BUCKET } from "../src/mask-order.mjs";
 
 function makeCanvas() {
   const calls = [];
@@ -45,9 +46,16 @@ function makeCanvas() {
 
 test("encodes a draw-order bucket into a lossless RGB value", () => {
   assert.equal(encodedDrawOrderColor(0), "rgb(1, 0, 0)");
-  assert.equal(encodedDrawOrderColor(0.5), "rgb(1, 2, 0)");
-  assert.equal(encodedDrawOrderColor(255), "rgb(1, 252, 3)");
-  assert.equal(encodedDrawOrderColor(10_000), "rgb(1, 64, 156)");
+  assert.equal(encodedDrawOrderColor(0.5), "rgb(1, 1, 0)");
+  assert.equal(encodedDrawOrderColor(255), "rgb(1, 254, 1)");
+  assert.equal(encodedDrawOrderColor(10_000), "rgb(1, 32, 78)");
+});
+
+test("encodes the maximum supported draw-order bucket without RGB overflow", () => {
+  assert.equal(
+    encodedDrawOrderColor(MAX_GLOBAL_MASK_BUCKET),
+    "rgb(1, 254, 255)",
+  );
 });
 
 test("forces order-map drawing to opaque source-over colors", () => {
@@ -60,8 +68,8 @@ test("forces order-map drawing to opaque source-over colors", () => {
   surface.proxy.globalAlpha = 0.1;
   surface.proxy.filter = "blur(5px)";
 
-  assert.equal(context.fillStyle, "rgb(1, 252, 3)");
-  assert.equal(context.strokeStyle, "rgb(1, 252, 3)");
+  assert.equal(context.fillStyle, "rgb(1, 254, 1)");
+  assert.equal(context.strokeStyle, "rgb(1, 254, 1)");
   assert.equal(context.globalAlpha, 1);
   assert.equal(context.filter, "none");
   assert.equal(

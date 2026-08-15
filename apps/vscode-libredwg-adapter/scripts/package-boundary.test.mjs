@@ -46,7 +46,7 @@ test("keeps the historical GPL package only as a qualification fixture", async (
   assert.match(readme, /retained for offline and extension-host qualification/iu);
   assert.match(readme, /not a current Marketplace\s+product/iu);
   assert.match(readme, /complete corresponding source is under `source\/`/iu);
-  assert.match(readme, /separate from the MPL-2\.0 DWG Viewer VSIX/u);
+  assert.match(readme, /separate from the MPL-2\.0 2D CAD Viewer VSIX/u);
   assert.doesNotMatch(readme, /무료/u);
   assert.doesNotMatch(readme, /(?:^|[^A-Za-z])free(?:[^A-Za-z]|$)/iu);
   assert.match(ignoreRules, /(?:^|\n)scripts\/\*\*(?:\n|$)/u);

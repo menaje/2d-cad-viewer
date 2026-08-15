@@ -8,8 +8,14 @@ Host–Webview message 없이 사용할 수 있는 WebGL presentation과 DWG Sce
 Cache source package의 버전, 공개 mount, exact artifact digest와 publication
 승인을 별도로 기록한다. 제품 bootstrap은 이 공개 계약에 포함되지 않는다.
 `developmentQualification`은 아직 새 package tag로 배포하지 않은 소스의
-추가 public API와 검증을 기록한다. 이 항목은 기존 `distribution`의 immutable
-0.1.1 artifact digest를 바꾸거나 새 버전이 배포됐다는 뜻이 아니다.
+추가 public API와 검증을 기록한다. 현재 Viewer Core 0.1.3 개발 artifact는
+기존 동기 delta API와 호환되는 async prepare/atomic commit/rollback/dispose
+경계와 artifact-only staged 3D fixture를 포함한다. 개발 소스의 재현 가능한
+artifact digest는 이 항목에 별도로 고정하며, 기존 `distribution`의 immutable
+artifact digest를 바꾸거나 새 버전이 배포됐다는 뜻이 아니다. Viewer Core의
+현재 개발 항목은 상호작용 중 detail read 중단·최신 camera 재선택 lifecycle과
+staged Render Delta lifecycle이며, Viewer WebGL의 현재 개발 항목은 revision
+comparison mount다.
 
 - `public-preview`는 package/API가 공개 배포됐지만 아직 `0.x` compatibility
   window에 있다는 뜻이다.
@@ -46,7 +52,9 @@ Scene Cache package version을 검증한다. 따라서 버전 문자열을 relea
 `pnpm run qualify:viewer-boundary`는 세 public tarball을 두 번 pack해 같은
 gzip platform metadata를 정규화한 runner 간 byte 동일성과 platform-neutral
 package content SHA-256을 확인하고, 실제 archive의 raw SHA-256/size가
-producer pin과 일치하는지 검증한다. 빈 임시 consumer에는
+producer pin과 일치하는지 검증한다. `developmentQualification`이 있으면 현재
+소스는 그 미배포 digest를 검증하고, 과거 `distribution`과 고정 evidence는
+변경하지 않는다. 빈 임시 consumer에는
 artifact만 설치해
 RenderSource/Service fixture와 standalone runtime을 실행한다. Browser와
 VS Code가 같은 Webview entrypoint를 bundle하는지도 확인한다. 이 저장소가
@@ -95,3 +103,17 @@ Gate는
 있다. 선택된 물리 전략은 하나의 renderer와 두 bounded raster surface이며,
 두 번째 full WebGL context/cache 전략은 현재 600 MB target 여유가 부족하므로
 별도 Gate 전에는 지원으로 표시하지 않는다.
+
+2D DWG 화면 표시의 구현/보류 매트릭스와 공개 형식·제품 문서 근거는
+[`docs/reference-display-qualification.md`](../docs/reference-display-qualification.md)에
+있다. 현재 자격검사의 필수 완료 조건은 공개·합성 fixture의 변환,
+source/serialized/deferred partition, deterministic display-state matrix와
+명시적 지원 경계이며 특정 상용 제품과의 직접 화면 비교를 요구하지 않는다.
+
+[`evidence/reference-display-qualification-2026-08-12.json`](evidence/reference-display-qualification-2026-08-12.json)은
+이 정책 변경 전 생성된 schema v1의 고정 역사 증거다. 당시 공개 코퍼스와
+공식 샘플 변환, 참조 이미지 메타데이터와 Browser 관찰 결과를 보존하지만,
+이미지 자체는 재배포 권리를 확인하지 않아 저장소에서 제거했다. 새 schema v2
+보고서는 상용 Viewer 관찰을 supplemental evidence로만 기록한다. 현재 변경의
+packaged Windows VS Code 실행은 별도 platform Gate로 남고, 수행 전에는
+`pending-windows-execution`으로 기록한다.

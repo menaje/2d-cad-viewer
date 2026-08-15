@@ -1,6 +1,6 @@
 import {
   TextEntityKind,
-} from "./scene-cache.mjs?v=1.21.0";
+} from "./scene-cache.mjs?v=1.26.0";
 import {
   decodeCadColor,
   decodeCadOpacity,
@@ -30,6 +30,10 @@ import {
   viewportStyleRow,
 } from "./viewport-layer-state.mjs";
 import {
+  instanceIsVisible,
+  visibilityNodeIsVisible,
+} from "./instance-visibility.mjs";
+import {
   cadMTextParagraphStart,
   DEFAULT_MTEXT_PARAGRAPH,
   DEFAULT_MTEXT_FORMAT,
@@ -58,8 +62,12 @@ const MAXIMUM_CODE_POINTS_PER_ENTITY = 4_096;
 const MAXIMUM_MTEXT_COLUMNS = 64;
 const STACK_TEXT_SCALE = 0.7;
 const TEXT_FLAG_ANNOTATIVE = 1 << 2;
+const TEXT_FLAG_HAS_ALIGNMENT_POINT = 1;
 const ATTRIBUTE_FLAG_INVISIBLE = 1 << 0;
 const ATTRIBUTE_FLAG_CONSTANT = 1 << 1;
+const MTEXT_BACKGROUND_FILL_FLAGS = 3;
+const MTEXT_TEXT_FRAME_FLAG = 1 << 4;
+const MLEADER_TEXT_FRAME_FLAG = 1;
 const DEFAULT_DRAWING_BACKGROUND = "rgb(14, 16, 19)";
 const LOCAL_OUTLINE_FONTS = new Map();
 const SHX_GLYPH_BOUNDS = new WeakMap();
@@ -78,6 +86,38 @@ function replacePercentCodes(value) {
     .replace(/%%d/gi, "°")
     .replace(/%%p/gi, "±")
     .replace(/%%c/gi, "⌀");
+}
+
+export function replaceCadFieldCodes(value) {
+  if (typeof value !== "string" || !value.includes("%<")) {
+    return value;
+  }
+  let output = "";
+  let cursor = 0;
+  while (cursor < value.length) {
+    const start = value.indexOf("%<", cursor);
+    if (start < 0) {
+      output += value.slice(cursor);
+      break;
+    }
+    output += value.slice(cursor, start);
+    let depth = 1;
+    let index = start + 2;
+    while (index < value.length && depth > 0) {
+      if (value.startsWith("%<", index)) {
+        depth += 1;
+        index += 2;
+      } else if (value.startsWith(">%", index)) {
+        depth -= 1;
+        index += 2;
+      } else {
+        index += 1;
+      }
+    }
+    output += "####";
+    cursor = depth === 0 ? index : value.length;
+  }
+  return output;
 }
 
 function normalizedFontFile(style) {
@@ -201,14 +241,15 @@ export function plainCadTextLines(value, isMText = false) {
   if (typeof value !== "string" || value.length === 0) {
     return Object.freeze([""]);
   }
+  const displayValue = replaceCadFieldCodes(value);
   if (!isMText) {
     return Object.freeze([
-      [...replacePercentCodes(value)]
+      [...replacePercentCodes(displayValue)]
         .slice(0, MAXIMUM_CODE_POINTS_PER_ENTITY)
         .join(""),
     ]);
   }
-  return plainCadMTextLines(value, {
+  return plainCadMTextLines(displayValue, {
     maximumCodePoints: MAXIMUM_CODE_POINTS_PER_ENTITY,
   });
 }
@@ -563,6 +604,7 @@ export function annotativeTextRecordForInstance(
   instanceGraph,
   instances,
   instanceIndex,
+  annotationAllVisible = true,
 ) {
   const contexts = record.annotationContexts;
   if (
@@ -581,6 +623,9 @@ export function annotativeTextRecordForInstance(
   const targetContext = contexts.find((context) =>
     annotationScalesMatch(context.scale, viewportScale),
   );
+  if (!targetContext && !annotationAllVisible) {
+    return null;
+  }
   const defaultContext = contexts.find((context) => context.isDefault);
   if (!targetContext || !defaultContext || targetContext === defaultContext) {
     return record;
@@ -588,6 +633,21 @@ export function annotativeTextRecordForInstance(
   const heightScale = targetContext.scale / defaultContext.scale;
   if (!Number.isFinite(heightScale) || heightScale <= 0) {
     return record;
+  }
+  if (targetContext.kind === "text") {
+    return Object.freeze({
+      ...record,
+      insertionPoint: targetContext.insertionPoint,
+      alignmentPoint: targetContext.alignmentPoint,
+      rotation: targetContext.rotation,
+      height: baseTextHeight(record) * heightScale,
+      horizontalAlignment: targetContext.horizontalAlignment,
+      flags:
+        targetContext.horizontalAlignment !== 0
+          ? record.flags | TEXT_FLAG_HAS_ALIGNMENT_POINT
+          : record.flags,
+      annotationDisplayScale: targetContext.scale,
+    });
   }
   const columnHeightCount = targetContext.columnHeights.length;
   return Object.freeze({
@@ -620,7 +680,7 @@ export function annotativeTextRecordForInstance(
 function isMTextRecord(record) {
   return (
     record.kind === TextEntityKind.MText ||
-    (Number.isInteger(record.mtextType) && record.mtextType !== 0)
+    (Number.isInteger(record.mtextType) && record.mtextType > 1)
   );
 }
 
@@ -856,16 +916,28 @@ function textRootBlockIndices(instanceGraph) {
   return indices;
 }
 
-function visibleTextRecord(record, ownerBlockIndex, rootBlockIndices) {
+export function textRecordIsVisible(
+  record,
+  ownerBlockIndex,
+  rootBlockIndices,
+  attributeDisplayMode = 1,
+) {
   if ((record.commonFlags & 1) !== 0) {
     return false;
   }
   if (
-    (record.kind === TextEntityKind.AttributeDefinition ||
-      record.kind === TextEntityKind.Attribute) &&
-    (record.sourceFlags & ATTRIBUTE_FLAG_INVISIBLE) !== 0
+    record.kind === TextEntityKind.AttributeDefinition ||
+    record.kind === TextEntityKind.Attribute
   ) {
-    return false;
+    if (attributeDisplayMode === 0) {
+      return false;
+    }
+    if (
+      attributeDisplayMode !== 2 &&
+      (record.sourceFlags & ATTRIBUTE_FLAG_INVISIBLE) !== 0
+    ) {
+      return false;
+    }
   }
   if (
     record.kind === TextEntityKind.AttributeDefinition &&
@@ -1217,6 +1289,11 @@ export class CanvasTextOverlay {
       onInlineFonts = null,
       sourceId = "root",
       sourceLabel = "현재 도면",
+      attributeDisplayMode = 1,
+      quickTextMode = false,
+      annotationAllVisible = true,
+      xclipFrame = 0,
+      xclipFrameStartIndex = 0,
       hitTestingEnabled = false,
     },
   ) {
@@ -1274,6 +1351,30 @@ export class CanvasTextOverlay {
       typeof onInlineFonts === "function" ? onInlineFonts : null;
     this.sourceId = String(sourceId || "root");
     this.sourceLabel = String(sourceLabel || "현재 도면");
+    if (
+      !Number.isInteger(attributeDisplayMode) ||
+      attributeDisplayMode < 0 ||
+      attributeDisplayMode > 2
+    ) {
+      throw new RangeError("ATTMODE must be 0, 1, or 2");
+    }
+    this.attributeDisplayMode = attributeDisplayMode;
+    if (typeof quickTextMode !== "boolean") {
+      throw new TypeError("QTEXTMODE must be a boolean");
+    }
+    this.quickTextMode = quickTextMode;
+    if (typeof annotationAllVisible !== "boolean") {
+      throw new TypeError("ANNOALLVISIBLE must be a boolean");
+    }
+    this.annotationAllVisible = annotationAllVisible;
+    if (!Number.isInteger(xclipFrame) || xclipFrame < 0 || xclipFrame > 2) {
+      throw new RangeError("XCLIPFRAME must be 0, 1, or 2");
+    }
+    if (!Number.isSafeInteger(xclipFrameStartIndex) || xclipFrameStartIndex < 0) {
+      throw new RangeError("XCLIP frame start index must be nonnegative");
+    }
+    this.xclipFrame = xclipFrame;
+    this.xclipFrameStartIndex = xclipFrameStartIndex;
     this.renderDeltaTransformIndex =
       indexDwgRenderDeltaTransforms([], {
         sourceId: this.sourceId,
@@ -1330,12 +1431,15 @@ export class CanvasTextOverlay {
       fallbackGlyphs: 0,
       segments: 0,
       backgroundFills: 0,
+      textFrames: 0,
+      quickTextBoxes: 0,
       maskOccurrences: 0,
       clippedTextOccurrences: 0,
       maskClipOperations: 0,
       maskClipDisabled: false,
       xclipOccurrences: 0,
       xclipOperations: 0,
+      xclipFrames: 0,
       truncated: false,
     });
   }
@@ -1567,7 +1671,14 @@ export class CanvasTextOverlay {
       const ownerBlockIndex = this.blockIndexByHandle.get(
         record.ownerHandle,
       );
-      if (!visibleTextRecord(record, ownerBlockIndex, this.rootBlockIndices)) {
+      if (
+        !textRecordIsVisible(
+          record,
+          ownerBlockIndex,
+          this.rootBlockIndices,
+          this.attributeDisplayMode,
+        )
+      ) {
         return null;
       }
       const instances = instancesForText(
@@ -1583,6 +1694,9 @@ export class CanvasTextOverlay {
         instanceIndex < instances.count;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         if (
           renderDeltaInstanceStyle(
             this.renderDeltaStyleIndex,
@@ -1614,7 +1728,11 @@ export class CanvasTextOverlay {
           this.instanceGraph,
           instances,
           instanceIndex,
+          this.annotationAllVisible,
         );
+        if (!displayRecord) {
+          continue;
+        }
         const displayLocalMatrix = cadTextEntityMatrix(
           displayRecord,
           displayRecord.style,
@@ -1787,12 +1905,15 @@ export class CanvasTextOverlay {
       fallbackGlyphs: 0,
       segments: 0,
       backgroundFills: 0,
+      textFrames: 0,
+      quickTextBoxes: 0,
       maskOccurrences: 0,
       clippedTextOccurrences: 0,
       maskClipOperations: 0,
       maskClipDisabled: false,
       xclipOccurrences: 0,
       xclipOperations: 0,
+      xclipFrames: 0,
       truncated: false,
     };
     this.hitOccurrences = [];
@@ -1831,10 +1952,11 @@ export class CanvasTextOverlay {
         sourceRecord.ownerHandle,
       );
       if (
-        !visibleTextRecord(
+        !textRecordIsVisible(
           sourceRecord,
           ownerBlockIndex,
           this.rootBlockIndices,
+          this.attributeDisplayMode,
         )
       ) {
         continue;
@@ -1926,7 +2048,14 @@ export class CanvasTextOverlay {
         continue;
       }
       const ownerBlockIndex = this.blockIndexByHandle.get(record.ownerHandle);
-      if (!visibleTextRecord(record, ownerBlockIndex, this.rootBlockIndices)) {
+      if (
+        !textRecordIsVisible(
+          record,
+          ownerBlockIndex,
+          this.rootBlockIndices,
+          this.attributeDisplayMode,
+        )
+      ) {
         continue;
       }
       const instances = instancesForText(
@@ -1944,6 +2073,9 @@ export class CanvasTextOverlay {
         instanceIndex < endInstanceIndex;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         const style = renderDeltaInstanceStyle(
           this.renderDeltaStyleIndex,
           instances,
@@ -2011,7 +2143,11 @@ export class CanvasTextOverlay {
           this.instanceGraph,
           instances,
           instanceIndex,
+          this.annotationAllVisible,
         );
+        if (!displayRecord) {
+          continue;
+        }
         const displayLocalMatrix = cadTextEntityMatrix(
           displayRecord,
           displayRecord.style,
@@ -2057,8 +2193,9 @@ export class CanvasTextOverlay {
             ? this.textEntities.readValue(textIndex)
             : record.value;
         const isMText = isMTextRecord(displayRecord);
+        const displayValue = replaceCadFieldCodes(value);
         const richLines = isMText
-          ? parseCadMTextRuns(value, {
+          ? parseCadMTextRuns(displayValue, {
               baseHeight: baseTextHeight(displayRecord),
               maximumCodePoints: MAXIMUM_CODE_POINTS_PER_ENTITY,
             })
@@ -2282,6 +2419,13 @@ export class CanvasTextOverlay {
     if (sourceCount < this.textEntities.length) {
       metrics.truncated = true;
     }
+    this.#drawXClipFrames(
+      camera,
+      width,
+      height,
+      layerVisibility,
+      metrics,
+    );
     context.setTransform(1, 0, 0, 1, 0, 0);
     this.lastMetrics = Object.freeze(metrics);
     return this.lastMetrics;
@@ -2345,6 +2489,9 @@ export class CanvasTextOverlay {
         instanceIndex < instances.count;
         instanceIndex += 1
       ) {
+        if (!instanceIsVisible(instances, instanceIndex)) {
+          continue;
+        }
         const style = renderDeltaInstanceStyle(
           this.renderDeltaStyleIndex,
           instances,
@@ -2475,6 +2622,68 @@ export class CanvasTextOverlay {
     return true;
   }
 
+  #drawXClipFrames(camera, width, height, layerVisibility, metrics) {
+    if (this.xclipFrame === 0) {
+      return;
+    }
+    const nodes = this.instanceGraph.clipNodes ?? [];
+    for (
+      let index = this.xclipFrameStartIndex;
+      index < nodes.length;
+      index += 1
+    ) {
+      const node = nodes[index];
+      if (
+        !node?.frame ||
+        !visibilityNodeIsVisible(
+          this.instanceGraph,
+          node.visibilityNodeId,
+        ) ||
+        (node.layerIndex !== 0xffffffff &&
+          layerVisibility[node.layerIndex] === false)
+      ) {
+        continue;
+      }
+      const points = node.points.map((point) =>
+        worldPointToScreen(point, camera, width, height),
+      );
+      if (points.length < 3 || !points.flat().every(Number.isFinite)) {
+        continue;
+      }
+      const minX = Math.min(...points.map(([x]) => x));
+      const maxX = Math.max(...points.map(([x]) => x));
+      const minY = Math.min(...points.map(([, y]) => y));
+      const maxY = Math.max(...points.map(([, y]) => y));
+      if (maxX < 0 || minX > width || maxY < 0 || minY > height) {
+        continue;
+      }
+      const clipped = this.#beginXClip(
+        node.parentId,
+        camera,
+        width,
+        height,
+        metrics,
+      );
+      const color = decodeCadColor(node.color, { palette: this.palette });
+      this.context.setTransform(1, 0, 0, 1, 0, 0);
+      this.context.globalAlpha = 1;
+      this.context.strokeStyle = `rgb(${color[0]} ${color[1]} ${color[2]})`;
+      this.context.lineWidth = Math.max(globalThis.devicePixelRatio ?? 1, 1);
+      this.context.setLineDash([]);
+      this.context.beginPath();
+      this.context.moveTo(points[0][0], points[0][1]);
+      for (let pointIndex = 1; pointIndex < points.length; pointIndex += 1) {
+        this.context.lineTo(points[pointIndex][0], points[pointIndex][1]);
+      }
+      this.context.closePath();
+      this.context.stroke();
+      metrics.xclipFrames += 1;
+      if (clipped) {
+        this.context.restore();
+      }
+    }
+  }
+
   #currentDrawingBackground() {
     try {
       const target = this.canvas.parentElement ?? this.canvas;
@@ -2513,8 +2722,13 @@ export class CanvasTextOverlay {
     const flags = Number.isInteger(record.backgroundFlags)
       ? record.backgroundFlags
       : 0;
+    const hasBackgroundFill = (flags & MTEXT_BACKGROUND_FILL_FLAGS) !== 0;
+    const hasTextFrame =
+      (flags & MTEXT_TEXT_FRAME_FLAG) !== 0 ||
+      (isMTextRecord(record) &&
+        (record.sourceFlags & MLEADER_TEXT_FRAME_FLAG) !== 0);
     if (
-      (flags & 3) === 0 ||
+      (!hasBackgroundFill && !hasTextFrame) ||
       ![left, right, top, bottom].every(Number.isFinite) ||
       right <= left ||
       top <= bottom
@@ -2582,16 +2796,33 @@ export class CanvasTextOverlay {
     const context = this.context;
     context.save();
     context.globalAlpha = Math.max(0, Math.min(1, opacity));
-    context.fillStyle = color;
     context.beginPath();
     context.moveTo(points[0][0], points[0][1]);
     for (let index = 1; index < points.length; index += 1) {
       context.lineTo(points[index][0], points[index][1]);
     }
     context.closePath();
-    context.fill();
+    if (hasBackgroundFill) {
+      context.fillStyle = color;
+      context.fill();
+      metrics.backgroundFills += 1;
+    }
+    if (hasTextFrame) {
+      const [red, green, blue] =
+        diffColor ??
+        decodeColor(
+          record.color,
+          layerColor,
+          byBlockColor,
+          this.palette,
+        );
+      context.strokeStyle = `rgb(${red} ${green} ${blue})`;
+      context.lineWidth = Math.max(globalThis.devicePixelRatio ?? 1, 1);
+      context.setLineDash([]);
+      context.stroke();
+      metrics.textFrames += 1;
+    }
     context.restore();
-    metrics.backgroundFills += 1;
   }
 
   #drawOccurrence(
@@ -2999,7 +3230,7 @@ export class CanvasTextOverlay {
         : horizontalGroup === 2
           ? -blockWidth
           : 0;
-    if (isMText) {
+    if (isMText && !this.quickTextMode) {
       this.#drawMTextBackground(
         record,
         matrix,
@@ -3262,6 +3493,9 @@ export class CanvasTextOverlay {
               }
             : currentBounds;
         }
+        if (this.quickTextMode) {
+          continue;
+        }
         context.beginPath();
         let hasVectorPath = false;
         let activeVectorColor = "";
@@ -3448,6 +3682,7 @@ export class CanvasTextOverlay {
         }
       }
     }
+    let selectionBounds;
     if (textBounds) {
       const centerX = (textBounds.left + textBounds.right) * 0.5;
       const centerY = (textBounds.top + textBounds.bottom) * 0.5;
@@ -3459,25 +3694,90 @@ export class CanvasTextOverlay {
         textBounds.top - textBounds.bottom,
         1,
       );
-      return Object.freeze({
+      selectionBounds = Object.freeze({
         left: centerX - selectionWidth * 0.5,
         right: centerX + selectionWidth * 0.5,
         top: centerY + selectionHeight * 0.5,
         bottom: centerY - selectionHeight * 0.5,
       });
+    } else {
+      const selectionWidth = Math.max(
+        blockWidth,
+        textAlignmentWidth,
+        0.35,
+      );
+      const selectionHeight = Math.max(blockHeight, 1);
+      selectionBounds = Object.freeze({
+        left: blockLeft,
+        right: blockLeft + selectionWidth,
+        top: verticalOffset + 1.15,
+        bottom: verticalOffset + 1 - selectionHeight,
+      });
     }
-    const selectionWidth = Math.max(
-      blockWidth,
-      textAlignmentWidth,
-      0.35,
-    );
-    const selectionHeight = Math.max(blockHeight, 1);
-    return Object.freeze({
-      left: blockLeft,
-      right: blockLeft + selectionWidth,
-      top: verticalOffset + 1.15,
-      bottom: verticalOffset + 1 - selectionHeight,
-    });
+    if (this.quickTextMode) {
+      if (metrics.segments + 4 > this.maximumSegments) {
+        metrics.truncated = true;
+      } else {
+        const points = [
+          pointToScreen(
+            matrix,
+            selectionBounds.left,
+            selectionBounds.top,
+            camera,
+            width,
+            height,
+          ),
+          pointToScreen(
+            matrix,
+            selectionBounds.right,
+            selectionBounds.top,
+            camera,
+            width,
+            height,
+          ),
+          pointToScreen(
+            matrix,
+            selectionBounds.right,
+            selectionBounds.bottom,
+            camera,
+            width,
+            height,
+          ),
+          pointToScreen(
+            matrix,
+            selectionBounds.left,
+            selectionBounds.bottom,
+            camera,
+            width,
+            height,
+          ),
+        ];
+        if (points.flat().every(Number.isFinite)) {
+          const [red, green, blue] =
+            diffColor ??
+            decodeColor(
+              record.color,
+              layerColor,
+              byBlockColor,
+              this.palette,
+            );
+          context.strokeStyle =
+            `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+          context.lineWidth = Math.max(globalThis.devicePixelRatio ?? 1, 1);
+          context.setLineDash([]);
+          context.beginPath();
+          context.moveTo(points[0][0], points[0][1]);
+          for (let index = 1; index < points.length; index += 1) {
+            context.lineTo(points[index][0], points[index][1]);
+          }
+          context.closePath();
+          context.stroke();
+          metrics.segments += 4;
+          metrics.quickTextBoxes += 1;
+        }
+      }
+    }
+    return selectionBounds;
   }
 
   dispose() {
@@ -3789,6 +4089,8 @@ export class CompositeTextOverlay {
       fallbackGlyphs: 0,
       segments: 0,
       backgroundFills: 0,
+      textFrames: 0,
+      quickTextBoxes: 0,
       maskOccurrences: 0,
       clippedTextOccurrences: 0,
       maskClipOperations: 0,
@@ -3829,6 +4131,8 @@ export class CompositeTextOverlay {
         "fallbackGlyphs",
         "segments",
         "backgroundFills",
+        "textFrames",
+        "quickTextBoxes",
         "maskOccurrences",
         "clippedTextOccurrences",
         "maskClipOperations",

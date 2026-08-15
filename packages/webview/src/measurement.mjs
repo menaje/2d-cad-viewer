@@ -1,6 +1,7 @@
 import { transformedBounds2D, transformPoint } from "./math.mjs";
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.21.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.26.0";
 import { CAD_LINE_WEIGHTS } from "./cad-line-style.mjs";
+import { instanceIsVisible } from "./instance-visibility.mjs";
 
 const MATRIX_VALUES = 16;
 const DEFAULT_TOLERANCE_PIXELS = 18;
@@ -944,6 +945,9 @@ function layerIsVisible(
   instanceGraph,
   layerVisibility,
 ) {
+  if (!instanceIsVisible(instances, instanceIndex)) {
+    return false;
+  }
   if (layerIndex < layerVisibility.length && !layerVisibility[layerIndex]) {
     return false;
   }

@@ -47,6 +47,20 @@ Conversion invocation:
 adapter convert INPUT TEMPORARY_CACHE
 ```
 
+On Windows, the VS Code host may pass `INPUT` as `-` while inheriting a
+read-only, seekable regular-file handle as standard input. It also sets:
+
+```text
+DWG_VIEWER_INPUT_TRANSPORT=inherited-file-handle
+DWG_VIEWER_STDIN_SOURCE_SIZE=DECIMAL_BYTES
+DWG_VIEWER_STDIN_SOURCE_VERSION=ACdddd
+```
+
+This transport must not be implemented as a JavaScript pipe or a staged source
+copy. The converter uses sized bulk input for a seekable regular handle and
+retains stream input as the fallback for a real pipe. The host verifies the
+source identity again when conversion exits.
+
 The adapter must:
 
 - write exactly one UTF-8 JSON report to standard output;
@@ -78,8 +92,11 @@ both sidecars and does not fail the requested full conversion.
 
 The ordinary process contract is unchanged. The adapter still writes exactly
 one JSON report, and exit success still means the full cache—not the preview—
-was written successfully. Hosts must treat the sidecar as ephemeral display
-data and delete it after replacement, cancellation or failure.
+was written successfully. The requested path and ready marker are private
+staging artifacts. A host may validate the closed preview and atomically commit
+it under a separate, source- and engine-bound overview identity for later
+display reuse. It must delete the staging marker and any uncommitted temporary
+preview, and must never accept a preview as the canonical full cache.
 
 ## Inspection report
 
@@ -116,7 +133,9 @@ LibreDWG and ACadSharp adapters expose those raw values separately as
 - `coverage`;
 - `gpu_lines`;
 - `performance.parse_ms`, `performance.total_ms` and optional
-  `performance.write_ms` and `performance.peak_rss_bytes`;
+  `performance.write_ms`, `performance.peak_rss_bytes`,
+  `performance.peak_private_bytes`, current and peak parse-boundary memory, and
+  process I/O counters;
 - `diagnostics`.
 
 The generated cache must follow the current Scene Cache specification. Report
@@ -128,6 +147,20 @@ conversion path is being qualified. It must still emit a valid cache, count
 every omitted logical entity in `coverage.deferred_entities`, and must not be
 selected as the primary engine until the required geometry and text coverage
 gates pass.
+
+The LibreDWG adapter additionally emits `coverage.deferred_reasons`. Its six
+non-negative counters (`unresolved_dimensions`, `unsupported_underlays`,
+`unsupported_proxy_graphics`, `unsupported_3d_entities`,
+`invalid_supported_entities`, and `unsupported_other_entities`) form an exact
+partition of `coverage.deferred_entities`. This prevents a newly encountered
+object family from being hidden behind an aggregate coverage percentage.
+
+`proxy_graphics_policy` records the deterministic proxy display contract. The
+current writer uses AutoCAD's default `PROXYSHOW=1` behavior, lists every
+accepted graphics opcode, and reports unsupported or malformed proxy displays
+as deferred instead of inventing a `PROXYSHOW=2` bounding box. `PROXYSHOW` is a
+registry preference rather than a drawing property, so it is not inferred
+from DWG bytes.
 
 ## Measurement and decisions
 
@@ -141,6 +174,25 @@ The report records:
 - minimum, integer median and maximum;
 - peak RSS when every measured process reports it;
 - whether all measured compatibility fingerprints are identical.
+
+`scripts/benchmark-windows-native.mjs` applies that repeated conversion rule
+to physical Windows. It uses the inherited-handle product transport, requires
+current and peak working-set/private-byte metrics at the parse boundary and at
+completion, verifies byte-identical caches and normalized reports, deletes each
+cache, and writes a path-free local/mapped-drive/UNC report. The report labels
+one-or-more warmups as `warm-after-process-warmup`; zero warmups are
+`uncontrolled` and must not be described as cold. Optional
+`--max-median-wall-ms` and `--max-peak-private-bytes` limits evaluate the wall
+median and the maximum measured private-byte peak, respectively. A violation
+is written to the report with `status: "fail"` and a stable `violations` code
+before the runner exits nonzero. ETW/WPA capture remains a separate manual
+diagnostic when file-cache or allocation-stack attribution is required.
+
+Windows CI runs that gate against LibreDWG's public `2018/Dynblocks.dwg`
+fixture with a 2,000 ms median wall limit and a 200,000,000-byte maximum peak
+private-byte limit. These deliberately broad thresholds catch gross transport,
+writer, and memory regressions; they do not replace manual qualification of a
+large drawing on physical local, mapped-SMB, and direct-UNC paths.
 
 Full conversion gates use process wall time and peak RSS:
 

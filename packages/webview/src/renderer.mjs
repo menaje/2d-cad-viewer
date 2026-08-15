@@ -12,6 +12,10 @@ import {
 } from "./cad-color.mjs";
 import { makeLinetypeTextureData } from "./cad-linetype.mjs";
 import {
+  packATypeLineExtentsForUpload,
+  preserveATypeLineExtents,
+} from "./a-type-linetype.mjs";
+import {
   batchRelativeInstanceMatrix,
   boundsAreFinite,
   emptyBounds3,
@@ -28,6 +32,10 @@ import {
   maskBucketFor,
 } from "./mask-order.mjs";
 import { effectiveClipBounds } from "./instance-graph.mjs";
+import {
+  instanceIsVisible,
+  refreshInstanceVisibility,
+} from "./instance-visibility.mjs";
 import {
   RENDER_IDENTITY_RANGE_WORDS,
   validateRenderIdentityRanges,
@@ -74,6 +82,8 @@ const INSTANCE_STRIDE = INSTANCE_VALUES * 4;
 const CLIP_ID_BITS = 16;
 const MAX_PACKED_CLIP_ID = (1 << CLIP_ID_BITS) - 1;
 const MAX_VISIBILITY_ROWS = 256;
+const LAYER_OFF_OR_FROZEN = 0b11;
+const LAYER_PLOTTABLE = 1 << 3;
 const CLIP_TEXTURE_WIDTH = 1024;
 const MAX_INSTANCES_PER_DRAW = 16_384;
 const MAX_PRIMITIVE_GPU_BYTES = 40 * 1024 * 1024;
@@ -124,6 +134,7 @@ const RENDER_DELTA_PICK_ASPECTS = new Set([
   "dependency",
 ]);
 const INTERACTIVE_MINIMUM_PIXEL_SPAN = 0.75;
+const MAX_DISPLAYED_LINE_WEIGHT_PIXELS = 8.5;
 const EMPTY_INSTANCE_INDICES = new Uint32Array(0);
 const MODEL_INSTANCES = Object.freeze({
   data: identityMat4(),
@@ -163,6 +174,25 @@ const EMPTY_PACKED_SCENE = Object.freeze({
     count: 0,
   }),
 });
+
+const LINE_WEIGHT_PASSES = Object.freeze((() => {
+  const passes = [[0, 0, 0]];
+  for (
+    let radius = 0.75;
+    radius * 2 <= MAX_DISPLAYED_LINE_WEIGHT_PIXELS;
+    radius += 0.75
+  ) {
+    for (let step = 0; step < 8; step += 1) {
+      const angle = (step * Math.PI) / 4;
+      passes.push([
+        radius * Math.cos(angle),
+        radius * Math.sin(angle),
+        radius * 2,
+      ]);
+    }
+  }
+  return passes.map((pass) => Object.freeze(pass));
+})());
 
 const CLIP_FRAGMENT_SOURCE = `
 uniform sampler2D u_clipData;
@@ -258,6 +288,7 @@ layout(location = 15) in uint a_instanceLinetype;
 uniform mat4 u_projection;
 uniform vec2 u_lineOffset;
 uniform float u_maskBucketScale;
+uniform bool u_aTypeLineExtentsPacked;
 
 flat out uint v_encodedColor;
 flat out uint v_layerIndex;
@@ -270,8 +301,17 @@ flat out float v_instanceLineWeight;
 flat out uint v_instanceLinetype;
 flat out int v_visibilityRow;
 flat out uint v_curveReplacement;
+flat out float v_aTypeLineExtent;
 out float v_patternDistance;
 out vec2 v_viewPosition;
+
+float decodeATypeLineExtent(uint code) {
+  if (code == 0u) return 0.0;
+  if (code == 65535u) return 3.402823466e+38;
+  return exp2(
+    -64.0 + float(code - 1u) * (128.0 / 65533.0)
+  );
+}
 
 void main() {
   vec4 viewPosition = a_instanceMatrix * vec4(a_localPosition, 1.0);
@@ -282,7 +322,13 @@ void main() {
   gl_Position.z = (orderDepth * 2.0 - 1.0) * gl_Position.w;
   gl_Position.xy += u_lineOffset * gl_Position.w;
   v_encodedColor = a_encodedColor;
-  v_layerIndex = a_layerIndex;
+  uint extentCode =
+    u_aTypeLineExtentsPacked ? a_layerIndex >> 16u : 0u;
+  v_layerIndex =
+    u_aTypeLineExtentsPacked
+      ? a_layerIndex & 0xffffu
+      : a_layerIndex;
+  v_aTypeLineExtent = decodeATypeLineExtent(extentCode);
   v_style = a_style;
   int packedClipVisibility = int(a_clipId + 0.5);
   v_clipId = packedClipVisibility & ${MAX_PACKED_CLIP_ID};
@@ -318,6 +364,7 @@ flat in float v_instanceLineWeight;
 flat in uint v_instanceLinetype;
 flat in int v_visibilityRow;
 flat in uint v_curveReplacement;
+flat in float v_aTypeLineExtent;
 in float v_patternDistance;
 in vec2 v_viewPosition;
 
@@ -336,6 +383,7 @@ uniform int u_layerZeroIndex;
 uniform bool u_plotStylesEnabled;
 uniform bool u_curveReplacementEnabled;
 uniform float u_lineWeightThreshold;
+uniform float u_lineWeightWorldScale;
 uniform float u_globalLinetypeScale;
 uniform float u_viewportLinetypeScale;
 uniform float u_worldPerPixel;
@@ -453,6 +501,10 @@ bool linetypeVisible() {
   int firstDash = int(header.y + 0.5);
   int dashCount = int(header.z + 0.5);
   if (patternLength <= 1.0e-9 || dashCount <= 0) return true;
+  bool aTypeAligned =
+    (int(header.w + 0.5) & 2) != 0 &&
+    v_aTypeLineExtent > 0.0;
+  if (aTypeAligned && v_aTypeLineExtent < patternLength) return true;
   float phase = mod(max(v_patternDistance, 0.0), patternLength);
   float cursor = 0.0;
   for (int index = 0; index < 64; index++) {
@@ -476,11 +528,15 @@ bool linetypeVisible() {
 }
 
 float displayedLineWidth() {
-  return clamp(
-    max(1.0, float(resolvedLineWeight()) / 25.0),
-    1.0,
-    4.0
-  );
+  int lineWeight = resolvedLineWeight();
+  float width =
+    lineWeight <= 0
+      ? 1.0
+      : u_lineWeightWorldScale > 0.0
+        ? float(lineWeight) * u_lineWeightWorldScale /
+          max(u_worldPerPixel, 1.0e-12)
+        : float(lineWeight) / 25.0;
+  return clamp(max(1.0, width), 1.0, ${MAX_DISPLAYED_LINE_WEIGHT_PIXELS});
 }
 
 vec4 resolveColor() {
@@ -560,6 +616,7 @@ layout(location = 11) in float a_clipId;
 layout(location = 12) in uint a_instanceColor;
 layout(location = 13) in uint a_instanceLayerIndex;
 layout(location = 14) in float a_instanceOpacity;
+layout(location = 15) in uint a_instanceLinetype;
 
 uniform mat4 u_projection;
 uniform float u_maskBucketScale;
@@ -574,6 +631,7 @@ flat out int v_clipId;
 flat out uint v_instanceColor;
 flat out uint v_instanceLayerIndex;
 flat out float v_instanceOpacity;
+flat out uint v_instanceLinetype;
 flat out int v_visibilityRow;
 out vec2 v_viewPosition;
 
@@ -596,6 +654,7 @@ void main() {
   v_instanceColor = a_instanceColor;
   v_instanceLayerIndex = a_instanceLayerIndex;
   v_instanceOpacity = a_instanceOpacity;
+  v_instanceLinetype = a_instanceLinetype;
   v_viewPosition = viewPosition.xy;
 }
 `;
@@ -615,14 +674,21 @@ flat in int v_clipId;
 flat in uint v_instanceColor;
 flat in uint v_instanceLayerIndex;
 flat in float v_instanceOpacity;
+flat in uint v_instanceLinetype;
 flat in int v_visibilityRow;
 in vec2 v_viewPosition;
 
 uniform sampler2D u_layerColors;
 uniform sampler2D u_aciColors;
 uniform usampler2D u_viewportLayerVisibility;
+uniform usampler2D u_layerLinetypes;
+uniform sampler2D u_linetypeHeaders;
+uniform sampler2D u_linetypeDashes;
 uniform int u_layerCount;
+uniform int u_linetypeCount;
 uniform int u_layerZeroIndex;
+uniform float u_globalLinetypeScale;
+uniform float u_viewportLinetypeScale;
 uniform bool u_diffColorEnabled;
 uniform vec3 u_diffColor;
 uniform float u_diffOpacity;
@@ -659,6 +725,53 @@ bool layerVisibleInViewport(uint layerIndex) {
     ).r != 0u;
 }
 ${CAD_OPACITY_FRAGMENT_SOURCE}
+
+uint resolvedLinetypeCode() {
+  uint code = (v_style >> 5u) & 2047u;
+  if (code == 0u) {
+    uint layerIndex = resolvedLayerIndex();
+    return layerIndex < uint(u_layerCount)
+      ? texelFetch(
+          u_layerLinetypes,
+          ivec2(int(layerIndex), v_visibilityRow),
+          0
+        ).r
+      : 2u;
+  }
+  if (code == 1u) return max(v_instanceLinetype, 2u);
+  return code;
+}
+
+bool widePolylineLinetypeVisible() {
+  if ((v_style & 16u) == 0u) return true;
+  uint code = resolvedLinetypeCode();
+  if (code <= 2u || code >= uint(u_linetypeCount)) return true;
+  vec4 header =
+    texelFetch(u_linetypeHeaders, ivec2(int(code), 0), 0);
+  float scale = max(
+    u_globalLinetypeScale * u_viewportLinetypeScale,
+    1.0e-9
+  );
+  float patternLength = header.x * scale;
+  int firstDash = int(header.y + 0.5);
+  int dashCount = int(header.z + 0.5);
+  if (patternLength <= 1.0e-9 || dashCount <= 0) return true;
+  float phase = mod(max(v_mix, 0.0), patternLength);
+  float cursor = 0.0;
+  for (int index = 0; index < 64; index++) {
+    if (index >= dashCount) break;
+    float dash = texelFetch(
+      u_linetypeDashes,
+      ivec2(firstDash + index, 0),
+      0
+    ).r;
+    if (abs(dash) <= 1.0e-12) continue;
+    float next = cursor + abs(dash) * scale;
+    if (phase >= cursor && phase < next) return dash > 0.0;
+    cursor = next;
+  }
+  return true;
+}
 
 vec4 resolveColor(uint encodedColor) {
   uint kind = encodedColor >> 30u;
@@ -775,6 +888,7 @@ void main() {
   if (outsideInsertClips(v_clipId, v_viewPosition)) discard;
   if ((v_style & (1u << 16u)) != 0u) discard;
   if (!layerVisibleInViewport(resolvedLayerIndex())) discard;
+  if (!widePolylineLinetypeVisible()) discard;
   if (
     resolvedLayerIndex() < uint(u_layerCount) &&
     texelFetch(
@@ -1158,6 +1272,29 @@ function makeCameraFromView(origin, worldHeight, width, height) {
   });
 }
 
+function boundsForNormalizedView(view, width, height) {
+  const camera = makeCameraFromView(
+    view.origin,
+    view.worldHeight,
+    width,
+    height,
+  );
+  const halfWidth = camera.worldWidth * 0.5;
+  const halfHeight = camera.worldHeight * 0.5;
+  return {
+    min: [
+      camera.origin[0] - halfWidth,
+      camera.origin[1] - halfHeight,
+      camera.origin[2],
+    ],
+    max: [
+      camera.origin[0] + halfWidth,
+      camera.origin[1] + halfHeight,
+      camera.origin[2],
+    ],
+  };
+}
+
 function makeCamera(bounds, width, height, padding = 1.08) {
   const origin = [
     bounds.min[0] * 0.5 + bounds.max[0] * 0.5,
@@ -1220,10 +1357,17 @@ export function validatedPreferredView(view, bounds, width, height) {
   const drawableWidth = Math.max(bounds.max[0] - bounds.min[0], 0);
   const drawableHeight = Math.max(bounds.max[1] - bounds.min[1], 0);
   const drawableScale = Math.max(drawableWidth, drawableHeight, 1e-6);
-  const drawableArea = Math.max(
-    drawableWidth * drawableHeight,
-    drawableScale * drawableScale * 1e-6,
-  );
+  /*
+   * XLINE, RAY and ordinary line-only drawings have zero area. Give a
+   * degenerate axis a conservative visual footprint so a valid saved zoom is
+   * not rejected merely because the geometry is one-dimensional. The same
+   * footprint remains small enough for the unit-mismatch guard below to
+   * reject genuinely enormous paper-space views.
+   */
+  const minimumDrawableSpan = drawableScale * 0.25;
+  const drawableArea =
+    Math.max(drawableWidth, minimumDrawableSpan) *
+    Math.max(drawableHeight, minimumDrawableSpan);
   const viewArea = camera.worldWidth * camera.worldHeight;
   /*
    * Some producers store paper-space viewport width in paper units while
@@ -1247,7 +1391,21 @@ export function validatedPreferredView(view, bounds, width, height) {
     Math.min(camera.origin[1] + halfHeight, bounds.max[1]) -
       Math.max(camera.origin[1] - halfHeight, bounds.min[1]),
   );
-  if (overlapWidth === 0 || overlapHeight === 0) {
+  const cameraMinimum = [
+    camera.origin[0] - halfWidth,
+    camera.origin[1] - halfHeight,
+  ];
+  const cameraMaximum = [
+    camera.origin[0] + halfWidth,
+    camera.origin[1] + halfHeight,
+  ];
+  if (
+    [0, 1].some(
+      (axis) =>
+        bounds.max[axis] < cameraMinimum[axis] ||
+        bounds.min[axis] > cameraMaximum[axis],
+    )
+  ) {
     return null;
   }
   /*
@@ -1256,8 +1414,11 @@ export function validatedPreferredView(view, bounds, width, height) {
    * strictly more useful at that scale.  Keep true zoomed-in saved views and
    * tolerate small outlying geometry by requiring only 90% bounds coverage.
    */
+  const coverageForAxis = (span, overlap) =>
+    span <= drawableScale * 1e-9 ? 1 : overlap / span;
   const drawableCoverage =
-    (overlapWidth * overlapHeight) / drawableArea;
+    coverageForAxis(drawableWidth, overlapWidth) *
+    coverageForAxis(drawableHeight, overlapHeight);
   if (viewArea > drawableArea && drawableCoverage < 0.9) {
     return null;
   }
@@ -1316,6 +1477,9 @@ function selectInteractiveInstanceIndices(
   const pixelsPerWorldX = camera.width / camera.worldWidth;
   const pixelsPerWorldY = camera.height / camera.worldHeight;
   for (let index = 0; index < instances.count; index += 1) {
+    if (!instanceIsVisible(instances, index)) {
+      continue;
+    }
     if (
       renderDeltaInstanceStyle(styleIndex, instances, index)
         ?.visible === false
@@ -1405,6 +1569,36 @@ function visibleRenderDeltaInstanceIndices(
         instanceIndex,
       )?.visible !== false
     ) {
+      visible.push(instanceIndex);
+    }
+  }
+  if (visible.length === total) {
+    return instanceIndices;
+  }
+  return visible.length > 0
+    ? Uint32Array.from(visible)
+    : EMPTY_INSTANCE_INDICES;
+}
+
+function visibleSourceInstanceIndices(instanceIndices, instances) {
+  if (!(instances?.visibilityNodeIds instanceof Uint32Array)) {
+    return instanceIndices;
+  }
+  const selection = instances.visibilitySelection;
+  if (selection) {
+    const cached = selection.instanceIndices;
+    if (instanceIndices === null || instanceIndices === undefined) {
+      return cached ?? instanceIndices;
+    }
+    if (cached === null) {
+      return instanceIndices;
+    }
+  }
+  const total = instanceIndices?.length ?? instances.count;
+  const visible = [];
+  for (let index = 0; index < total; index += 1) {
+    const instanceIndex = instanceIndices?.[index] ?? index;
+    if (instanceIsVisible(instances, instanceIndex)) {
       visible.push(instanceIndex);
     }
   }
@@ -1861,6 +2055,7 @@ function patchLineMaskBuckets(
   ) {
     throw new TypeError("line draw-order payload is inconsistent");
   }
+  preserveATypeLineExtents(buffer, { recordSize });
   const view = new DataView(buffer);
   const vertexCount = buffer.byteLength / recordSize;
   for (const batch of batches) {
@@ -1898,6 +2093,9 @@ function patchStyleMaskBucket(buffer, recordSize, bucket) {
     buffer.byteLength % recordSize !== 0
   ) {
     throw new TypeError("draw-order style payload is inconsistent");
+  }
+  if (recordSize >= VERTEX_STRIDE) {
+    preserveATypeLineExtents(buffer, { recordSize });
   }
   const view = new DataView(buffer);
   for (let offset = 0; offset < buffer.byteLength; offset += recordSize) {
@@ -2128,6 +2326,9 @@ function calculateOverviewBounds(batches, instanceGraph) {
     }
     const instances = instancesForBatch(batch, instanceGraph);
     for (let index = 0; index < instances.count; index += 1) {
+      if (!instanceIsVisible(instances, index)) {
+        continue;
+      }
       includeClippedTransformedBounds(
         bounds,
         batch.bounds,
@@ -2161,6 +2362,9 @@ function calculatePackedSceneBounds(batches, instanceGraph) {
   for (const batch of batches) {
     const instances = instancesForBatch(batch, instanceGraph);
     for (let index = 0; index < instances.count; index += 1) {
+      if (!instanceIsVisible(instances, index)) {
+        continue;
+      }
       includeClippedTransformedBounds(
         bounds,
         batch.bounds,
@@ -2850,7 +3054,7 @@ export class WebGlLineRenderer {
       powerPreference: "high-performance",
     });
     if (!gl) {
-      throw new Error("WebGL2 is required for the DWG viewer");
+      throw new Error("WebGL2 is required for the 2D CAD viewer");
     }
     this.canvas = canvas;
     this.gl = gl;
@@ -2994,6 +3198,10 @@ export class WebGlLineRenderer {
       this.program,
       "u_maskBucketScale",
     );
+    this.aTypeLineExtentsPackedLocation = gl.getUniformLocation(
+      this.program,
+      "u_aTypeLineExtentsPacked",
+    );
     this.layerCountLocation = gl.getUniformLocation(this.program, "u_layerCount");
     this.layerZeroIndexLocation = gl.getUniformLocation(
       this.program,
@@ -3028,6 +3236,10 @@ export class WebGlLineRenderer {
     this.lineWeightThresholdLocation = gl.getUniformLocation(
       this.program,
       "u_lineWeightThreshold",
+    );
+    this.lineWeightWorldScaleLocation = gl.getUniformLocation(
+      this.program,
+      "u_lineWeightWorldScale",
     );
     this.layerLinetypeTextureLocation = gl.getUniformLocation(
       this.program,
@@ -3104,6 +3316,30 @@ export class WebGlLineRenderer {
     this.fillViewportLayerVisibilityLocation = gl.getUniformLocation(
       this.fillProgram,
       "u_viewportLayerVisibility",
+    );
+    this.fillLayerLinetypeTextureLocation = gl.getUniformLocation(
+      this.fillProgram,
+      "u_layerLinetypes",
+    );
+    this.fillLinetypeHeaderTextureLocation = gl.getUniformLocation(
+      this.fillProgram,
+      "u_linetypeHeaders",
+    );
+    this.fillLinetypeDashTextureLocation = gl.getUniformLocation(
+      this.fillProgram,
+      "u_linetypeDashes",
+    );
+    this.fillLinetypeCountLocation = gl.getUniformLocation(
+      this.fillProgram,
+      "u_linetypeCount",
+    );
+    this.fillGlobalLinetypeScaleLocation = gl.getUniformLocation(
+      this.fillProgram,
+      "u_globalLinetypeScale",
+    );
+    this.fillViewportLinetypeScaleLocation = gl.getUniformLocation(
+      this.fillProgram,
+      "u_viewportLinetypeScale",
     );
     this.fillGradientLocations = Object.freeze({
       kind: gl.getUniformLocation(this.fillProgram, "u_gradientKind"),
@@ -3225,6 +3461,7 @@ export class WebGlLineRenderer {
     this.layerZeroIndex = -1;
     this.layers = Object.freeze([]);
     this.layerVisibility = [];
+    this.displayLayerVisibility = [];
     this.layerLineWeights = new Int16Array([-3]);
     this.plotStyleLineWeights = new Int16Array(256);
     this.plotStyleLineWeights.fill(-1);
@@ -3266,17 +3503,82 @@ export class WebGlLineRenderer {
     return this.instanceScratch.subarray(0, requiredValues);
   }
 
-  setLayers(layers) {
+  setLayers(layers, { preserveVisibility = false } = {}) {
+    if (!Array.isArray(layers)) {
+      throw new TypeError("layers must be an array");
+    }
+    const previousVisibility = preserveVisibility
+      ? [...this.layerVisibility]
+      : null;
     this.viewportInstanceGraph = null;
     this.layers = layers;
     this.layerZeroIndex = layers.findIndex(
       (layer) =>
         layer.name?.normalize("NFC").toLocaleLowerCase("en-US") === "0",
     );
-    this.layerVisibility = layers.map((layer) => (layer.flags & 0b11) === 0);
+    this.layerVisibility = layers.map((layer, index) =>
+      previousVisibility?.[index] ??
+        (layer.flags & LAYER_OFF_OR_FROZEN) === 0,
+    );
+    this.refreshDisplayLayerVisibility();
+    this.refreshInstanceVisibilityState();
     this.uploadLayerTexture();
     this.uploadLineWeightTexture();
     this.uploadLayerPlotStyleIndexTexture();
+  }
+
+  refreshInstanceVisibilityState() {
+    const graphs = new Set();
+    if (this.viewportInstanceGraph) {
+      graphs.add(this.viewportInstanceGraph);
+    }
+    if (this.overviewScene?.instanceGraph) {
+      graphs.add(this.overviewScene.instanceGraph);
+    }
+    for (const scene of this.externalScenes?.values?.() ?? []) {
+      if (scene.instanceGraph) {
+        graphs.add(scene.instanceGraph);
+      }
+    }
+    for (const graph of graphs) {
+      refreshInstanceVisibility(graph, this.displayLayerVisibility);
+    }
+  }
+
+  refreshDisplayLayerVisibility() {
+    this.displayLayerVisibility = this.layerVisibility.map(
+      (visible, index) =>
+        visible &&
+        (!this.plotStylesEnabled ||
+          (this.layers[index]?.flags & LAYER_PLOTTABLE) !== 0),
+    );
+  }
+
+  setDisplayLayerPresentation(
+    layers,
+    instanceGraph,
+    layerLinetypeCodes = this.layerLinetypeCodes,
+    changedIndices = null,
+  ) {
+    if (
+      !this.overviewScene ||
+      !(layerLinetypeCodes instanceof Uint16Array) ||
+      layerLinetypeCodes.length !== layers.length ||
+      (changedIndices !== null && !(changedIndices instanceof Uint32Array))
+    ) {
+      throw new TypeError("display layer presentation is inconsistent");
+    }
+    this.setLayers(layers, { preserveVisibility: true });
+    for (const index of changedIndices ?? []) {
+      if (index >= layers.length) {
+        throw new RangeError("changed display layer index is invalid");
+      }
+      this.layerVisibility[index] =
+        (layers[index].flags & LAYER_OFF_OR_FROZEN) === 0;
+    }
+    this.refreshDisplayLayerVisibility();
+    this.layerLinetypeCodes = new Uint16Array(layerLinetypeCodes);
+    this.setViewportLayerVisibility(instanceGraph);
   }
 
   uploadLayerTexture(instanceGraph = this.viewportInstanceGraph) {
@@ -3300,7 +3602,7 @@ export class WebGlLineRenderer {
     }
     const pixels = makeLayerPixels(
       this.layers,
-      this.layerVisibility,
+      this.displayLayerVisibility,
       this.aciPalette,
       rows,
     );
@@ -3328,6 +3630,10 @@ export class WebGlLineRenderer {
 
   setViewportLayerVisibility(instanceGraph) {
     this.viewportInstanceGraph = instanceGraph ?? null;
+    refreshInstanceVisibility(
+      this.viewportInstanceGraph,
+      this.displayLayerVisibility,
+    );
     const sourceRows = instanceGraph?.layerVisibilityRows;
     const rows =
       Array.isArray(sourceRows) && sourceRows.length > 0
@@ -3705,14 +4011,22 @@ export class WebGlLineRenderer {
     this.setAciPalette(palette);
     this.plotStyleLineWeights = new Int16Array(lineWeights);
     this.plotStylesEnabled = true;
+    this.refreshDisplayLayerVisibility();
+    this.refreshInstanceVisibilityState();
+    this.uploadLayerTexture();
     this.uploadPlotStyleTextures();
+    this.invalidateInteractionFrame();
   }
 
-  clearPlotStyle() {
+  clearPlotStyle(palette = DEFAULT_ACI_PALETTE) {
+    this.setAciPalette(palette);
     this.plotStylesEnabled = false;
     this.plotStyleLineWeights.fill(-1);
-    this.setAciPalette(DEFAULT_ACI_PALETTE);
+    this.refreshDisplayLayerVisibility();
+    this.refreshInstanceVisibilityState();
+    this.uploadLayerTexture();
     this.uploadPlotStyleTextures();
+    this.invalidateInteractionFrame();
   }
 
   bindAciTexture(location) {
@@ -3801,6 +4115,21 @@ export class WebGlLineRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
   }
 
+  bindFillLinetypeTextures() {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, this.layerLinetypeTexture);
+    gl.uniform1i(this.fillLayerLinetypeTextureLocation, 4);
+    gl.activeTexture(gl.TEXTURE5);
+    gl.bindTexture(gl.TEXTURE_2D, this.linetypeHeaderTexture);
+    gl.uniform1i(this.fillLinetypeHeaderTextureLocation, 5);
+    gl.activeTexture(gl.TEXTURE6);
+    gl.bindTexture(gl.TEXTURE_2D, this.linetypeDashTexture);
+    gl.uniform1i(this.fillLinetypeDashTextureLocation, 6);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.layerTexture);
+  }
+
   setLineWeightsVisible(visible) {
     this.lineWeightsVisible = Boolean(visible);
     return this.lineWeightsVisible;
@@ -3869,6 +4198,10 @@ export class WebGlLineRenderer {
     return [...this.layerVisibility];
   }
 
+  getDisplayLayerVisibility() {
+    return [...this.displayLayerVisibility];
+  }
+
   setLayerVisibility(layerIndex, visible) {
     if (
       !Number.isInteger(layerIndex) ||
@@ -3878,11 +4211,15 @@ export class WebGlLineRenderer {
       throw new RangeError(`invalid layer index ${layerIndex}`);
     }
     this.layerVisibility[layerIndex] = Boolean(visible);
+    this.refreshDisplayLayerVisibility();
+    this.refreshInstanceVisibilityState();
     this.uploadLayerTexture();
   }
 
   setAllLayersVisible(visible) {
     this.layerVisibility.fill(Boolean(visible));
+    this.refreshDisplayLayerVisibility();
+    this.refreshInstanceVisibilityState();
     this.uploadLayerTexture();
   }
 
@@ -3896,6 +4233,8 @@ export class WebGlLineRenderer {
     for (let index = 0; index < visibility.length; index += 1) {
       this.layerVisibility[index] = Boolean(visibility[index]);
     }
+    this.refreshDisplayLayerVisibility();
+    this.refreshInstanceVisibilityState();
     this.uploadLayerTexture();
   }
 
@@ -4114,6 +4453,7 @@ export class WebGlLineRenderer {
     {
       stride = VERTEX_STRIDE,
       patternDistance = stride >= VERTEX_STRIDE,
+      aTypeAlignment = patternDistance && stride === VERTEX_STRIDE,
     } = {},
   ) {
     const gl = this.gl;
@@ -4124,7 +4464,11 @@ export class WebGlLineRenderer {
     }
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, arrayBuffer, gl.STATIC_DRAW);
+    const upload = packATypeLineExtentsForUpload(arrayBuffer, {
+      recordSize: stride,
+      enabled: aTypeAlignment,
+    });
+    gl.bufferData(gl.ARRAY_BUFFER, upload.buffer, gl.STATIC_DRAW);
 
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
@@ -4216,6 +4560,7 @@ export class WebGlLineRenderer {
       vertexArray,
       byteLength: arrayBuffer.byteLength,
       stride,
+      aTypeLineExtentsPacked: upload.packed,
     });
     this.vertexResources.add(resource);
     return resource;
@@ -4317,6 +4662,15 @@ export class WebGlLineRenderer {
       80,
     );
     gl.vertexAttribDivisor(14, 1);
+    gl.enableVertexAttribArray(15);
+    gl.vertexAttribIPointer(
+      15,
+      1,
+      gl.UNSIGNED_INT,
+      INSTANCE_STRIDE,
+      88,
+    );
+    gl.vertexAttribDivisor(15, 1);
     gl.bindVertexArray(null);
 
     const resource = Object.freeze({
@@ -5142,7 +5496,7 @@ export class WebGlLineRenderer {
       if (
         Number.isSafeInteger(effectiveLayerIndex) &&
         effectiveLayerIndex !== 0xffff_ffff &&
-        this.layerVisibility[effectiveLayerIndex] === false
+        this.displayLayerVisibility[effectiveLayerIndex] === false
       ) {
         return null;
       }
@@ -6137,6 +6491,12 @@ export class WebGlLineRenderer {
     this.blocks = blocks;
     const drawableBounds = calculateOverviewBounds(batches, instanceGraph);
     includeFiniteBounds(drawableBounds, supplementalBounds);
+    const fittedView = validatedPreferredView(
+      preferredView,
+      drawableBounds,
+      size.width,
+      size.height,
+    );
     let bounds = drawableBounds;
     if (preferredBounds && boundsAreFinite(preferredBounds)) {
       if (!boundsAreFinite(bounds)) {
@@ -6155,6 +6515,13 @@ export class WebGlLineRenderer {
         };
       }
     }
+    if (!boundsAreFinite(bounds) && fittedView) {
+      bounds = boundsForNormalizedView(
+        fittedView,
+        size.width,
+        size.height,
+      );
+    }
     if (!boundsAreFinite(bounds)) {
       throw new Error("overview does not contain any drawable model-space geometry");
     }
@@ -6168,12 +6535,6 @@ export class WebGlLineRenderer {
             min: [...bounds.min],
             max: [...bounds.max],
           };
-    const fittedView = validatedPreferredView(
-      preferredView,
-      drawableBounds,
-      size.width,
-      size.height,
-    );
     const camera = fittedView
       ? makeCameraFromView(
           fittedView.origin,
@@ -6219,11 +6580,22 @@ export class WebGlLineRenderer {
       throw new Error("cannot switch a view before rendering an overview");
     }
     this.clearCurveRefinement();
+    refreshInstanceVisibility(
+      instanceGraph,
+      this.displayLayerVisibility,
+    );
     const drawableBounds = calculateOverviewBounds(
       this.overviewScene.batches,
       instanceGraph,
     );
     includeFiniteBounds(drawableBounds, supplementalBounds);
+    const size = this.resize();
+    const fittedView = validatedPreferredView(
+      preferredView,
+      drawableBounds,
+      size.width,
+      size.height,
+    );
     let bounds = drawableBounds;
     if (preferredBounds && boundsAreFinite(preferredBounds)) {
       if (!boundsAreFinite(bounds)) {
@@ -6242,6 +6614,13 @@ export class WebGlLineRenderer {
         };
       }
     }
+    if (!boundsAreFinite(bounds) && fittedView) {
+      bounds = boundsForNormalizedView(
+        fittedView,
+        size.width,
+        size.height,
+      );
+    }
     if (!boundsAreFinite(bounds)) {
       throw new Error("selected layout does not contain drawable geometry");
     }
@@ -6255,13 +6634,6 @@ export class WebGlLineRenderer {
             min: [...bounds.min],
             max: [...bounds.max],
           };
-    const size = this.resize();
-    const fittedView = validatedPreferredView(
-      preferredView,
-      drawableBounds,
-      size.width,
-      size.height,
-    );
     this.setViewportLayerVisibility(instanceGraph);
     this.detailSelections.clear();
     this.clearHatchPatterns();
@@ -6397,6 +6769,10 @@ export class WebGlLineRenderer {
         clearLineMaskBuckets(vertices.buffer);
       }
     }
+    refreshInstanceVisibility(
+      instanceGraph,
+      this.displayLayerVisibility,
+    );
     const bounds = calculateOverviewBounds(batches, instanceGraph);
     const hasOverview = vertices.byteLength > 0;
     if (hasOverview && !boundsAreFinite(bounds)) {
@@ -6928,7 +7304,9 @@ export class WebGlLineRenderer {
         entries.map((entry) =>
           Object.freeze({
             batch: entry.batch,
-            resource: this.uploadVertices(entry.vertices.buffer),
+            resource: this.uploadVertices(entry.vertices.buffer, {
+              aTypeAlignment: false,
+            }),
             byteLength: entry.vertices.byteLength,
             vertices: entry.vertices,
           }),
@@ -7242,9 +7620,16 @@ export class WebGlLineRenderer {
     ) {
       throw new Error("line vertex update payload is inconsistent");
     }
+    const upload = packATypeLineExtentsForUpload(vertices.buffer, {
+      recordSize: vertices.recordSize ?? resource.stride ?? VERTEX_STRIDE,
+      enabled: Boolean(resource.aTypeLineExtentsPacked),
+    });
+    if (resource.aTypeLineExtentsPacked && !upload.packed) {
+      throw new Error("A-type linetype metadata changed during vertex update");
+    }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, resource.vertexBuffer);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertices.buffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, upload.buffer);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
@@ -7328,7 +7713,9 @@ export class WebGlLineRenderer {
     const uploaded = entries.map((entry) =>
       Object.freeze({
         batch: entry.batch,
-        resource: this.uploadVertices(entry.vertices.buffer),
+        resource: this.uploadVertices(entry.vertices.buffer, {
+          aTypeAlignment: false,
+        }),
         byteLength: entry.vertices.byteLength,
         vertices: entry.vertices,
       }),
@@ -7387,9 +7774,11 @@ export class WebGlLineRenderer {
     const instances = instancesForBatch(batch, instanceGraph);
     const styleIndex =
       this.renderDeltaStyleIndexesByGraph.get(instanceGraph);
+    const sourceVisibleInstanceIndices =
+      visibleSourceInstanceIndices(instanceIndices, instances);
     const visibleInstanceIndices =
       visibleRenderDeltaInstanceIndices(
-        instanceIndices,
+        sourceVisibleInstanceIndices,
         instances,
         styleIndex,
       );
@@ -7480,11 +7869,23 @@ export class WebGlLineRenderer {
     if (maskBucketScaleLocation !== null) {
       gl.uniform1f(maskBucketScaleLocation, maskBucketScale);
     }
+    if (
+      primitive === gl.LINES &&
+      this.aTypeLineExtentsPackedLocation !== null
+    ) {
+      gl.uniform1i(
+        this.aTypeLineExtentsPackedLocation,
+        resource.aTypeLineExtentsPacked ? 1 : 0,
+      );
+    }
     if (primitive === gl.TRIANGLES) {
       this.bindFillGradient(batch);
     }
+    const linetypeScaled =
+      primitive === gl.LINES ||
+      (primitive === gl.TRIANGLES && solidFill);
     const drawInstanceGroups =
-      primitive === gl.LINES
+      linetypeScaled
         ? splitInstanceGroupsByViewportLinetypeScale(
             instanceGroups,
             instances,
@@ -7493,12 +7894,15 @@ export class WebGlLineRenderer {
         : instanceGroups;
     gl.bindVertexArray(resource.vertexArray);
     for (const instanceGroup of drawInstanceGroups) {
-      if (
-        primitive === gl.LINES &&
-        this.viewportLinetypeScaleLocation !== null
-      ) {
+      const linetypeScaleLocation =
+        primitive === gl.LINES
+          ? this.viewportLinetypeScaleLocation
+          : solidFill
+            ? this.fillViewportLinetypeScaleLocation
+            : null;
+      if (linetypeScaled && linetypeScaleLocation !== null) {
         gl.uniform1f(
-          this.viewportLinetypeScaleLocation,
+          linetypeScaleLocation,
           instanceGroup.linetypeScale ?? 1,
         );
       }
@@ -8065,6 +8469,15 @@ export class WebGlLineRenderer {
       );
       gl.uniform1i(this.fillLayerTextureLocation, 0);
       this.bindAciTexture(this.fillAciTextureLocation);
+      this.bindFillLinetypeTextures();
+      gl.uniform1i(
+        this.fillLinetypeCountLocation,
+        this.linetypeTextureData.maximumCode + 1,
+      );
+      gl.uniform1f(
+        this.fillGlobalLinetypeScaleLocation,
+        this.globalLinetypeScale,
+      );
       this.bindViewportLayerVisibility(
         this.fillViewportLayerVisibilityLocation,
       );
@@ -8349,29 +8762,21 @@ export class WebGlLineRenderer {
       this.worldPerPixelLocation,
       camera.worldHeight / camera.height,
     );
+    gl.uniform1f(
+      this.lineWeightWorldScaleLocation,
+      Number.isFinite(this.overviewScene.instanceGraph.lineWeightWorldScale) &&
+      this.overviewScene.instanceGraph.lineWeightWorldScale > 0
+        ? this.overviewScene.instanceGraph.lineWeightWorldScale
+        : 0,
+    );
     gl.uniform1i(
       this.curveReplacementEnabledLocation,
       curveRefinementActive ? 1 : 0,
     );
-    const linePasses = interactive
-      ? [[0, 0, 0]]
-      : this.lineWeightsVisible
-      ? [
-          [0, 0, 0],
-          [0.75, 0, 1.5],
-          [-0.75, 0, 1.5],
-          [0, 0.75, 1.5],
-          [0, -0.75, 1.5],
-          [0.65, 0.65, 2.5],
-          [-0.65, 0.65, 2.5],
-          [0.65, -0.65, 2.5],
-          [-0.65, -0.65, 2.5],
-          [1.5, 0, 3.5],
-          [-1.5, 0, 3.5],
-          [0, 1.5, 3.5],
-          [0, -1.5, 3.5],
-        ]
-      : [[0, 0, 0]];
+    const linePasses =
+      !interactive && this.lineWeightsVisible
+        ? LINE_WEIGHT_PASSES
+        : [LINE_WEIGHT_PASSES[0]];
     const cullContext = interactiveCullContext(camera);
     const minimumPixelSpan = interactive
       ? INTERACTIVE_MINIMUM_PIXEL_SPAN
@@ -9072,13 +9477,13 @@ export class WebGlLineRenderer {
       this.lastImageMetrics =
         this.imageOverlay?.redraw(
           camera,
-          this.layerVisibility,
+          this.displayLayerVisibility,
           overlayOptions(0),
         ) ?? null;
       this.lastTextMetrics =
         this.textOverlay?.redraw(
           camera,
-          this.layerVisibility,
+          this.displayLayerVisibility,
           overlayOptions(1),
         ) ?? null;
       if (updateOverlaySnapshots) {

@@ -449,8 +449,13 @@ test("keeps package versions and producer compatibility manifest aligned", async
   );
   assert.equal(
     manifest.distribution.tag,
-    `viewer-core-v${ViewerCoreVersion}`,
+    `viewer-core-v${manifest.distribution.packageVersions.viewerCore}`,
   );
+  assert.deepEqual(manifest.distribution.packageVersions, {
+    viewerCore: "0.1.2",
+    renderProtocol: "0.1.2",
+    viewerUi: "0.1.2",
+  });
   for (const artifact of Object.values(
     manifest.distribution.artifacts,
   )) {
@@ -465,18 +470,47 @@ test("keeps package versions and producer compatibility manifest aligned", async
   ]);
   assert.deepEqual(manifest.qualification, {
     viewerOwnedBoundary: "passed",
+    artifactOnlyStaged3dConsumer: "passed",
     command: "pnpm run qualify:viewer-boundary",
     evidence:
       "compatibility/evidence/viewer-boundary-0.1.2-2026-08-04.json",
     externalConsumers: "consumer-owned",
   });
+  assert.deepEqual(
+    {
+      status: manifest.developmentQualification.status,
+      publishedInDistribution:
+        manifest.developmentQualification.publishedInDistribution,
+      sourceVersion:
+        manifest.developmentQualification.sourceVersion,
+      feature: manifest.developmentQualification.feature,
+      command: manifest.developmentQualification.command,
+    },
+    {
+      status: "passed",
+      publishedInDistribution: false,
+      sourceVersion: ViewerCoreVersion,
+      feature:
+        "interaction-detail-and-async-staged-render-delta-lifecycle",
+      command: "pnpm run qualify:viewer-boundary",
+    },
+  );
+  for (const artifact of Object.values(
+    manifest.developmentQualification.artifacts,
+  )) {
+    assert.match(artifact.file, /^menaje-viewer-.+\.tgz$/u);
+    assert.match(artifact.sha256, /^[a-f0-9]{64}$/u);
+    assert.match(artifact.contentSha256, /^[a-f0-9]{64}$/u);
+    assert.ok(Number.isSafeInteger(artifact.bytes));
+    assert.ok(artifact.bytes > 0);
+  }
   assert.equal(
     manifest.sources.mockRenderDelta,
     "delta-conformance",
   );
   assert.equal(
     manifest.components.renderDelta,
-    "atomic-overlay-state-with-dwg-line-fill-point-text-instance-transform-style-upsert-bounded-nested-instance-propagation-native-base-suppression-scoped-and-bounded-dependency-invalidation-revision-bound-pick-filtering-and-retryable-resource-cleanup",
+    "backward-compatible-sync-apply-plus-async-prepare-atomic-geometry-pick-commit-with-bounded-rollback-disposal",
   );
   assert.equal(
     manifest.components.renderDiff,

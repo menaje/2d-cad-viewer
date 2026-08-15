@@ -3,7 +3,7 @@
   "status": "pass",
   "asOf": "2026-08-09",
   "scope": {
-    "repository": "menaje/dwg-viewer",
+    "repository": "menaje/2d-cad-viewer",
     "package": "@menaje/viewer-webgl",
     "api": "mountWebGlRevisionComparison",
     "publishedArtifactChanged": false

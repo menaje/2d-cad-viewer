@@ -20,7 +20,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/menaje/dwg-viewer.git",
+    "url": "git+https://github.com/menaje/2d-cad-viewer.git",
     "directory": "packages/webview"
   },
   "publishConfig": {
@@ -37,7 +37,7 @@
   "dependencies": {
     "@menaje/dwg-scene-source": "0.1.1",
     "@menaje/viewer-render-protocol": "0.1.2",
-    "@menaje/viewer-core": "0.1.2",
+    "@menaje/viewer-core": "0.1.3",
     "@menaje/viewer-ui": "0.1.2",
     "@mlightcad/shx-parser": "1.4.5",
     "earcut": "3.2.3",

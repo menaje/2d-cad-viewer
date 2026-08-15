@@ -12,7 +12,10 @@ import {
   translationMat4,
 } from "../src/math.mjs";
 import { MemoryRangeSource } from "../src/range-source.mjs";
-import { SceneCacheReader } from "../src/scene-cache.mjs";
+import {
+  SceneCacheReader,
+  TextEntityKind,
+} from "../src/scene-cache.mjs";
 import {
   annotativeTextRecordForInstance,
   cadMTextFlowsVertically,
@@ -23,8 +26,10 @@ import {
   CompositeTextOverlay,
   layoutCadTextColumns,
   plainCadTextLines,
+  replaceCadFieldCodes,
   registerLocalOutlineFont,
   systemFallbackFont,
+  textRecordIsVisible,
   unregisterLocalOutlineFont,
   wrapCadTextLines,
 } from "../src/text-overlay.mjs";
@@ -92,6 +97,7 @@ function fakeCanvas({ measureText } = {}) {
     setTransform(...values) {
       calls.transforms.push(values);
     },
+    setLineDash() {},
     stroke() {
       calls.stroke += 1;
     },
@@ -139,6 +145,111 @@ function fakeCanvas({ measureText } = {}) {
     },
   };
 }
+
+test("applies drawing ATTMODE to attributes without overriding entity visibility", () => {
+  const rootBlockIndices = new Set([0]);
+  const invisibleAttribute = {
+    kind: TextEntityKind.Attribute,
+    commonFlags: 0,
+    sourceFlags: 1,
+  };
+  const visibleAttribute = {
+    ...invisibleAttribute,
+    sourceFlags: 0,
+  };
+
+  assert.equal(
+    textRecordIsVisible(invisibleAttribute, 0, rootBlockIndices, 1),
+    false,
+  );
+  assert.equal(
+    textRecordIsVisible(invisibleAttribute, 0, rootBlockIndices, 2),
+    true,
+  );
+  assert.equal(
+    textRecordIsVisible(visibleAttribute, 0, rootBlockIndices, 0),
+    false,
+  );
+  assert.equal(
+    textRecordIsVisible(
+      { ...invisibleAttribute, commonFlags: 1 },
+      0,
+      rootBlockIndices,
+      2,
+    ),
+    false,
+  );
+});
+
+test("keeps nonconstant nested ATTDEF records hidden for every ATTMODE", () => {
+  const rootBlockIndices = new Set([0]);
+  const definition = {
+    kind: TextEntityKind.AttributeDefinition,
+    commonFlags: 0,
+    sourceFlags: 0,
+  };
+
+  assert.equal(
+    textRecordIsVisible(definition, 1, rootBlockIndices, 2),
+    false,
+  );
+  assert.equal(
+    textRecordIsVisible(
+      { ...definition, sourceFlags: 1 << 1 },
+      1,
+      rootBlockIndices,
+      1,
+    ),
+    true,
+  );
+});
+
+test("draws XCLIPFRAME boundaries and obeys their layer visibility", () => {
+  const canvas = fakeCanvas();
+  const overlay = new CanvasTextOverlay(canvas, {
+    textEntities: {
+      length: 0,
+      get() {
+        throw new Error("empty text source");
+      },
+    },
+    blocks: [],
+    layers: [{ name: "0" }],
+    instanceGraph: {
+      modelBlockIndices: new Set(),
+      instancesByBlock: new Map(),
+      clipNodes: [
+        createClipNode(
+          1,
+          0,
+          [
+            [-1, -1, 0],
+            [1, -1, 0],
+            [1, 1, 0],
+            [-1, 1, 0],
+          ],
+          false,
+          { frame: true, color: (2 << 30) | 3, layerIndex: 0 },
+        ),
+      ],
+    },
+    glyphCache: {},
+    xclipFrame: 2,
+  });
+  const camera = {
+    origin: [0, 0, 0],
+    worldWidth: 10,
+    worldHeight: 10,
+  };
+
+  const visible = overlay.redraw(camera, [true]);
+  assert.equal(visible.xclipFrames, 1);
+  assert.equal(canvas.calls.stroke, 1);
+
+  const hidden = overlay.redraw(camera, [false]);
+  assert.equal(hidden.xclipFrames, 0);
+  assert.equal(canvas.calls.stroke, 1);
+});
 
 function compositingCanvas() {
   const makeContext = () => ({
@@ -245,6 +356,23 @@ test("removes MTEXT controls without losing Korean or line breaks", () => {
   assert.equal(
     [...plainCadTextLines("한".repeat(5_000), false)[0]].length,
     4_096,
+  );
+});
+
+test("uses AutoCAD's unresolved marker instead of exposing MTEXT field code", () => {
+  assert.equal(
+    replaceCadFieldCodes(
+      String.raw`Sheet %<\AcSm Sheet.Number \f "%tc1">% / %<\AcVar Date>%`,
+    ),
+    "Sheet #### / ####",
+  );
+  assert.deepEqual(
+    plainCadTextLines(String.raw`A%<\AcVar Date>%\PB`, true),
+    ["A####", "B"],
+  );
+  assert.equal(
+    replaceCadFieldCodes(String.raw`%<outer %<nested>% tail>%`),
+    "####",
   );
 });
 
@@ -1049,6 +1177,32 @@ test("falls back to system Korean text within a hard glyph budget", async () => 
   );
 });
 
+test("draws QTEXTMODE bounds instead of text glyphs", async () => {
+  const scene = await textScene();
+  const canvas = fakeCanvas();
+  const overlay = new CanvasTextOverlay(canvas, {
+    textEntities: scene.textEntities,
+    blocks: scene.metadata.blocks,
+    layers: scene.metadata.layers,
+    instanceGraph: scene.instanceGraph,
+    glyphCache: { getGlyph: () => undefined },
+    maximumSourceTexts: 1,
+    minimumPixelHeight: 0.1,
+    quickTextMode: true,
+  });
+
+  const metrics = overlay.redraw(camera, [true]);
+
+  assert.equal(metrics.visibleOccurrences, 1);
+  assert.equal(metrics.quickTextBoxes, 1);
+  assert.equal(metrics.fallbackGlyphs, 0);
+  assert.equal(metrics.vectorGlyphs, 0);
+  assert.equal(metrics.segments, 4);
+  assert.equal(canvas.calls.fillText, 0);
+  assert.equal(canvas.calls.stroke, 1);
+  assert.equal(canvas.calls.lineTo, 3);
+});
+
 test("suppresses block ATTDEF templates and renders constants and actual attributes", () => {
   const canvas = fakeCanvas();
   const baseRecord = {
@@ -1517,9 +1671,17 @@ test("selects exact MTEXT annotation representations without blanket scaling", (
     instances,
     0,
   );
+  const unmatchedHidden = annotativeTextRecordForInstance(
+    base,
+    { annotationScalesByVisibilityRow: new Float64Array([0, 25]) },
+    instances,
+    0,
+    false,
+  );
 
   assert.strictEqual(defaultDisplay, base);
   assert.strictEqual(unmatchedDisplay, base);
+  assert.strictEqual(unmatchedHidden, null);
   assert.equal(alternateDisplay.height, 200);
   assert.deepEqual(alternateDisplay.insertionPoint, [30, 40, 0]);
   assert.deepEqual(alternateDisplay.xAxisDirection, [0, 1, 0]);
@@ -1528,6 +1690,55 @@ test("selects exact MTEXT annotation representations without blanket scaling", (
   assert.equal(alternateDisplay.columnFlags & 1, 0);
   assert.equal(alternateDisplay.columnFlags & 2, 2);
   assert.deepEqual([...alternateDisplay.columnHeights], [1_000, 1_100]);
+});
+
+test("selects exact TEXT annotation position, rotation and scale", () => {
+  const base = {
+    kind: 0,
+    flags: 1 << 2,
+    insertionPoint: [10, 20, 0],
+    alignmentPoint: [12, 20, 0],
+    height: 2.5,
+    rotation: 0,
+    horizontalAlignment: 0,
+    annotationContexts: [
+      {
+        kind: "text",
+        scale: 50,
+        isDefault: true,
+        horizontalAlignment: 0,
+        insertionPoint: [10, 20, 0],
+        alignmentPoint: [12, 20, 0],
+        rotation: 0,
+        columnHeights: new Float64Array(0),
+      },
+      {
+        kind: "text",
+        scale: 100,
+        isDefault: false,
+        horizontalAlignment: 2,
+        insertionPoint: [30, 40, 0],
+        alignmentPoint: [35, 40, 0],
+        rotation: Math.PI / 2,
+        columnHeights: new Float64Array(0),
+      },
+    ],
+  };
+  const instances = { visibilityRows: new Uint32Array([1]) };
+  const display = annotativeTextRecordForInstance(
+    base,
+    { annotationScalesByVisibilityRow: new Float64Array([0, 100]) },
+    instances,
+    0,
+    false,
+  );
+
+  assert.deepEqual(display.insertionPoint, [30, 40, 0]);
+  assert.deepEqual(display.alignmentPoint, [35, 40, 0]);
+  assert.equal(display.rotation, Math.PI / 2);
+  assert.equal(display.height, 5);
+  assert.equal(display.horizontalAlignment, 2);
+  assert.notEqual(display.flags & 1, 0);
 });
 
 test("uses the alignment point for justified TEXT and attribute entities", () => {
@@ -1584,11 +1795,35 @@ test("derives Align and Fit rotation from their endpoint span", () => {
   }
 });
 
+test("keeps mtext_type 1 attributes on single-line placement", () => {
+  const matrix = cadTextEntityMatrix(
+    {
+      kind: TextEntityKind.Attribute,
+      mtextType: 1,
+      insertionPoint: [1, 2, 3],
+      alignmentPoint: [9, 10, 3],
+      normal: [0, 0, 1],
+      xAxisDirection: [0, 1, 0],
+      height: 1,
+      widthFactor: 1,
+      rotation: 0,
+      obliqueAngle: 0,
+      horizontalAlignment: 2,
+      verticalAlignment: 3,
+      generationFlags: 0,
+    },
+    { flags: 0, widthFactor: 1 },
+  );
+
+  assert.deepEqual(transformPoint(matrix, [0, 0, 0]), [9, 10, 3]);
+  assert.deepEqual(transformPoint(matrix, [1, 0, 0]), [10, 10, 3]);
+});
+
 test("uses embedded MTEXT insertion and world direction for multiline attributes", () => {
   const matrix = cadTextEntityMatrix(
     {
       kind: 3,
-      mtextType: 1,
+      mtextType: 2,
       insertionPoint: [1, 2, 3],
       alignmentPoint: [9, 9, 9],
       normal: [0, 0, 1],
@@ -1829,7 +2064,7 @@ test("uses the stored MTEXT WCS X-axis direction", () => {
   );
 });
 
-test("flows MTEXT into stored columns and paints its background first", () => {
+test("flows MTEXT columns and paints background and text frames first", () => {
   const canvas = fakeCanvas();
   const record = {
     handle: 8n,
@@ -1855,7 +2090,7 @@ test("flows MTEXT into stored columns and paints its background first", () => {
     backgroundScale: 1.5,
     backgroundColor: (2 << 30) | 2,
     backgroundTransparency: 0,
-    backgroundFlags: 1,
+    backgroundFlags: 1 | (1 << 4),
     sourceFlags: 0,
     horizontalAlignment: 0,
     verticalAlignment: 0,
@@ -1906,12 +2141,22 @@ test("flows MTEXT into stored columns and paints its background first", () => {
   const metrics = overlay.redraw(camera, [true]);
 
   assert.equal(metrics.backgroundFills, 1);
+  assert.equal(metrics.textFrames, 1);
   assert.equal(canvas.calls.fills, 1);
+  assert.equal(canvas.calls.stroke, 1);
   assert.equal(canvas.calls.fillStyles[0], "rgba(255, 255, 0, 1)");
   assert.equal(canvas.calls.events[0], "fill");
   assert.equal(canvas.calls.fillTextArguments.length, 4);
   assert.equal(canvas.calls.fillTextArguments[2][1], 3);
   assert.equal(canvas.calls.fillTextArguments[3][1], 3);
+
+  record.backgroundFlags = 0;
+  record.sourceFlags = 1;
+  const leaderFrameMetrics = overlay.redraw(camera, [true]);
+  assert.equal(leaderFrameMetrics.backgroundFills, 0);
+  assert.equal(leaderFrameMetrics.textFrames, 1);
+  assert.equal(canvas.calls.fills, 1);
+  assert.equal(canvas.calls.stroke, 2);
 });
 
 test("renders bounded inline MTEXT font, color, height, width and slant", () => {

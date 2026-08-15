@@ -1,8 +1,9 @@
-# Scene Cache v1.21
+# Scene Cache v1.26
 
-Status: current and exclusive. Product writers and readers accept exactly
-major 1, minor 21. References to lower minor versions below describe the
-additive format history only and do not define supported runtime inputs.
+Status: current writer. Product writers emit major 1, minor 26. Product
+readers accept the explicit backward window 1.21–1.26; older and newer minor
+versions fail closed. References to lower minor versions below otherwise
+describe additive format history and do not define supported runtime inputs.
 The current implementation includes source geometry/text writing, resolved
 DIMENSION picture-block instances, bounded HATCH rings and asynchronous
 solid/gradient fill,
@@ -12,7 +13,9 @@ draw-order tables, original XREF paths, INSERT/XREF spatial clips and
 external line/text composition, CAD linetypes, paper/model layout tabs,
 viewport layer/clip/annotation-scale state and the saved model-space view
 plus source IMAGE/IMAGEDEF paths, image bases and clip boundaries, bounded
-OLE bitmap/EMF previews and bounded MTEXT annotation-context representations;
+OLE bitmap/EMF previews, bounded MTEXT/TEXT/ATTDEF/ATTRIB
+annotation-context representations and entity linetype scales for exact-curve
+refinement;
 expansion tracked by GitHub issues #3 and #9.
 
 The cache is a little-endian, versioned binary container designed for range
@@ -50,7 +53,7 @@ Header flag bit 0 (`0x00000001`) marks a display-only progressive preview.
 All other bits are reserved and must be zero; the Webview rejects a cache with
 an unknown header flag. A canonical full cache always writes flags as zero.
 
-A flagged preview is still an independently readable v1.21 container with the
+A flagged preview is still an independently readable v1.26 container with the
 complete section directory. It carries drawing, layer, block and INSERT
 metadata, layout/viewport state including viewport layer overrides, INSERT
 clip boundaries, plus only the LOD-0 GPU line batches and vertices needed for
@@ -74,6 +77,12 @@ and must be deleted after the full cache replaces it.
 | 36 | `u32` | reserved |
 
 Section kinds currently written:
+
+Directory order defines section identity but does not require payloads to be
+stored in kind order. Every payload must be 8-byte aligned, contained within
+the declared file size and non-overlapping. This permits the native writer to
+place the large kind-31 vertex body before the small kind-30 batch directory
+while writing the vertex body directly to its final range.
 
 | Kind | Payload |
 | ---: | --- |
@@ -121,11 +130,13 @@ Section kinds currently written:
 | 53 | non-rectangular viewport clip vertices |
 | 54 | IMAGE records and IMAGEDEF UTF-8 paths |
 | 55 | IMAGE clip-boundary `f64[2]` vertex pool |
-| 56 | MTEXT annotation-context representation records |
+| 56 | MTEXT/TEXT/ATTDEF/ATTRIB annotation-context representation records |
 | 57 | MTEXT annotation-context column-height pool |
 | 58 | sparse viewport-specific layer property overrides |
 | 59 | embedded OLE preview metadata |
 | 60 | embedded OLE preview byte pool |
+| 61 | exact-curve entity linetype-scale records |
+| 62 | exact XLINE/RAY point-and-direction records |
 
 Version 1.0 contains kinds 1–3 and 10–13. Version 1.1 adds kinds 14–21.
 Version 1.2 adds kinds 30–31 for straight and polyline GPU lines. Version 1.3
@@ -157,8 +168,26 @@ MTEXT annotation-context representations and their column heights, and uses
 the final eight bytes of the unchanged kind-51 viewport record for its exact
 annotation scale. Version 1.20 adds kind 58 for viewport-specific layer color,
 transparency, linetype and lineweight overrides. Version 1.21 adds kinds 59–60
-for bounded OLE bitmap and reconstructed EMF previews. A v1.21 writer always
-emits all 49 sections, including empty pools.
+for bounded OLE bitmap and reconstructed EMF previews. Version 1.22 uses the
+drawing presentation word and two block flags to preserve ATTMODE, FRAME-family
+settings, ANNOALLVISIBLE, MSLTSCALE and XREF loaded/resolved state without
+changing any record size or section count. A v1.22 writer always emits all 49
+sections, including empty pools.
+Version 1.23 extends kind 56 with a discriminated representation for annotative
+TEXT, ATTDEF and ATTRIB, adds kind 61 so finite and construction-line curve
+sources retain their entity linetype scale during high-zoom refinement, and
+adds kind 62 for exact XLINE/RAY point-and-direction sources. It also uses
+presentation bits 15–20 for saved PDF/DWF/DGN underlay-frame settings. A v1.23 writer
+always emits all 51 sections, including empty pools.
+Version 1.24 uses the previously reserved layout-record word at offset 54 to
+preserve the effective per-layout ANNOALLVISIBLE boolean. It does not add a
+section or change a record size; a v1.24 writer still emits all 51 sections.
+Version 1.25 assigns drawing-presentation bits 21–24 to the saved QTEXTMODE,
+SPLFRAME, DISPSILH and XREFOVERRIDE booleans. It does not add a section or
+change a record size; a v1.25 writer still emits all 51 sections.
+Version 1.26 assigns drawing-presentation bits 25–27 to VISRETAIN,
+RASTERVARIABLES image quality and DISPSILHBLOCKS. It does not add a section or
+change a record size; a v1.26 writer still emits all 51 sections.
 
 ## Shared primitive prefix
 
@@ -183,7 +212,7 @@ coordinates without replacing these source-precision records.
 
 ## Drawing record
 
-In v1.20 and v1.21, kind 1 contains one 160-byte record:
+In v1.20–v1.26, kind 1 contains one 160-byte record:
 
 | Offset | Type | Field |
 | ---: | --- | --- |
@@ -198,19 +227,45 @@ In v1.20 and v1.21, kind 1 contains one 160-byte record:
 | 80 | `f64` | global linetype scale |
 | 88 | `f64` | current-entity linetype scale |
 | 96 | `u32` | linetype display flags; bit 0 is paper-space linetype scaling |
-| 100 | `u32` | reserved |
+| 100 | `u32` | v1.22+ presentation settings; zero and reserved in v1.20–v1.21 |
 | 104 | `f64[3]` | saved model-view center |
 | 128 | `f64` | saved model-view height |
 | 136 | `f64` | saved model-view width |
 | 144 | `f64` | saved model-view twist |
 | 152 | `u32` | saved-view flags; bit 0 means present |
-| 156 | `u32` | reserved |
+| 156 | `f32` | v1.22 current model-space annotation scale; zero when unavailable; reserved zero in v1.20–v1.21 |
 
 Before v1.10, offset 12 is reserved and must be zero. Versions 1.10–1.13 use
 only its WIPEOUT value; v1.14 adds the three display bits. Versions before
 v1.15 end at byte 80, v1.15–v1.16 end at byte 104, and v1.17 adds the saved
 view suffix. Those shorter historical records are not accepted by the current
 reader, which requires the complete 160-byte current record.
+
+The v1.22 presentation word packs two-bit settings at bits 0–1 ATTMODE, 2–3
+IMAGEFRAME, 4–5 XCLIPFRAME, 6–7 OLEFRAME, 8–9 ANNOALLVISIBLE and 10–11
+MSLTSCALE. For the first four fields, values 0–2 are the saved setting and 3
+means unavailable. ANNOALLVISIBLE and MSLTSCALE accept 0 or 1, use 3 for
+unavailable and reject 2. Bits 12–13 carry FRAME and bit 14 marks FRAME as
+available. In a v1.22 cache, bits 15–31 are reserved and must be zero. A v1.21
+reader path requires the old zero word and exposes conservative display
+defaults.
+
+Scene Cache v1.23 assigns bits 15–16 to PDFFRAME, 17–18 to DWFFRAME and
+19–20 to DGNFRAME. Values 0–2 preserve the saved setting and 3 means
+unavailable. Bits 21–31 remain reserved and must be zero. A v1.22 reader path
+requires bits 15–31 to remain zero.
+
+Scene Cache v1.25 assigns bit 21 to QTEXTMODE, bit 22 to SPLFRAME, bit 23 to
+DISPSILH and bit 24 to XREFOVERRIDE. A set bit means the saved drawing value
+is 1 and a clear bit means 0. Bits 25–31 remain reserved and must be zero.
+Readers of v1.21–v1.24 expose the documented initial value 0 for all four
+fields.
+
+Scene Cache v1.26 assigns bit 25 to VISRETAIN, bit 26 to high raster IMAGE
+quality and bit 27 to DISPSILHBLOCKS. A clear raster-quality bit means draft
+display. Bits 28–31 remain reserved and must be zero. Readers of v1.21–v1.25
+expose Autodesk's documented initial values: VISRETAIN 1, high IMAGE quality
+and DISPSILHBLOCKS 1.
 
 ## String-table sections
 
@@ -242,11 +297,28 @@ Kind 3 stores one 64-byte record per shared block definition:
 | 56 | `u32[2]` | v1.12 original XREF-path UTF-8 offset and length |
 
 Block flag bits are 0 anonymous, 1 has attributes, 2 XREF, 3 XREF overlay,
-4 external path present, 5 explodable and 6 uniformly scaled. Before v1.12,
+4 external path present, 5 explodable and 6 uniformly scaled. Version 1.22
+adds bit 7 XREF loaded and bit 8 XREF resolved. Those state bits are valid only
+for XREF blocks; the v1.21 compatibility path treats XREFs as loaded and
+resolved to preserve its historical behavior. Before v1.12,
 offsets 56–63 are reserved and readers expose an empty XREF path. A v1.12
 writer retains the path stored by the DWG—relative, Windows drive, UNC or
 POSIX—without converting it to the current machine's path syntax. The host
 resolves that portable source string and never rewrites the original drawing.
+Writers set bit 2 whenever LibreDWG identifies the block as an XREF or retains
+an explicit path containing a separator or `.dwg` suffix. The bounded path
+check recovers LibreDWG revisions that omit `blkisxref` without promoting bare
+ordinary-block metadata such as a name or application marker. The v1.21
+compatibility path also normalizes a record that has bit 4 and a non-empty path
+but lacks bit 2. Version 1.22+ readers preserve the explicit XREF, loaded and
+resolved state without that legacy inference.
+The LibreDWG writer converts the raw BLOCK_HEADER Loaded Bit before writing
+these semantic flags because DWG stores zero for a loaded reference. A loaded
+reference always sets both bits 7 and 8. When the raw loaded bit is set, the
+common table resolved value selects unloaded (`loaded=false`, `resolved=true`)
+or unresolved (`loaded=false`, `resolved=false`). Consumers test resolved
+before loaded so the latter combination remains unresolved rather than being
+misreported as an intentional unload.
 
 ## Shared block-instance records
 
@@ -375,7 +447,7 @@ Each kind-22 record is 336 bytes:
 | 280 | `i16` | line-spacing style |
 | 282 | `i16` | generation flags |
 | 284 | `i16` | attribute field length |
-| 286 | `i16` | embedded-MTEXT type |
+| 286 | `i16` | attribute text type: 0 legacy, 1 single-line, 2 multiline ATTRIB, 4 multiline ATTDEF |
 | 288 | `i32` | line count |
 | 292 | `i32` | column type |
 | 296 | `i32` | column count |
@@ -386,7 +458,7 @@ Each kind-22 record is 336 bytes:
 | 328 | `u64` | column-height count |
 
 Text flag bits are 0 alignment point present, 1 rectangle height present, 2
-annotative, 3 multiline, 4 position locked and 5 really locked. Column flag
+annotative, 3 multiline (attribute type 2 or 4), 4 position locked and 5 really locked. Column flag
 bits are 0 automatic height and 1 reversed flow. Kind 23 is a packed `f64`
 pool; every offset/count pair is range-checked.
 
@@ -395,20 +467,22 @@ invisible, 1 constant, 2 verification required and 3 preset. A nonconstant
 ATTDEF inside a block is a value template and is replaced by the inserted
 block's ATTRIB record; it is not itself a visible text occurrence.
 
-### MTEXT annotation contexts
+### Text annotation contexts
 
-Scene Cache v1.19+ preserves the bounded `MTEXTOBJECTCONTEXTDATA` records
-attached to MTEXT entities. Each kind-56 record is 160 bytes:
+Scene Cache v1.19+ preserves bounded `MTEXTOBJECTCONTEXTDATA` records attached
+to MTEXT entities. Version 1.23 also preserves bounded
+`TEXTOBJECTCONTEXTDATA` and `MTEXTATTRIBUTEOBJECTCONTEXTDATA` records attached
+to TEXT, ATTDEF and ATTRIB entities. Each kind-56 record is 160 bytes:
 
 | Offset | Type | Field |
 | ---: | --- | --- |
-| 0 | `u64` | owning kind-22 MTEXT entity handle |
+| 0 | `u64` | owning kind-22 text entity handle |
 | 8 | `f64` | annotation scale, drawing units per paper unit |
-| 16 | `u32` | flags: bit 0 default, bit 1 automatic height, bit 2 reversed flow |
-| 20 | `i32` | attachment, 1–9 |
+| 16 | `u32` | flags: bit 0 default, bit 1 automatic height, bit 2 reversed flow, bit 3 single-line text representation |
+| 20 | `i32` | MTEXT attachment 1–9, or TEXT horizontal alignment 0–5 |
 | 24 | `f64[3]` | representation insertion point |
-| 48 | `f64[3]` | representation X-axis direction |
-| 72 | `f64` | rectangle height |
+| 48 | `f64[3]` | MTEXT X-axis direction, or TEXT alignment point |
+| 72 | `f64` | MTEXT rectangle height, or TEXT rotation |
 | 80 | `f64` | rectangle width |
 | 88 | `f64` | extents width |
 | 96 | `f64` | extents height |
@@ -423,8 +497,9 @@ attached to MTEXT entities. Each kind-56 record is 160 bytes:
 Kind 57 is a packed `f64` pool. A context contains at most 64 column heights;
 the full cache is capped at 262,144 contexts and 1,048,576 context column
 heights. The reader requires finite coordinates and dimensions, positive
-annotation scales, valid MTEXT owners, contiguous pool ranges and at most one
-default context per entity.
+annotation scales, a matching MTEXT or single-line-text owner, contiguous pool
+ranges and at most one default context per entity. TEXT-family records require
+zero column and extent fields and cannot reference the kind-57 pool.
 
 The unchanged 272-byte kind-51 viewport record stores its exact annotation
 scale as an `f64` at offset 264. Zero means the source scale was unavailable;
@@ -433,11 +508,44 @@ ratio. Paper/model roots without a selected layout viewport use annotation
 scale zero. For a model viewport, the renderer selects only a context whose
 scale matches the viewport annotation scale. The raw kind-22 values represent
 the default context and are left unchanged for that context. A non-default
-match overrides its placement, direction, attachment, extents and column
-metadata; its text height is the raw height multiplied by the target/default
-annotation-scale ratio. If no context matches, the renderer keeps the default
-representation, matching the default all-annotation-scales-visible behavior
-without inventing geometry.
+MTEXT match overrides its placement, direction, attachment, extents and column
+metadata. A single-line-text match overrides insertion/alignment points,
+rotation and horizontal alignment. In both cases text height is the raw height
+multiplied by the target/default annotation-scale ratio. If no context matches,
+the renderer keeps the default representation only when ANNOALLVISIBLE is
+enabled; otherwise it hides the annotative occurrence without inventing
+geometry.
+
+### Exact-curve linetype scales
+
+Scene Cache v1.23 kind 61 contains one 16-byte record for every ARC, CIRCLE,
+ELLIPSE, SPLINE, normalized polyline header, XLINE and RAY. Offset 0 is the
+nonzero `u64` entity handle and offset 8 is its finite positive `f64` entity
+linetype scale. The section must cover the exact curve and construction-line
+sources one-to-one with unique handles.
+The high-zoom refinement path divides saved cumulative pattern distances by
+this scale before combining them with global, model/layout and viewport
+linetype scaling. Version 1.21–1.22 caches use the historical implicit value 1
+because they did not preserve this field.
+
+### Construction lines
+
+Scene Cache v1.23 kind 62 contains one 80-byte record for every XLINE and RAY:
+
+| Offset | Type | Field |
+| ---: | --- | --- |
+| 0 | `u8[32]` | shared primitive prefix |
+| 32 | `f64[3]` | finite source WCS point |
+| 56 | `f64[3]` | finite nonzero projected WCS direction |
+
+Shared-prefix flag bit 1 discriminates RAY from XLINE; all other bits retain
+their shared meaning. The canonical reader rejects unknown common flags,
+duplicate or zero handles and non-finite/projected-zero direction vectors. The
+coarse GPU line is only a bounded first-frame placeholder. High-zoom refinement
+clips the exact infinite line or half-line to the current camera and each
+transformed INSERT and XCLIP occurrence, then replaces the placeholder using
+the same handle and draw-order identity. This avoids baking an arbitrary
+drawing-extents segment that disappears after a pan or at high zoom.
 
 ### Viewport layer overrides
 
@@ -543,11 +651,17 @@ records:
 | 160 | `f64` | gradient tint |
 | 168 | `u64` | first kind-36 seed point |
 | 176 | `u64` | seed-point count |
-| 184 | `i32` | source gradient reserved value |
+| 184 | `u32` | encoded per-HATCH background color, or zero |
 | 188 | `u32` | source pattern-definition-line count |
 
 HATCH flag bits are 0 solid, 1 associative, 2 double, 3 gradient, 4
-single-color gradient and 5 truncated.
+single-color gradient, 5 truncated and 6 per-HATCH background color present.
+The background color is recovered from the de facto
+`HATCHBACKGROUNDCOLOR` application-data record (DXF group 1071), encoded as
+the standard Scene Cache TrueColor value with the HATCH transparency. Pattern
+backgrounds use the same bounded rings as the foreground pattern and are
+drawn first. A missing, malformed or differently named application-data
+record never invents a background.
 
 ### HATCH loop and value pools
 
@@ -606,8 +720,9 @@ invalid skipped definitions.
 
 The Webview starts this work only after the first line frame. A dedicated
 worker range-reads the seven HATCH sections, applies normal/outer/ignore ring
-nesting, triangulates solid and gradient fills, and retains the packed source
-and block-instance graph for viewport pattern requests. Pattern definitions
+nesting, triangulates solid and gradient fills plus qualified pattern
+backgrounds, and retains the packed source and block-instance graph for
+viewport pattern requests. Pattern definitions
 are clipped first to nested HATCH rings and then to the union of visible
 model/block-instance viewport intervals. The worker transfers only final
 local-origin GPU buffers. Pattern regeneration is debounced by 160 ms and
@@ -868,7 +983,28 @@ PNG before entering the SHA-256-deduplicated raster cache. No source content is
 uploaded or interpreted as HTML. If an OLE frame has no supported preview, its
 placement remains visible as a crossed placeholder instead of disappearing.
 
-## Viewport and LOD GPU lines
+## Layout, viewport and LOD GPU lines
+
+Scene Cache v1.24+ kind 50 retains the fixed 256-byte layout record introduced
+in v1.16. Offset 54 is a `u16` per-layout ANNOALLVISIBLE value: 0 is off and 1
+is on. Values above 1 are invalid and readers fail closed. The Model record
+mirrors the saved model-space value; each paper-layout record is decoded from
+AutoCAD's `AcadAnnoAV` LAYOUT application data. Versions 1.21–1.23 require
+offset 54 to be zero and expose no per-layout override, so the Viewer falls
+back to the drawing-wide value only for those legacy caches. A v1.24+
+writer uses AutoCAD's documented initial value 1 when a paper layout has no
+`AcadAnnoAV` data; absence is not serialized as an explicit off state.
+
+The remaining kind-50 fields and every kind-51 viewport field retain their
+v1.23 layout, including viewport annotation scale, frozen-layer ranges and
+clip-boundary references.
+
+The kind-51 group-68 status/order field is transient for an inactive paper
+layout: AutoCAD reports every viewport in that layout as not on until the
+layout becomes current. The Viewer therefore uses positive values only for
+stack ordering. Persistent display suppression comes from viewport status bit
+`0x20000`; a zero group-68 value without that bit does not hide a viewport when
+the user selects its layout.
 
 LINE and normalized polyline segments are emitted as interleaved, GPU-ready
 line vertices. Scene Cache v1.3 also emits bounded first-pass chords for ARC,
@@ -978,7 +1114,7 @@ generated artifacts and must not be committed.
 
 ## LibreDWG qualification writer
 
-The selected LibreDWG adapter writes a valid v1.21 cache
+The selected LibreDWG adapter writes a valid v1.26 cache
 to measure the direct object-to-cache boundary. It preserves layer/block UTF-8
 names and source records for LINE, ARC, CIRCLE, INSERT/MINSERT,
 LWPOLYLINE/2D/3D POLYLINE, ELLIPSE and SPLINE, including the four SPLINE value
@@ -990,8 +1126,11 @@ Circular curves use the same 16-segments-per-revolution limit; SPLINE
 evaluation and malformed-input fallback use the 256-segments-per-entity limit.
 It also writes the seven bounded HATCH source/fill/pattern sections and the
 POINT/SOLID/3DFACE/WIPEOUT source sections, including `PDMODE`, `PDSIZE`,
-`FILLMODE`, invisible face edges, exact WIPEOUT clip vertices and the global
-frame setting, normalized draw-order tables and entries, bounded INSERT/XREF
+`FILLMODE`, invisible face edges, exact WIPEOUT clip vertices and saved
+ATTMODE/FRAME-family, QTEXTMODE/SPLFRAME/DISPSILH/XREFOVERRIDE and
+VISRETAIN/IMAGEQUALITY/DISPSILHBLOCKS
+presentation settings, normalized draw-order tables and
+entries, bounded INSERT/XREF
 `SPATIAL_FILTER` boundaries, and IMAGE/IMAGEDEF paths, placement bases and
 clip vertices, MTEXT annotation contexts and exact viewport annotation scales.
 It also preserves sparse viewport layer color, transparency, linetype and
@@ -1005,9 +1144,11 @@ WIPEOUT frames in a one-shot worker, triangulates solid and gradient HATCH
 rings, and regenerates clipped HATCH pattern strokes in the persistent worker.
 Bounded draw-order composition expands and renders safe WIPEOUT masks, with an
 explicit frame/source fallback when its caps or validity checks fail. All
-omitted logical entities, unresolved DIMENSION blocks, skipped paths and safety
+omitted logical entities, unresolved DIMENSION blocks, unsupported
+underlay/proxy/3D families, invalid supported sources, skipped paths and safety
 caps are exposed in the conversion report rather than silently treated as
-supported.
+supported. The six `coverage.deferred_reasons` counters exactly partition
+`coverage.deferred_entities`.
 
 It also emits bounded classic LEADER polylines/arrows, MULTILEADER geometry,
 XLINE display chords, layout viewport frames and OLE2FRAME boundaries. An OLE
@@ -1018,7 +1159,7 @@ This qualification writer keeps the 4 MiB overview and 512 KiB detail
 limits and uses disk-backed group-local XY Morton ordering for detail batches.
 When the extension requests progressive publication, the writer emits the
 flagged overview-only sidecar before that detail sort, then continues to the
-full v1.21 cache.
+full v1.26 cache.
 LibreDWG is the selected primary engine path. The remaining unsupported source
 families and exact CAD text-layout fidelity must be closed before that path is
 release-ready.

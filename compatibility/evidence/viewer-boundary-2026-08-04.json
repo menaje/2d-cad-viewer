@@ -3,7 +3,7 @@
   "status": "passed-viewer-owned-boundary",
   "asOf": "2026-08-04",
   "scope": {
-    "repository": "menaje/dwg-viewer",
+    "repository": "menaje/2d-cad-viewer",
     "externalConsumerQualification": "consumer-owned-not-executed",
     "deploymentPerformed": false
   },

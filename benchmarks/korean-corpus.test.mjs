@@ -157,7 +157,7 @@ test("validates bounded metadata and resolves paths without publishing them", ()
   );
   assert.equal(
     manifest.cases[0].inputPath,
-    "/private/corpus/private-1.dwg",
+    path.resolve("/private/corpus", "private-1.dwg"),
   );
   assert.deepEqual(manifest.cases[0].encodings, [
     "cp949",

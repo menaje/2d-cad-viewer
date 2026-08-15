@@ -97,6 +97,7 @@ export class ViewportInteraction {
       },
     );
     this.externalDetailStreamers = new Map();
+    this.detailStreamingPaused = false;
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => {
       this.scheduleRender({ interactive: false });
@@ -131,6 +132,7 @@ export class ViewportInteraction {
         if (event.button !== 0) {
           return;
         }
+        this.pauseDetailStreaming();
         this.flushViewCommit();
         if (this.windowZoomEnabled) {
           event.preventDefault();
@@ -232,6 +234,7 @@ export class ViewportInteraction {
                     ? "cancelled"
                     : "too-small",
               });
+              this.scheduleDetail(0);
             }
             return;
           }
@@ -501,6 +504,9 @@ export class ViewportInteraction {
     this.externalDetailStreamers.set(id, streamer);
     streamer.setRenderCamera(this.camera.view());
     streamer.setReviewEnabled(this.reviewEnabled);
+    if (this.detailStreamingPaused) {
+      streamer.pause();
+    }
     this.scheduleDetail(0);
     return streamer;
   }
@@ -519,6 +525,28 @@ export class ViewportInteraction {
     for (const streamer of this.externalDetailStreamers.values()) {
       streamer.setRenderCamera(camera, renderOptions);
     }
+  }
+
+  pauseDetailStreaming() {
+    if (this.detailStreamingPaused) {
+      return false;
+    }
+    this.detailStreamingPaused = true;
+    this.detailStreamer.pause();
+    for (const streamer of this.externalDetailStreamers.values()) {
+      streamer.pause();
+    }
+    return true;
+  }
+
+  resumeDetailStreaming(camera, options) {
+    const wasPaused = this.detailStreamingPaused;
+    this.detailStreamingPaused = false;
+    this.detailStreamer.resume(camera, options);
+    for (const streamer of this.externalDetailStreamers.values()) {
+      streamer.resume(camera, options);
+    }
+    return wasPaused;
   }
 
   cancelScheduledRender() {
@@ -559,6 +587,7 @@ export class ViewportInteraction {
   }
 
   scheduleDetail(delay = DETAIL_DEBOUNCE_MS) {
+    this.pauseDetailStreaming();
     if (this.detailTimer !== null) {
       clearTimeout(this.detailTimer);
     }
@@ -571,18 +600,11 @@ export class ViewportInteraction {
         );
         const enabled = this.camera.zoom >= this.detailZoomThreshold;
         this.syncDetailRenderCamera(camera);
-        this.detailStreamer.update(camera, {
+        this.resumeDetailStreaming(camera, {
           enabled,
           redraw: false,
           emit: false,
         });
-        for (const streamer of this.externalDetailStreamers.values()) {
-          streamer.update(camera, {
-            enabled,
-            redraw: false,
-            emit: false,
-          });
-        }
         this.lastRender = this.rendererController.redraw(camera);
         this.syncDetailRenderCamera(this.lastRender.camera);
         this.emit(this.detailSnapshot());
@@ -617,6 +639,9 @@ export class ViewportInteraction {
         (total, value) => total + value.loading,
         0,
       ),
+      paused:
+        this.detailStreamingPaused ||
+        snapshots.some((value) => value.paused),
       cache: Object.freeze({
         entries: snapshots.reduce(
           (total, value) => total + value.cache.entries,
@@ -629,6 +654,62 @@ export class ViewportInteraction {
       }),
       render: this.lastRender,
       error: snapshots.find((value) => value.error)?.error ?? null,
+      metrics: Object.freeze({
+        interactionPauses: snapshots.reduce(
+          (total, value) =>
+            total + value.metrics.interactionPauses,
+          0,
+        ),
+        interactionResumes: snapshots.reduce(
+          (total, value) =>
+            total + value.metrics.interactionResumes,
+          0,
+        ),
+        coalescedUpdates: snapshots.reduce(
+          (total, value) =>
+            total + value.metrics.coalescedUpdates,
+          0,
+        ),
+        loadStarts: snapshots.reduce(
+          (total, value) => total + value.metrics.loadStarts,
+          0,
+        ),
+        interactionLoadStarts: snapshots.reduce(
+          (total, value) =>
+            total + value.metrics.interactionLoadStarts,
+          0,
+        ),
+        cancellationRequests: snapshots.reduce(
+          (total, value) =>
+            total + value.metrics.cancellationRequests,
+          0,
+        ),
+        staleCompletions: snapshots.reduce(
+          (total, value) =>
+            total + value.metrics.staleCompletions,
+          0,
+        ),
+        staleMounts: snapshots.reduce(
+          (total, value) => total + value.metrics.staleMounts,
+          0,
+        ),
+        gpuUploads: snapshots.reduce(
+          (total, value) => total + value.metrics.gpuUploads,
+          0,
+        ),
+        settledUpdates: snapshots.reduce(
+          (total, value) =>
+            total + value.metrics.settledUpdates,
+          0,
+        ),
+        settledDetailLatencyMs: Math.max(
+          0,
+          ...snapshots.map(
+            (value) =>
+              value.metrics.settledDetailLatencyMs ?? 0,
+          ),
+        ),
+      }),
     });
   }
 
@@ -662,6 +743,7 @@ export class ViewportInteraction {
       streamer.dispose();
     }
     this.externalDetailStreamers.clear();
+    this.detailStreamingPaused = true;
     this.rendererController.dispose();
     this.reviewEnabled = false;
     this.windowDrag = null;

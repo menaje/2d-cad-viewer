@@ -24,7 +24,10 @@ interface TextFixtureRow {
   sourceFlags?: number;
 }
 
-function fixtureCache(rows: readonly TextFixtureRow[]): Buffer {
+function fixtureCache(
+  rows: readonly TextFixtureRow[],
+  versionMinor = 24,
+): Buffer {
   const encoder = new TextEncoder();
   const encodedRows = rows.map((row) =>
     [row.value, row.tag ?? "", row.prompt ?? ""].map((value) =>
@@ -71,7 +74,7 @@ function fixtureCache(rows: readonly TextFixtureRow[]): Buffer {
   const cache = Buffer.alloc(fileSize);
   cache.set([68, 87, 71, 83, 67, 78, 49, 0], 0);
   cache.writeUInt16LE(1, 8);
-  cache.writeUInt16LE(21, 10);
+  cache.writeUInt16LE(versionMinor, 10);
   cache.writeUInt32LE(HEADER_SIZE, 12);
   cache.writeUInt32LE(1, 16);
   cache.writeUInt32LE(DIRECTORY_ENTRY_SIZE, 20);
@@ -361,11 +364,25 @@ test("validates regular expression syntax and rejects risky patterns", () => {
   );
 });
 
-test("rejects a text index from an unsupported cache revision or header flag", async () => {
+test("accepts the cache window and rejects an unsupported revision or header flag", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "dwg-text-index-version-"),
   );
   try {
+    const previousRevisionPath = path.join(directory, "previous.cache");
+    await writeFile(previousRevisionPath, fixtureCache([], 21));
+    assert.deepEqual(
+      await readSceneCacheTextIndex(previousRevisionPath),
+      [],
+    );
+
+    const futureRevisionPath = path.join(directory, "future.cache");
+    await writeFile(futureRevisionPath, fixtureCache([], 27));
+    await assert.rejects(
+      readSceneCacheTextIndex(futureRevisionPath),
+      /version is unsupported/u,
+    );
+
     const cache = fixtureCache([]);
     const oldRevisionPath = path.join(directory, "old.cache");
     cache.writeUInt16LE(17, 10);
@@ -376,7 +393,7 @@ test("rejects a text index from an unsupported cache revision or header flag", a
     );
 
     const flaggedPath = path.join(directory, "flagged.cache");
-    cache.writeUInt16LE(21, 10);
+    cache.writeUInt16LE(26, 10);
     cache.writeUInt32LE(2, 24);
     await writeFile(flaggedPath, cache);
     await assert.rejects(

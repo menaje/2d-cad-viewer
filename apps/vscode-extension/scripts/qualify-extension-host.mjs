@@ -493,6 +493,8 @@ function qualificationSettings(progressivePreview) {
     "update.mode": "none",
     "window.restoreWindows": "none",
     "dwgViewer.progressivePreview": progressivePreview,
+    "dwgViewer.sceneCacheMode": "session",
+    "dwgViewer.sceneCacheMaximumSizeGiB": 5,
     "workbench.editorAssociations": {
       "*.dwg": "dwgViewer.dwg",
       "*.DWG": "dwgViewer.dwg",
@@ -506,7 +508,7 @@ export async function writeQualificationDriver(driverDirectory) {
   await mkdir(driverDirectory, { recursive: true, mode: 0o700 });
   const manifest = {
     name: "dwg-viewer-qualification-driver",
-    displayName: "DWG Viewer Qualification Driver",
+    displayName: "2D CAD Viewer Qualification Driver",
     version: "0.0.0",
     publisher: "local",
     private: true,
@@ -538,7 +540,7 @@ exports.activate = async function activate() {
       "menaje.dwg-viewer-vscode",
     );
     if (!extension) {
-      throw new Error("packaged DWG Viewer extension is unavailable");
+      throw new Error("packaged 2D CAD Viewer extension is unavailable");
     }
     await extension.activate();
     return;

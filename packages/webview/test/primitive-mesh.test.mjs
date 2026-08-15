@@ -174,6 +174,45 @@ test("builds instanced POINT markers and FILLMODE-aware SOLID meshes", async () 
   assert.equal(result.solidOutlines.batches[0].blockIndex, 1);
 });
 
+test("keeps small SOLID fills at large world coordinates", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const origin = [2_000_000, -2_000_000, 0];
+  const translated = {
+    ...source,
+    solids: entityTable([
+      {
+        handle: 0x1234n,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        fillMode: true,
+        corners: [
+          origin,
+          [origin[0] + 1.5, origin[1], 0],
+          [origin[0] + 1.5, origin[1] + 1.5, 0],
+          [origin[0], origin[1] + 1.5, 0],
+        ],
+        normal: [0, 0, 1],
+        thickness: 0,
+      },
+    ]),
+  };
+
+  const result = buildPrimitiveMeshes(
+    translated,
+    metadata.blocks,
+    instanceGraph,
+  );
+
+  assert.equal(result.metrics.sourceSolids, 1);
+  assert.equal(result.metrics.renderedFilledSolids, 1);
+  assert.equal(result.metrics.skippedDegenerateTriangles, 0);
+  assert.equal(result.metrics.solidFillVertices, 6);
+});
+
 test("renders visible 3DFACE edges in the shared surface buffer", async () => {
   const { source, metadata, instanceGraph } = await primitiveFixture();
   const result = buildPrimitiveMeshes(
@@ -203,6 +242,21 @@ test("renders visible 3DFACE edges in the shared surface buffer", async () => {
         batch.blockIndex === 1,
     ),
   );
+});
+
+test("restores 3DFACE invisible edges when SPLFRAME is enabled", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const result = buildPrimitiveMeshes(
+    source,
+    metadata.blocks,
+    instanceGraph,
+    { splineFrame: true },
+  );
+
+  assert.equal(result.metrics.renderedFaceEdges, 19);
+  assert.equal(result.metrics.hiddenFaceEdges, 0);
+  assert.equal(result.metrics.restoredFaceEdges, 4);
+  assert.equal(result.metrics.faceOutlineVertices, 38);
 });
 
 test("renders WIPEOUT polygon, rectangular and full-image frames without masks", async () => {
@@ -442,6 +496,164 @@ test("renders constant-width polylines as filled geometry and replaces their cen
     ],
     [0, 10, -1, 1],
   );
+});
+
+test("preserves scaled linetype phase across filled wide polylines", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const handle = 0x12345678an;
+  const polylineSource = {
+    ...withPolyline(
+      source,
+      {
+        handle,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 3,
+        firstVertex: 0,
+        vertexCount: 2,
+        polylineKind: 1,
+        polylineFlags: 0,
+        elevation: 0,
+        normal: [0, 0, 1],
+        defaultStartWidth: 0,
+        defaultEndWidth: 0,
+        constantWidth: 2,
+      },
+      [
+        {
+          position: [0, 0, 0],
+          bulge: 0,
+          startWidth: 0,
+          endWidth: 0,
+          flags: 0,
+        },
+        {
+          position: [10, 0, 0],
+          bulge: 0,
+          startWidth: 0,
+          endWidth: 0,
+          flags: 0,
+        },
+      ],
+    ),
+    curveLinetypeScales: new Map([[handle, 0.4]]),
+  };
+
+  const result = buildPrimitiveMeshes(
+    polylineSource,
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: true },
+  );
+  const ranges = result.solidFills.identityRanges.data;
+  let firstVertex = -1;
+  for (let index = 0; index < ranges.length; index += 4) {
+    const rangeHandle =
+      BigInt(ranges[index + 2]) |
+      (BigInt(ranges[index + 3]) << 32n);
+    if (rangeHandle === handle) {
+      firstVertex = ranges[index];
+      break;
+    }
+  }
+  assert.notEqual(firstVertex, -1);
+  const view = new DataView(result.solidFills.vertices.buffer);
+  const patternDistances = Array.from({ length: 6 }, (_, index) =>
+    view.getFloat32(
+      (firstVertex + index) * PRIMITIVE_VERTEX_STRIDE + 24,
+      true,
+    ),
+  );
+  const style = view.getUint32(
+    firstVertex * PRIMITIVE_VERTEX_STRIDE + 28,
+    true,
+  );
+
+  assert.deepEqual(patternDistances, [0, 0, 25, 0, 25, 25]);
+  assert.notEqual(style & (1 << 4), 0);
+  assert.equal((style >>> 5) & 2047, 3);
+});
+
+test("keeps the native hairline for a sub-precision polyline width", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const handle = 905n;
+  const result = buildPrimitiveMeshes(
+    withPolyline(
+      source,
+      {
+        handle,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        firstVertex: 0,
+        vertexCount: 2,
+        polylineKind: 1,
+        polylineFlags: 0,
+        elevation: 0,
+        normal: [0, 0, 1],
+        defaultStartWidth: 0,
+        defaultEndWidth: 0,
+        constantWidth: 1 / 32_000,
+      },
+      [
+        { position: [0, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+        { position: [10, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+      ],
+    ),
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: true },
+  );
+
+  assert.equal(result.metrics.renderedFilledWidePolylines, 1);
+  assert.equal(primitivePointsForHandle(result.solidFills, handle).length, 6);
+  assert.equal(result.lineReplacementHandleWords.length, 0);
+});
+
+test("ignores degenerate edge widths when preserving a native hairline", async () => {
+  const { source, metadata, instanceGraph } = await primitiveFixture();
+  const handle = 906n;
+  const result = buildPrimitiveMeshes(
+    withPolyline(
+      source,
+      {
+        handle,
+        ownerHandle: metadata.blocks[0].handle,
+        layerIndex: 0,
+        color: (2 << 30) | 7,
+        lineWeight: 25,
+        commonFlags: 0,
+        linetypeCode: 0,
+        firstVertex: 0,
+        vertexCount: 3,
+        polylineKind: 1,
+        polylineFlags: 0,
+        elevation: 0,
+        normal: [0, 0, 1],
+        defaultStartWidth: 0,
+        defaultEndWidth: 0,
+        constantWidth: 0,
+      },
+      [
+        { position: [0, 0, 0], bulge: 0, startWidth: 2, endWidth: 2, flags: 0 },
+        { position: [0, 0, 0], bulge: 0, startWidth: 1 / 32_000, endWidth: 1 / 32_000, flags: 0 },
+        { position: [10, 0, 0], bulge: 0, startWidth: 0, endWidth: 0, flags: 0 },
+      ],
+    ),
+    metadata.blocks,
+    instanceGraph,
+    { fillMode: true },
+  );
+
+  assert.equal(result.metrics.renderedFilledWidePolylines, 1);
+  assert.equal(primitivePointsForHandle(result.solidFills, handle).length, 6);
+  assert.equal(result.lineReplacementHandleWords.length, 0);
 });
 
 test("renders wide polyline boundaries when FILLMODE is disabled", async () => {

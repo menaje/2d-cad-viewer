@@ -3,18 +3,13 @@ import { WHEEL_ZOOM_RATE } from "@menaje/viewer-core/interaction";
 const PINCH_ZOOM_RATE = 0.008;
 const DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY = 1;
 const DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY = 1.5;
+const SCROLL_INPUT_MODE_MOUSE_ZOOM = "mouse-zoom";
+const SCROLL_INPUT_MODE_TRACKPAD_PAN = "trackpad-pan";
+const DEFAULT_SCROLL_INPUT_MODE = SCROLL_INPUT_MODE_MOUSE_ZOOM;
 const MINIMUM_ZOOM_SENSITIVITY = 0.25;
 const MAXIMUM_ZOOM_SENSITIVITY = 4;
-const WHEEL_GESTURE_IDLE_MS = 180;
 const WHEEL_LINE_PIXELS = 32;
 const WHEEL_PAGE_PIXELS = 240;
-/*
- * Chromium's physical mouse-wheel step is 120 on Windows/Linux and 53 on
- * macOS-family platforms.  Keep the boundary below the smaller step while
- * the gesture latch below preserves an already-started trackpad pan through
- * larger momentum deltas.
- */
-const TRACKPAD_PIXEL_DELTA_THRESHOLD = 40;
 const MAXIMUM_TRACKPAD_PAN_PIXELS = 160;
 const MAXIMUM_WHEEL_ZOOM_PIXELS = 240;
 const MAXIMUM_PINCH_ZOOM_PIXELS = 60;
@@ -49,6 +44,12 @@ export function normalizeZoomSensitivity(
   );
 }
 
+export function normalizeScrollInputMode(value) {
+  return value === SCROLL_INPUT_MODE_TRACKPAD_PAN
+    ? SCROLL_INPUT_MODE_TRACKPAD_PAN
+    : SCROLL_INPUT_MODE_MOUSE_ZOOM;
+}
+
 function finiteWheelDelta(value) {
   return Number.isFinite(value) ? value : 0;
 }
@@ -67,10 +68,6 @@ function pixelDelta(value, mode, viewportExtent) {
   return value;
 }
 
-function hasFractionalDelta(value) {
-  return Math.abs(value - Math.round(value)) > 0.01;
-}
-
 function boundedPanDelta(value) {
   const bounded = clamp(
     value,
@@ -80,20 +77,12 @@ function boundedPanDelta(value) {
   return bounded === 0 ? 0 : -bounded;
 }
 
-function continuesWheelGesture(previous, timeStamp) {
-  return (
-    previous !== null &&
-    timeStamp >= previous.timeStamp &&
-    timeStamp - previous.timeStamp <= WHEEL_GESTURE_IDLE_MS
-  );
-}
-
 export function normalizeWheelGesture(
   event,
-  previous = null,
   {
     width = 1,
     height = 1,
+    scrollInputMode = DEFAULT_SCROLL_INPUT_MODE,
     mouseWheelZoomSensitivity =
       DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
     trackpadPinchZoomSensitivity =
@@ -110,24 +99,15 @@ export function normalizeWheelGesture(
   const timeStamp = Number.isFinite(event.timeStamp)
     ? event.timeStamp
     : 0;
-  const continues = continuesWheelGesture(previous, timeStamp);
+  const resolvedScrollInputMode = normalizeScrollInputMode(
+    scrollInputMode,
+  );
 
   let kind;
   if (event.ctrlKey && mode === 0) {
     kind = "pinch";
-  } else if (mode !== 0) {
-    kind = "wheel-zoom";
-  } else if (Math.abs(rawDeltaX) > 0.01) {
-    kind = "trackpad-pan";
   } else if (
-    continues &&
-    (previous.kind === "trackpad-pan" ||
-      previous.kind === "wheel-zoom")
-  ) {
-    kind = previous.kind;
-  } else if (
-    Math.abs(rawDeltaY) < TRACKPAD_PIXEL_DELTA_THRESHOLD ||
-    hasFractionalDelta(rawDeltaY)
+    resolvedScrollInputMode === SCROLL_INPUT_MODE_TRACKPAD_PAN
   ) {
     kind = "trackpad-pan";
   } else {
@@ -173,6 +153,7 @@ export function normalizeWheelGesture(
 }
 
 export {
+  DEFAULT_SCROLL_INPUT_MODE,
   DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
   MAXIMUM_ZOOM_SENSITIVITY,
@@ -181,8 +162,8 @@ export {
   MAXIMUM_WHEEL_ZOOM_PIXELS,
   MINIMUM_ZOOM_SENSITIVITY,
   PINCH_ZOOM_RATE,
-  TRACKPAD_PIXEL_DELTA_THRESHOLD,
-  WHEEL_GESTURE_IDLE_MS,
+  SCROLL_INPUT_MODE_MOUSE_ZOOM,
+  SCROLL_INPUT_MODE_TRACKPAD_PAN,
   WHEEL_LINE_PIXELS,
   WHEEL_PAGE_PIXELS,
 };

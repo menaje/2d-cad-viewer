@@ -1,13 +1,166 @@
-import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.21.0";
+import { GpuLineBatchKind } from "./scene-cache.mjs?v=1.26.0";
 import {
   multiplyMat4,
   transformPoint,
 } from "./math.mjs";
-import { createClipNode } from "./instance-graph.mjs?v=1.21.0";
+import { createClipNode } from "./instance-graph.mjs?v=1.26.0";
+import {
+  initialLayerVisibility,
+  InstanceVisibilityBuilder,
+  refreshInstanceVisibility,
+} from "./instance-visibility.mjs";
 
 const MATRIX_VALUES = 16;
 const MODEL_BLOCK_INDEX = -1;
 const NO_LAYER_OVERRIDE = 0xffffffff;
+const BY_LAYER_ENTITY_COLOR = 1 << 24;
+const LINE_WEIGHT_MASK = 0x1f;
+const LINETYPE_MASK = 0x7ff << 5;
+const BY_LAYER_LINE_WEIGHT_CODE = 2;
+const EXTERNAL_DEPENDENT_LAYER_FLAG = 1 << 4;
+const RELOADABLE_LAYER_FLAGS = 0x0f;
+
+function visibilityGraphIsValid(graph) {
+  return (
+    graph?.parentIds instanceof Uint32Array &&
+    graph.layerIndices instanceof Uint32Array &&
+    graph.layerInherited instanceof Uint8Array &&
+    graph.visibilityRows instanceof Uint32Array &&
+    graph.sourceVisible instanceof Uint8Array
+  );
+}
+
+function mappedLayerIndex(layerIndex, layerMap) {
+  if (
+    layerIndex === NO_LAYER_OVERRIDE ||
+    !(layerMap instanceof Uint32Array) ||
+    layerMap.length === 0
+  ) {
+    return layerIndex;
+  }
+  return layerIndex < layerMap.length ? layerMap[layerIndex] : layerMap[0];
+}
+
+function externalVisibilityComposer(
+  parentInstanceGraph,
+  childInstanceGraph,
+  outer,
+  layerMap,
+) {
+  const builder = new InstanceVisibilityBuilder();
+  const parentGraph = parentInstanceGraph.visibilityGraph;
+  const childGraph = childInstanceGraph.visibilityGraph;
+  const parentNodesValid = visibilityGraphIsValid(parentGraph);
+  const childNodesValid = visibilityGraphIsValid(childGraph);
+  const importedParentNodes = new Map([[0, 0]]);
+  const composedChildNodes = new Array(outer.count);
+
+  const parentNode = (sourceNodeId) => {
+    if (
+      !parentNodesValid ||
+      !Number.isInteger(sourceNodeId) ||
+      sourceNodeId <= 0
+    ) {
+      return 0;
+    }
+    const cached = importedParentNodes.get(sourceNodeId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (sourceNodeId >= parentGraph.parentIds.length) {
+      return 0;
+    }
+    const parentId = parentNode(parentGraph.parentIds[sourceNodeId]);
+    const nodeId = builder.add(
+      parentId,
+      parentGraph.layerIndices[sourceNodeId],
+      parentGraph.visibilityRows[sourceNodeId],
+      {
+        inherited: parentGraph.layerInherited[sourceNodeId] !== 0,
+        visible: parentGraph.sourceVisible[sourceNodeId] !== 0,
+      },
+    );
+    importedParentNodes.set(sourceNodeId, nodeId);
+    return nodeId;
+  };
+
+  const outerNode = (outerIndex) =>
+    parentNode(outer.visibilityNodeIds?.[outerIndex] ?? 0);
+
+  const nodeFor = (outerIndex, childNodeId) => {
+    const outerRootNode = outerNode(outerIndex);
+    if (
+      !childNodesValid ||
+      !Number.isInteger(childNodeId) ||
+      childNodeId <= 0
+    ) {
+      return outerRootNode;
+    }
+    const nodesForOuter =
+      composedChildNodes[outerIndex] ??=
+        new Map();
+    const cached = nodesForOuter.get(childNodeId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (childNodeId >= childGraph.parentIds.length) {
+      return outerRootNode;
+    }
+    const childParentId = childGraph.parentIds[childNodeId];
+    const parentId =
+      childParentId === 0
+        ? outerRootNode
+        : nodeFor(outerIndex, childParentId);
+    const inheritsLayer = childGraph.layerInherited[childNodeId] !== 0;
+    const outerLayer =
+      outer.layerIndices?.[outerIndex] ?? NO_LAYER_OVERRIDE;
+    const childLayer = childGraph.layerIndices[childNodeId];
+    const layerIndex =
+      inheritsLayer && outerLayer !== NO_LAYER_OVERRIDE
+        ? outerLayer
+        : mappedLayerIndex(childLayer, layerMap);
+    const nodeId = builder.add(
+      parentId,
+      layerIndex,
+      outer.visibilityRows?.[outerIndex] ?? 0,
+      {
+        inherited:
+          inheritsLayer &&
+          outer.layerInherited?.[outerIndex] === 1,
+        visible: childGraph.sourceVisible[childNodeId] !== 0,
+      },
+    );
+    nodesForOuter.set(childNodeId, nodeId);
+    return nodeId;
+  };
+
+  return Object.freeze({
+    parentNode,
+    nodeFor,
+    finish: () => builder.finish(),
+  });
+}
+
+export function blockExternalReferenceIsDiscoverable(block) {
+  return Boolean(block && (block.flags & (1 << 2)) !== 0);
+}
+
+export function blockExternalReferenceSavedState(block) {
+  if (!blockExternalReferenceIsDiscoverable(block)) {
+    return "not-xref";
+  }
+  if (block.xrefResolved === false) {
+    return "unresolved";
+  }
+  if (block.xrefLoaded === false) {
+    return "unloaded";
+  }
+  return "enabled";
+}
+
+export function blockExternalReferenceIsDisplayable(block) {
+  return blockExternalReferenceSavedState(block) === "enabled";
+}
 
 function layerKey(value) {
   return String(value ?? "")
@@ -15,7 +168,11 @@ function layerKey(value) {
     .toLocaleLowerCase("en-US");
 }
 
-export function buildExternalLinetypeMap(rootLinetypes, childLinetypes) {
+export function buildExternalLinetypeMap(
+  rootLinetypes,
+  childLinetypes,
+  prefix = "",
+) {
   const rootByName = new Map(
     (rootLinetypes ?? []).map((linetype) => [
       layerKey(linetype.name),
@@ -27,12 +184,20 @@ export function buildExternalLinetypeMap(rootLinetypes, childLinetypes) {
     maximumChildCode = Math.max(maximumChildCode, linetype.code);
   }
   const output = new Uint16Array(maximumChildCode + 1);
+  const normalizedPrefix = String(prefix ?? "")
+    .normalize("NFC")
+    .replace(/\|+$/u, "");
   output.fill(2);
   output[0] = 0;
   output[1] = 1;
   output[2] = 2;
   for (const linetype of childLinetypes ?? []) {
-    const rootCode = rootByName.get(layerKey(linetype.name));
+    const rootCode =
+      (normalizedPrefix
+        ? rootByName.get(
+            layerKey(`${normalizedPrefix}|${linetype.name}`),
+          )
+        : undefined) ?? rootByName.get(layerKey(linetype.name));
     output[linetype.code] =
       Number.isInteger(rootCode) && rootCode >= 0 ? rootCode : 2;
   }
@@ -63,6 +228,8 @@ function composeCollections(
   layerMap,
   linetypeMap,
   maskBucketScale,
+  externalReferenceOverrides,
+  visibilityNodeFor,
 ) {
   const count = outer.count * inner.count;
   const data = new Float64Array(count * MATRIX_VALUES);
@@ -81,6 +248,7 @@ function composeCollections(
   const linetypeCodes = new Uint16Array(count);
   const linetypeInherited = new Uint8Array(count);
   const visibilityRows = new Uint32Array(count);
+  const visibilityNodeIds = new Uint32Array(count);
   const handles = new BigUint64Array(count);
   const clipCache = new Map();
   let cursor = 0;
@@ -137,6 +305,19 @@ function composeCollections(
                   transformPoint(outerMatrix, point),
                 ),
                 node.inverted,
+                {
+                  frame: node.frame,
+                  color: node.color,
+                  layerIndex:
+                    layerMap instanceof Uint32Array &&
+                    node.layerIndex < layerMap.length
+                      ? layerMap[node.layerIndex]
+                      : node.layerIndex,
+                  visibilityNodeId: visibilityNodeFor(
+                    outerIndex,
+                    node.visibilityNodeId ?? 0,
+                  ),
+                },
               ),
             );
             composedClipId = id;
@@ -151,9 +332,11 @@ function composeCollections(
         outer.colors?.[outerIndex] ?? ((2 << 30) | 7);
       const outerLayer =
         outer.layerIndices?.[outerIndex] ?? NO_LAYER_OVERRIDE;
-      colors[cursor] = inheritsColor
+      colors[cursor] = externalReferenceOverrides
         ? outerColor
-        : inner.colors?.[innerIndex] ?? outerColor;
+        : inheritsColor
+          ? outerColor
+          : inner.colors?.[innerIndex] ?? outerColor;
       const innerLayer =
         inner.layerIndices?.[innerIndex] ?? NO_LAYER_OVERRIDE;
       layerIndices[cursor] = inheritsLayer
@@ -165,18 +348,24 @@ function composeCollections(
               ? layerMap[innerLayer]
               : layerMap[0]
             : innerLayer;
-      colorInherited[cursor] =
-        inheritsColor && outer.colorInherited?.[outerIndex] === 1 ? 1 : 0;
+      colorInherited[cursor] = externalReferenceOverrides
+        ? outer.colorInherited?.[outerIndex] ?? 0
+        : inheritsColor && outer.colorInherited?.[outerIndex] === 1
+          ? 1
+          : 0;
       layerInherited[cursor] =
         inheritsLayer && outer.layerInherited?.[outerIndex] === 1 ? 1 : 0;
       const inheritsOpacity =
         inner.opacityInherited?.[innerIndex] === 1;
-      opacities[cursor] = inheritsOpacity
+      opacities[cursor] = externalReferenceOverrides
         ? outer.opacities?.[outerIndex] ?? 1
-        : inner.opacities?.[innerIndex] ?? 1;
-      opacityInherited[cursor] =
-        inheritsOpacity &&
-        outer.opacityInherited?.[outerIndex] === 1
+        : inheritsOpacity
+          ? outer.opacities?.[outerIndex] ?? 1
+          : inner.opacities?.[innerIndex] ?? 1;
+      opacityInherited[cursor] = externalReferenceOverrides
+        ? outer.opacityInherited?.[outerIndex] ?? 0
+        : inheritsOpacity &&
+            outer.opacityInherited?.[outerIndex] === 1
           ? 1
           : 0;
       const inheritsLineWeight =
@@ -203,6 +392,10 @@ function composeCollections(
           : 0;
       visibilityRows[cursor] =
         outer.visibilityRows?.[outerIndex] ?? 0;
+      visibilityNodeIds[cursor] = visibilityNodeFor(
+        outerIndex,
+        inner.visibilityNodeIds?.[innerIndex] ?? 0,
+      );
       handles[cursor] =
         inner.handles?.[innerIndex] ??
         outer.handles?.[outerIndex] ??
@@ -210,7 +403,7 @@ function composeCollections(
       cursor += 1;
     }
   }
-  return Object.freeze({
+  return {
     data,
     measurementData,
     coordinateSpaceIds,
@@ -227,10 +420,11 @@ function composeCollections(
     linetypeCodes,
     linetypeInherited,
     visibilityRows,
+    visibilityNodeIds,
     handles,
     count,
     length: count,
-  });
+  };
 }
 
 export function composeExternalInstanceGraph(
@@ -241,6 +435,7 @@ export function composeExternalInstanceGraph(
   layerMap = null,
   linetypeMap = null,
   maskBucketScale = 1,
+  externalReferenceOverrides = false,
 ) {
   if (
     !Number.isFinite(maskBucketScale) ||
@@ -250,6 +445,9 @@ export function composeExternalInstanceGraph(
     throw new RangeError(
       "external draw-order scale must be greater than zero and at most one",
     );
+  }
+  if (typeof externalReferenceOverrides !== "boolean") {
+    throw new TypeError("XREFOVERRIDE must be a boolean");
   }
   const outer = parentInstanceGraph.instancesByBlock.get(parentBlockIndex);
   if (!outer || outer.count === 0) {
@@ -287,6 +485,10 @@ export function composeExternalInstanceGraph(
           parentInstanceGraph.linetypeScalesByVisibilityRow,
         annotationScalesByVisibilityRow:
           parentInstanceGraph.annotationScalesByVisibilityRow,
+        lineWeightWorldScale:
+          parentInstanceGraph.lineWeightWorldScale ?? 0,
+        annotationAllVisible:
+          childInstanceGraph.annotationAllVisible ?? true,
         layerColorsByVisibilityRow:
           parentInstanceGraph.layerColorsByVisibilityRow,
         layerLineWeightsByVisibilityRow:
@@ -294,13 +496,28 @@ export function composeExternalInstanceGraph(
         layerLinetypesByVisibilityRow:
           parentInstanceGraph.layerLinetypesByVisibilityRow,
         instanceCount: 0,
+        localClipNodeStartIndex: 0,
         maskBucketScale,
       }),
     });
   }
+  const visibilityComposer = externalVisibilityComposer(
+    parentInstanceGraph,
+    childInstanceGraph,
+    outer,
+    layerMap,
+  );
   const instancesByBlock = new Map();
-  const clipNodes = [...(parentInstanceGraph.clipNodes ?? [])];
-  const modelInstances = Object.freeze({
+  const clipNodes = (parentInstanceGraph.clipNodes ?? []).map((node) =>
+    Object.freeze({
+      ...node,
+      visibilityNodeId: visibilityComposer.parentNode(
+        node.visibilityNodeId ?? 0,
+      ),
+    }),
+  );
+  const localClipNodeStartIndex = clipNodes.length;
+  let modelInstances = {
     data: outer.data,
     measurementData: outer.measurementData ?? outer.data,
     coordinateSpaceIds:
@@ -331,11 +548,15 @@ export function composeExternalInstanceGraph(
       outer.linetypeInherited ?? new Uint8Array(outer.count),
     visibilityRows:
       outer.visibilityRows ?? new Uint32Array(outer.count),
+    visibilityNodeIds: Uint32Array.from(
+      { length: outer.count },
+      (_, outerIndex) => visibilityComposer.nodeFor(outerIndex, 0),
+    ),
     handles:
       outer.handles ?? new BigUint64Array(outer.count),
     count: outer.count,
     length: outer.count,
-  });
+  };
   instancesByBlock.set(
     MODEL_BLOCK_INDEX,
     modelInstances,
@@ -353,10 +574,27 @@ export function composeExternalInstanceGraph(
       layerMap,
       linetypeMap,
       maskBucketScale,
+      externalReferenceOverrides,
+      visibilityComposer.nodeFor,
     );
     instancesByBlock.set(blockIndex, composed);
     instanceCount += composed.count;
   }
+  const visibilityGraph = visibilityComposer.finish();
+  const finalizedCollections = new Map();
+  for (const [blockIndex, instances] of instancesByBlock) {
+    let finalized = finalizedCollections.get(instances);
+    if (!finalized) {
+      finalized = Object.freeze({
+        ...instances,
+        visibilityValues: visibilityGraph.values,
+        visibilitySelection: { instanceIndices: null },
+      });
+      finalizedCollections.set(instances, finalized);
+    }
+    instancesByBlock.set(blockIndex, finalized);
+  }
+  modelInstances = instancesByBlock.get(MODEL_BLOCK_INDEX);
   const traversalRoots = [];
   for (let outerIndex = 0; outerIndex < outer.count; outerIndex += 1) {
     for (const root of childInstanceGraph.traversalRoots ?? []) {
@@ -405,7 +643,7 @@ export function composeExternalInstanceGraph(
       (batch) =>
         (instancesByBlock.get(batch.blockIndex)?.count ?? 0) > 0,
     );
-  return Object.freeze({
+  const result = Object.freeze({
     batches: Object.freeze(batches),
     instanceGraph: Object.freeze({
       instancesByBlock,
@@ -431,7 +669,9 @@ export function composeExternalInstanceGraph(
         childInstanceGraph.modelBlockIndices ?? [],
       ),
       rootInstances: modelInstances,
+      visibilityGraph,
       clipNodes: Object.freeze(clipNodes),
+      localClipNodeStartIndex,
       layerVisibilityRows:
         parentInstanceGraph.layerVisibilityRows,
       paperToModelScalesByVisibilityRow:
@@ -440,6 +680,10 @@ export function composeExternalInstanceGraph(
         parentInstanceGraph.linetypeScalesByVisibilityRow,
       annotationScalesByVisibilityRow:
         parentInstanceGraph.annotationScalesByVisibilityRow,
+      lineWeightWorldScale:
+        parentInstanceGraph.lineWeightWorldScale ?? 0,
+      annotationAllVisible:
+        childInstanceGraph.annotationAllVisible ?? true,
       layerColorsByVisibilityRow:
         parentInstanceGraph.layerColorsByVisibilityRow,
       layerLineWeightsByVisibilityRow:
@@ -456,6 +700,11 @@ export function composeExternalInstanceGraph(
         parentInstanceGraph.layerZeroIndex ?? NO_LAYER_OVERRIDE,
     }),
   });
+  refreshInstanceVisibility(
+    result.instanceGraph,
+    initialLayerVisibility(parentInstanceGraph.layers),
+  );
+  return result;
 }
 
 export function buildExternalLayerMap(
@@ -489,6 +738,201 @@ export function buildExternalLayerMap(
       );
     }),
   );
+}
+
+export function synchronizeExternalLayerProperties(
+  displayLayers,
+  childLayers,
+  prefix,
+) {
+  if (
+    !Array.isArray(displayLayers) ||
+    !Array.isArray(childLayers) ||
+    typeof prefix !== "string" ||
+    prefix.length === 0 ||
+    prefix.length > 1_024
+  ) {
+    throw new TypeError("external layer synchronization input is invalid");
+  }
+  const normalizedPrefix = prefix
+    .normalize("NFC")
+    .replace(/\|+$/u, "");
+  if (!normalizedPrefix) {
+    throw new TypeError("external layer prefix is empty");
+  }
+  const rootByName = new Map(
+    displayLayers.map((layer, index) => [layerKey(layer?.name), index]),
+  );
+  const next = [...displayLayers];
+  const changed = [];
+  for (const child of childLayers) {
+    const childName = String(child?.name ?? "");
+    if (!childName) {
+      continue;
+    }
+    const targetIndex = rootByName.get(
+      layerKey(`${normalizedPrefix}|${childName}`),
+    );
+    if (targetIndex === undefined) {
+      continue;
+    }
+    const current = next[targetIndex];
+    if (
+      !current ||
+      ((current.flags ?? 0) & EXTERNAL_DEPENDENT_LAYER_FLAG) === 0
+    ) {
+      continue;
+    }
+    const color = child.color >>> 0;
+    const flags =
+      (((current.flags ?? 0) & ~RELOADABLE_LAYER_FLAGS) |
+        ((child.flags ?? 0) & RELOADABLE_LAYER_FLAGS)) >>>
+      0;
+    const lineWeight =
+      Number.isInteger(child.lineWeight) &&
+      child.lineWeight >= -3 &&
+      child.lineWeight <= 211
+        ? child.lineWeight
+        : -3;
+    const linetype = String(child.linetype ?? "Continuous");
+    if (
+      current.color === color &&
+      current.flags === flags &&
+      current.lineWeight === lineWeight &&
+      current.linetype === linetype
+    ) {
+      continue;
+    }
+    next[targetIndex] = Object.freeze({
+      ...current,
+      color,
+      flags,
+      lineWeight,
+      linetype,
+    });
+    changed.push(targetIndex);
+  }
+  return Object.freeze({
+    layers: Object.freeze(next),
+    changedIndices: Uint32Array.from(changed),
+  });
+}
+
+export function applyDisplayLayerProperties(
+  instanceGraph,
+  baselineLayers,
+  displayLayers,
+  linetypes,
+) {
+  if (
+    !instanceGraph ||
+    !Array.isArray(baselineLayers) ||
+    !Array.isArray(displayLayers) ||
+    baselineLayers.length !== displayLayers.length ||
+    !Array.isArray(instanceGraph.layerVisibilityRows) ||
+    !Array.isArray(instanceGraph.layerColorsByVisibilityRow) ||
+    !Array.isArray(instanceGraph.layerLineWeightsByVisibilityRow) ||
+    !Array.isArray(instanceGraph.layerLinetypesByVisibilityRow)
+  ) {
+    throw new TypeError("display layer presentation input is inconsistent");
+  }
+  const codeByName = new Map([
+    ["bylayer", 0],
+    ["byblock", 1],
+    ["continuous", 2],
+  ]);
+  for (const linetype of linetypes ?? []) {
+    if (
+      Number.isInteger(linetype?.code) &&
+      linetype.code >= 0 &&
+      linetype.code <= 2047
+    ) {
+      codeByName.set(layerKey(linetype.name), linetype.code);
+    }
+  }
+  const linetypeCodeForLayer = (layer) => {
+    const name = String(layer?.linetype ?? "Continuous");
+    const exact = codeByName.get(layerKey(name));
+    if (exact !== undefined) {
+      return exact;
+    }
+    const layerName = String(layer?.name ?? "");
+    const separator = layerName.lastIndexOf("|");
+    return separator > 0
+      ? codeByName.get(
+          layerKey(`${layerName.slice(0, separator)}|${name}`),
+        ) ?? 2
+      : 2;
+  };
+  const layerLinetypeCodes = Uint16Array.from(
+    displayLayers,
+    linetypeCodeForLayer,
+  );
+  const baselineLinetypeCodes = Uint16Array.from(
+    baselineLayers,
+    linetypeCodeForLayer,
+  );
+  const colors = instanceGraph.layerColorsByVisibilityRow.map(
+    (source, rowIndex) => {
+      if (
+        !(source instanceof Uint32Array) ||
+        source.length !== displayLayers.length
+      ) {
+        throw new TypeError(`layer color row ${rowIndex} is invalid`);
+      }
+      const row = new Uint32Array(source);
+      for (let index = 0; index < row.length; index += 1) {
+        if (row[index] === (baselineLayers[index].color >>> 0)) {
+          row[index] = displayLayers[index].color >>> 0;
+        }
+      }
+      return row;
+    },
+  );
+  const lineWeights = instanceGraph.layerLineWeightsByVisibilityRow.map(
+    (source, rowIndex) => {
+      if (
+        !(source instanceof Int16Array) ||
+        source.length !== displayLayers.length
+      ) {
+        throw new TypeError(`layer lineweight row ${rowIndex} is invalid`);
+      }
+      const row = new Int16Array(source);
+      for (let index = 0; index < row.length; index += 1) {
+        if (row[index] === baselineLayers[index].lineWeight) {
+          row[index] = displayLayers[index].lineWeight;
+        }
+      }
+      return row;
+    },
+  );
+  const linetypeRows = instanceGraph.layerLinetypesByVisibilityRow.map(
+    (source, rowIndex) => {
+      if (
+        !(source instanceof Uint16Array) ||
+        source.length !== displayLayers.length
+      ) {
+        throw new TypeError(`layer linetype row ${rowIndex} is invalid`);
+      }
+      const row = new Uint16Array(source);
+      for (let index = 0; index < row.length; index += 1) {
+        if (row[index] === baselineLinetypeCodes[index]) {
+          row[index] = layerLinetypeCodes[index];
+        }
+      }
+      return row;
+    },
+  );
+  return Object.freeze({
+    instanceGraph: Object.freeze({
+      ...instanceGraph,
+      layerColorsByVisibilityRow: Object.freeze(colors),
+      layerLineWeightsByVisibilityRow: Object.freeze(lineWeights),
+      layerLinetypesByVisibilityRow: Object.freeze(linetypeRows),
+      layerLinetypeCodes,
+    }),
+    layerLinetypeCodes,
+  });
 }
 
 export function remapLineVertexLayers(buffer, layerMap, stride = 36) {
@@ -547,10 +991,49 @@ export function remapLineVertexLinetypes(
   return buffer;
 }
 
+export function overrideExternalVertexProperties(
+  buffer,
+  {
+    stride = 36,
+    lineStyle = true,
+    secondaryColor = false,
+  } = {},
+) {
+  if (
+    !(buffer instanceof ArrayBuffer) ||
+    !Number.isInteger(stride) ||
+    stride < 32 ||
+    buffer.byteLength % stride !== 0 ||
+    typeof lineStyle !== "boolean" ||
+    typeof secondaryColor !== "boolean"
+  ) {
+    throw new TypeError("external ByLayer override input is inconsistent");
+  }
+  const view = new DataView(buffer);
+  for (let offset = 0; offset < buffer.byteLength; offset += stride) {
+    view.setUint32(offset + 16, BY_LAYER_ENTITY_COLOR, true);
+    if (secondaryColor) {
+      view.setUint32(offset + 20, BY_LAYER_ENTITY_COLOR, true);
+    }
+    if (lineStyle) {
+      const style = view.getUint32(offset + 28, true);
+      view.setUint32(
+        offset + 28,
+        ((style & ~(LINE_WEIGHT_MASK | LINETYPE_MASK)) |
+          BY_LAYER_LINE_WEIGHT_CODE) >>>
+          0,
+        true,
+      );
+    }
+  }
+  return buffer;
+}
+
 export function remapTextEntityLayers(
   textEntities,
   layerMap,
   linetypeMap = null,
+  { externalReferenceOverrides = false } = {},
 ) {
   if (
     !textEntities ||
@@ -576,7 +1059,15 @@ export function remapTextEntityLayers(
     readDisplayRecord(index, target) {
       const record = textEntities.readDisplayRecord(index, target);
       record.layerIndex = mapLayer(record.layerIndex);
-      record.linetypeCode = mapLinetype(record.linetypeCode);
+      record.color = externalReferenceOverrides
+        ? BY_LAYER_ENTITY_COLOR
+        : record.color;
+      record.lineWeight = externalReferenceOverrides
+        ? -1
+        : record.lineWeight;
+      record.linetypeCode = externalReferenceOverrides
+        ? 0
+        : mapLinetype(record.linetypeCode);
       return record;
     },
     readValue(index) {
@@ -589,7 +1080,15 @@ export function remapTextEntityLayers(
       return Object.freeze({
         ...record,
         layerIndex: mapLayer(record.layerIndex),
-        linetypeCode: mapLinetype(record.linetypeCode),
+        color: externalReferenceOverrides
+          ? BY_LAYER_ENTITY_COLOR
+          : record.color,
+        lineWeight: externalReferenceOverrides
+          ? -1
+          : record.lineWeight,
+        linetypeCode: externalReferenceOverrides
+          ? 0
+          : mapLinetype(record.linetypeCode),
       });
     },
   });

@@ -25,7 +25,7 @@ export const MPL_2_0_SHA256 =
 const PACKAGE_SCHEMA = "dwg-libredwg-package/1";
 const DOCTOR_SCHEMA = "dwg-engine-doctor/1";
 const ADAPTER_PROTOCOL = "dwg-engine-adapter/1";
-const CACHE_SCHEMA = "dwg-scene-cache/1.21";
+const CACHE_SCHEMA = "dwg-scene-cache/1.26";
 const MAX_ADAPTER_BYTES = 128 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 128 * 1024 * 1024;
 const MAX_DEPENDENCY_AUDIT_BYTES = 32 * 1024 * 1024;
@@ -37,9 +37,14 @@ const ADAPTER_SOURCE_FILES = Object.freeze([
   "README.md",
   "build.sh",
   "prepare.sh",
+  "scripts/prepare-common.sh",
+  "scripts/platform/linux.sh",
+  "scripts/platform/macos.sh",
+  "scripts/platform/windows.sh",
   "package.mjs",
   "libredwg-acds-sab.patch",
   "libredwg-r2007-high-compression.patch",
+  "libredwg-seekable-stdin.patch",
   "libredwg_adapter.c",
   "libredwg_scene_cache.c",
   "libredwg_scene_cache.h",
@@ -348,10 +353,10 @@ async function extractGplLicense(sourceArchive) {
 
 function packageReadme(report, executableName) {
   return Buffer.from(
-    `DWG Viewer LibreDWG adapter ${LIBREDWG_VERSION}
+    `2D CAD Viewer LibreDWG adapter ${LIBREDWG_VERSION}
 
 This is the separately distributed GPL-enabled conversion engine for the
-MPL-licensed DWG Viewer VS Code extension. It runs locally and does not upload
+MPL-licensed 2D CAD Viewer VS Code extension. It runs locally and does not upload
 drawings.
 
 Target: ${report.target.platform}-${report.target.architecture}
@@ -361,7 +366,7 @@ Scene Cache: ${CACHE_SCHEMA}
 Install
 -------
 1. Keep this extracted folder in a location you control.
-2. In VS Code, run "DWG Viewer: LibreDWG 변환기 선택".
+2. In VS Code, run "2D CAD Viewer: LibreDWG 변환기 선택".
 3. Select bin/${executableName}. The extension runs a bounded self-diagnosis
    before saving the setting.
 
@@ -376,9 +381,9 @@ License and source
 The linked adapter executable is distributed under GPL-3.0-or-later.
 LICENSES/GPL-3.0-or-later.txt contains the license. Complete source used for
 this package is included under source/, including the checksum-pinned
-LibreDWG ${LIBREDWG_VERSION} release archive and the DWG Viewer adapter source.
+LibreDWG ${LIBREDWG_VERSION} release archive and the 2D CAD Viewer adapter source.
 LICENSES/MPL-2.0.txt contains the unmodified MPL 2.0 text applicable to that
-adapter source, and NOTICE contains the DWG Viewer copyright notice.
+adapter source, and NOTICE contains the 2D CAD Viewer copyright notice.
 
 Rebuild from the included source
 --------------------------------
@@ -398,7 +403,7 @@ before building and does not install a system package.
 
 function thirdPartyNotices() {
   return Buffer.from(
-    `DWG Viewer LibreDWG adapter notices
+    `2D CAD Viewer LibreDWG adapter notices
 
 GNU LibreDWG ${LIBREDWG_VERSION}
   Project: https://www.gnu.org/software/libredwg/
@@ -406,14 +411,14 @@ GNU LibreDWG ${LIBREDWG_VERSION}
   License: GPL-3.0-or-later
   Exact source: source/libredwg-${LIBREDWG_VERSION}.tar.xz
 
-DWG Viewer adapter source
-  Project: https://github.com/menaje/dwg-viewer
+2D CAD Viewer adapter source
+  Project: https://github.com/menaje/2d-cad-viewer
   Source: source/dwg-viewer/adapters/libredwg/
   Source license: source/dwg-viewer/LICENSE
   Project notice: source/dwg-viewer/NOTICE
 
 The adapter executable is statically linked with LibreDWG and is conveyed
-under GPL-3.0-or-later. The MPL-2.0 DWG Viewer VSIX is a separate artifact and
+under GPL-3.0-or-later. The MPL-2.0 2D CAD Viewer VSIX is a separate artifact and
 is not included in this archive. This notice records the project's engineering
 distribution policy and is not legal advice.
 `,

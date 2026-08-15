@@ -7,11 +7,15 @@ import {
   WHEEL_ZOOM_RATE,
 } from "@menaje/viewer-core/interaction";
 import {
+  DEFAULT_SCROLL_INPUT_MODE,
   DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
   MAXIMUM_ZOOM_SENSITIVITY,
   MINIMUM_ZOOM_SENSITIVITY,
+  SCROLL_INPUT_MODE_MOUSE_ZOOM,
+  SCROLL_INPUT_MODE_TRACKPAD_PAN,
   normalizeWheelGesture,
+  normalizeScrollInputMode,
   normalizeZoomSensitivity,
 } from "./wheel-gesture.mjs";
 
@@ -22,6 +26,7 @@ function createDetailStreamer(...arguments_) {
 export class ViewportInteraction extends CoreViewportInteraction {
   constructor(scene, canvas, options = {}) {
     const {
+      scrollInputMode = DEFAULT_SCROLL_INPUT_MODE,
       mouseWheelZoomSensitivity =
         DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
       trackpadPinchZoomSensitivity =
@@ -49,7 +54,7 @@ export class ViewportInteraction extends CoreViewportInteraction {
 
     interaction = this;
     this.wheelAbortController = wheelAbortController;
-    this.wheelGesture = null;
+    this.setScrollInputMode(scrollInputMode);
     this.setZoomSensitivity({
       mouseWheelZoomSensitivity,
       trackpadPinchZoomSensitivity,
@@ -70,18 +75,17 @@ export class ViewportInteraction extends CoreViewportInteraction {
       this.trackpadPinchZoomSensitivity ??
         DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
     );
-    if (
-      nextMouse !== this.mouseWheelZoomSensitivity ||
-      nextTrackpad !== this.trackpadPinchZoomSensitivity
-    ) {
-      this.wheelGesture = null;
-    }
     this.mouseWheelZoomSensitivity = nextMouse;
     this.trackpadPinchZoomSensitivity = nextTrackpad;
     return Object.freeze({
       mouseWheelZoomSensitivity: nextMouse,
       trackpadPinchZoomSensitivity: nextTrackpad,
     });
+  }
+
+  setScrollInputMode(mode) {
+    this.scrollInputMode = normalizeScrollInputMode(mode);
+    return this.scrollInputMode;
   }
 
   handleWheel(event) {
@@ -92,17 +96,16 @@ export class ViewportInteraction extends CoreViewportInteraction {
     const height = Math.max(this.canvas.clientHeight, 1);
     const gesture = normalizeWheelGesture(
       event,
-      this.wheelGesture,
       {
         width,
         height,
+        scrollInputMode: this.scrollInputMode,
         mouseWheelZoomSensitivity:
           this.mouseWheelZoomSensitivity,
         trackpadPinchZoomSensitivity:
           this.trackpadPinchZoomSensitivity,
       },
     );
-    this.wheelGesture = gesture;
 
     if (gesture.kind === "trackpad-pan") {
       if (gesture.panX === 0 && gesture.panY === 0) {
@@ -140,19 +143,22 @@ export class ViewportInteraction extends CoreViewportInteraction {
 
   dispose() {
     this.wheelAbortController?.abort();
-    this.wheelGesture = null;
     super.dispose();
   }
 }
 
 export {
+  DEFAULT_SCROLL_INPUT_MODE,
   DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
   DETAIL_DEBOUNCE_MS,
   DETAIL_ZOOM_THRESHOLD,
   MAXIMUM_ZOOM_SENSITIVITY,
   MINIMUM_ZOOM_SENSITIVITY,
+  SCROLL_INPUT_MODE_MOUSE_ZOOM,
+  SCROLL_INPUT_MODE_TRACKPAD_PAN,
   VIEW_COMMIT_DEBOUNCE_MS,
   WHEEL_ZOOM_RATE,
+  normalizeScrollInputMode,
   normalizeZoomSensitivity,
 };

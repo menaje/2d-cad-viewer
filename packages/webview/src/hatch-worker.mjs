@@ -77,7 +77,10 @@ self.addEventListener("message", async (event) => {
         patternState.blocks,
         patternInstanceGraph(patternState, event.data.view),
         event.data.camera,
-        { maskOrder: patternState.maskOrder },
+        {
+          maskOrder: patternState.maskOrder,
+          fillMode: patternState.fillMode,
+        },
       );
       self.postMessage(
         { requestId, ok: true, pattern },
@@ -97,6 +100,7 @@ self.addEventListener("message", async (event) => {
       hostSource,
       camera,
       maskOrder = null,
+      fillMode = true,
       view = null,
       externalInstanceGraph = null,
     } = event.data;
@@ -137,6 +141,7 @@ self.addEventListener("message", async (event) => {
     });
     const fill = buildHatchFillMesh(source, blocks, modelInstanceGraph, {
       maskOrder,
+      fillMode,
     });
     patternState = {
       source,
@@ -150,6 +155,7 @@ self.addEventListener("message", async (event) => {
       instanceGraphKey: "model",
       instanceGraph: modelInstanceGraph,
       maskOrder,
+      fillMode,
       external: Boolean(externalInstanceGraph),
     };
     const instanceGraph = patternInstanceGraph(patternState, view);
@@ -159,7 +165,7 @@ self.addEventListener("message", async (event) => {
           blocks,
           instanceGraph,
           camera,
-          { maskOrder },
+          { maskOrder, fillMode },
         )
       : null;
     const transfers = [

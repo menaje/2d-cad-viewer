@@ -74,6 +74,8 @@ function fakeCanvas() {
         values,
         alpha: this.globalAlpha,
         filter: this.filter,
+        imageSmoothingEnabled: this.imageSmoothingEnabled,
+        imageSmoothingQuality: this.imageSmoothingQuality,
         transform: calls.transforms.at(-1),
       });
     },
@@ -423,6 +425,8 @@ test("draws IMAGE placement with clipping and CAD display adjustments", () => {
   assert.deepEqual(drawn.transform, [100, 0, 0, 100, 200, 150]);
   assert.equal(drawn.alpha, 0.9);
   assert.equal(drawn.filter, "brightness(0.8) contrast(1.2)");
+  assert.equal(drawn.imageSmoothingEnabled, true);
+  assert.equal(drawn.imageSmoothingQuality, "high");
 
   overlay.setRenderDeltaState({
     invalidatedDependencyIds: [
@@ -440,6 +444,93 @@ test("draws IMAGE placement with clipping and CAD display adjustments", () => {
   assert.equal(canvas.calls.drawImage.length, 2);
 });
 
+test("uses the saved IMAGEQUALITY draft sampling mode", () => {
+  const canvas = fakeCanvas();
+  const bitmap = { width: 4, height: 3 };
+  const overlay = new CanvasRasterImageOverlay(canvas, {
+    imageEntities: imageTable(visibleRecord),
+    blocks: [{ index: 0, handle: 100n }],
+    layers: [{ name: "0" }],
+    instanceGraph: modelGraph(),
+    cacheId: "root",
+    rasterImageQualityHigh: false,
+    assetStore: {
+      lookup: () => ({
+        status: "ready",
+        bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+      }),
+      snapshot: () => ({}),
+    },
+  });
+
+  const metrics = overlay.redraw(camera, [true]);
+
+  assert.equal(metrics.rasterImageQuality, "draft");
+  assert.equal(canvas.calls.drawImage[0].imageSmoothingEnabled, false);
+  assert.equal(canvas.calls.drawImage[0].imageSmoothingQuality, "low");
+});
+
+test("uses XREF layer transparency instead of an explicit IMAGE transparency", () => {
+  const bitmap = { width: 4, height: 3 };
+  const makeOverlay = (canvas, externalReferenceOverrides) =>
+    new CanvasRasterImageOverlay(canvas, {
+      imageEntities: imageTable({
+        ...visibleRecord,
+        color: ((2 << 30) | (33 << 24) | 7) >>> 0,
+      }),
+      blocks: [{ index: 0, handle: 100n }],
+      layers: [{ name: "0", color: ((2 << 30) | 7) >>> 0 }],
+      instanceGraph: modelGraph(),
+      cacheId: "xref",
+      externalReferenceOverrides,
+      assetStore: {
+        lookup: () => ({
+          status: "ready",
+          bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+        }),
+        snapshot: () => ({}),
+      },
+    });
+  const nativeCanvas = fakeCanvas();
+  const overrideCanvas = fakeCanvas();
+
+  makeOverlay(nativeCanvas, false).redraw(camera, [true]);
+  makeOverlay(overrideCanvas, true).redraw(camera, [true]);
+
+  assert.ok(nativeCanvas.calls.drawImage[0].alpha < 0.5);
+  assert.equal(overrideCanvas.calls.drawImage[0].alpha, 0.9);
+});
+
+test("draws the clipped IMAGE boundary for IMAGEFRAME values 1 and 2", () => {
+  const canvas = fakeCanvas();
+  const bitmap = { width: 4, height: 3 };
+  const overlay = new CanvasRasterImageOverlay(canvas, {
+    imageEntities: imageTable(visibleRecord),
+    blocks: [{ index: 0, handle: 100n }],
+    layers: [{ name: "0", color: (2 << 30) | 7 }],
+    instanceGraph: modelGraph(),
+    cacheId: "root",
+    imageFrame: 2,
+    assetStore: {
+      lookup: () => ({
+        status: "ready",
+        bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+      }),
+      snapshot: () => ({}),
+    },
+  });
+
+  const metrics = overlay.redraw(camera, [true]);
+  assert.equal(metrics.imageFrames, 1);
+  assert.equal(canvas.calls.strokes, 1);
+});
+
 test("draws embedded OLE presentations over an opaque paper background", () => {
   const canvas = fakeCanvas();
   const bitmap = { width: 4, height: 3 };
@@ -452,6 +543,7 @@ test("draws embedded OLE presentations over an opaque paper background", () => {
     layers: [{ name: "0" }],
     instanceGraph: modelGraph(),
     cacheId: "root",
+    rasterImageQualityHigh: false,
     assetStore: {
       lookup: () => ({
         status: "ready",
@@ -476,6 +568,8 @@ test("draws embedded OLE presentations over an opaque paper background", () => {
     },
   ]);
   assert.equal(canvas.calls.drawImage.length, 1);
+  assert.equal(canvas.calls.drawImage[0].imageSmoothingEnabled, true);
+  assert.equal(canvas.calls.drawImage[0].imageSmoothingQuality, "high");
 });
 
 test("draws repeated block images in absolute display order", () => {

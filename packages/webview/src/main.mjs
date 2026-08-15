@@ -11,25 +11,34 @@ import {
 } from "@menaje/viewer-webgl";
 
 import {
+  DEFAULT_SCROLL_INPUT_MODE,
   DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  SCROLL_INPUT_MODE_MOUSE_ZOOM,
+  SCROLL_INPUT_MODE_TRACKPAD_PAN,
   ViewportInteraction,
+  normalizeScrollInputMode,
   normalizeZoomSensitivity,
-} from "./interaction.mjs?v=1.18.13";
+} from "./interaction.mjs?v=1.18.20";
 import {
+  applyDisplayLayerProperties,
   buildExternalLayerMap,
   buildExternalLinetypeMap,
+  blockExternalReferenceIsDiscoverable,
+  blockExternalReferenceSavedState,
   composeExternalInstanceGraph,
+  overrideExternalVertexProperties,
   remapLineVertexLayers,
   remapLineVertexLinetypes,
   remapTextEntityLayers,
-} from "./external-reference.mjs?v=1.21.0";
+  synchronizeExternalLayerProperties,
+} from "./external-reference.mjs?v=1.26.0";
 import {
   createVsCodeRangeSource,
   installWorkerRangeProxy,
   WORKER_RANGE_REQUEST,
 } from "./host-range-source.mjs";
-import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.21.3";
+import { applyMaskOrderToInstanceGraph } from "./instance-graph.mjs?v=1.26.0";
 import {
   buildLayerGroups,
   isolateLayerGroup,
@@ -41,6 +50,7 @@ import {
   DRAW_ORDER_SUBDIVISIONS,
 } from "./mask-order.mjs";
 import { WebviewMemoryTelemetry } from "./memory-telemetry.mjs";
+import { evaluateVisualCompletion } from "./visual-completion.mjs";
 import { normalizeInteractionRenderingMode } from "./interaction-rendering.mjs";
 import { normalizeRenderResolutionMode } from "./render-resolution.mjs";
 import {
@@ -60,6 +70,10 @@ import {
   plotStyleDiagnostics,
   resolveScreenPlotStyleEnabled,
 } from "./cad-plot-style.mjs";
+import {
+  DEFAULT_ACI_PALETTE,
+  makeBackgroundAwareAciPalette,
+} from "./cad-color.mjs";
 import {
   bytesToBase64,
   fitCameraView,
@@ -91,10 +105,10 @@ import {
   CompositeTextOverlay,
   registerLocalOutlineFont,
   unregisterLocalOutlineFont,
-} from "./text-overlay.mjs?v=1.21.0";
+} from "./text-overlay.mjs?v=1.26.0";
 import {
   loadExternalFirstFrame,
-} from "./viewer.mjs?v=1.21.3";
+} from "./viewer.mjs?v=1.26.0";
 import {
   addViewBookmark,
   CameraViewHistory,
@@ -108,7 +122,12 @@ import {
   environmentLocales,
   escapeHtmlText,
 } from "./i18n.mjs?v=1.0.0";
-import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.21.0";
+import { renderEmbeddedEmf } from "./embedded-metafile.mjs?v=1.26.0";
+import { effectiveFrameSetting } from "./frame-setting.mjs?v=1.26.0";
+import {
+  observePackagedDisplayState,
+  PACKAGED_DISPLAY_STATE_RESULT_GLOBAL,
+} from "./display-state-qualification.mjs?v=1.26.0";
 
 const standaloneQualificationParameters =
   typeof globalThis.acquireVsCodeApi === "function"
@@ -119,12 +138,50 @@ const standaloneQualificationVscodeShell =
   "vscode";
 const standaloneQualificationLocale =
   standaloneQualificationParameters?.get("qualification-locale");
+const standaloneQualificationTheme =
+  standaloneQualificationParameters?.get("qualification-theme");
+const packagedDisplayStateQualification =
+  document.body.dataset.displayStateQualification === "true";
+
+function clearPackagedDisplayStateObservation() {
+  if (packagedDisplayStateQualification) {
+    globalThis[PACKAGED_DISPLAY_STATE_RESULT_GLOBAL] = null;
+  }
+}
+
+function publishPackagedDisplayStateObservation(scene) {
+  if (!packagedDisplayStateQualification) {
+    return;
+  }
+  const match = /^([a-z0-9-]{1,80})\.cache$/u.exec(
+    activeDocumentName,
+  );
+  if (!match) {
+    return;
+  }
+  globalThis[PACKAGED_DISPLAY_STATE_RESULT_GLOBAL] = Object.freeze({
+    ...observePackagedDisplayState(scene),
+    caseId: match[1],
+  });
+}
 
 if (
   typeof standaloneQualificationLocale === "string" &&
   /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/iu.test(standaloneQualificationLocale)
 ) {
   document.documentElement.dataset.locale = standaloneQualificationLocale;
+}
+
+if (
+  standaloneQualificationTheme === "dark" ||
+  standaloneQualificationTheme === "light"
+) {
+  document.documentElement.dataset.qualificationTheme =
+    standaloneQualificationTheme;
+  document.documentElement.style.setProperty(
+    "--vscode-editor-background",
+    standaloneQualificationTheme === "light" ? "#ffffff" : "#0e1013",
+  );
 }
 
 if (standaloneQualificationVscodeShell) {
@@ -175,6 +232,10 @@ let interactionRenderingMode = normalizeInteractionRenderingMode(
   document.body.dataset.interactionRendering,
 );
 document.body.dataset.interactionRendering = interactionRenderingMode;
+let scrollInputMode = normalizeScrollInputMode(
+  document.body.dataset.scrollInputMode ?? DEFAULT_SCROLL_INPUT_MODE,
+);
+document.body.dataset.scrollInputMode = scrollInputMode;
 let zoomSensitivitySettings = Object.freeze({
   mouseWheelZoomSensitivity: normalizeZoomSensitivity(
     document.body.dataset.mouseWheelZoomSensitivity,
@@ -262,6 +323,9 @@ const viewBookmarkEmpty = document.querySelector("#view-bookmark-empty");
 const viewBookmarkList = document.querySelector("#view-bookmark-list");
 const layoutTabs = document.querySelector("#layout-tabs");
 const viewControls = [...document.querySelectorAll("[data-view-action]")];
+const trackpadModeToggle = document.querySelector(
+  "#trackpad-mode-toggle",
+);
 const layersToggle = document.querySelector("#layers-toggle");
 const layerPanel = document.querySelector("#layer-panel");
 const layerSearch = document.querySelector("#layer-search");
@@ -334,6 +398,7 @@ let externalCurveRefinementTimer;
 let externalCurveRequestRevision = 0;
 let activeMaskOrder;
 let activeRenderInstanceGraph;
+let activeDisplayLayers;
 let activeMaskStatus;
 let activeWipeoutMasksVisible = false;
 let activeViewId;
@@ -407,8 +472,153 @@ const plotStyleWaiters = new Map();
 const MAX_EXTERNAL_SOURCE_OVERVIEW_BYTES = 32 * 1024 * 1024;
 let externalSourceOverviewBytes = 0;
 let externalLoadQueue = Promise.resolve();
+let visualCompletionState;
+let visualCompletionTimer;
 const LOCAL_CACHE_FINGERPRINT_SAMPLE_BYTES = 64 * 1024;
 const MAX_DWG_SESSION_READ_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
+
+function applyScrollInputMode(value) {
+  scrollInputMode = normalizeScrollInputMode(value);
+  document.body.dataset.scrollInputMode = scrollInputMode;
+  activeInteraction?.setScrollInputMode(scrollInputMode);
+  const trackpadModeEnabled =
+    scrollInputMode === SCROLL_INPUT_MODE_TRACKPAD_PAN;
+  trackpadModeToggle?.setAttribute(
+    "aria-pressed",
+    String(trackpadModeEnabled),
+  );
+  setViewerToolMessage(
+    trackpadModeToggle,
+    trackpadModeEnabled
+      ? "toolbar.trackpadMode.on"
+      : "toolbar.trackpadMode.off",
+  );
+  if (trackpadModeToggle) {
+    trackpadModeToggle.title = t(
+      trackpadModeEnabled
+        ? "toolbar.trackpadMode.disable"
+        : "toolbar.trackpadMode.enable",
+    );
+  }
+  return scrollInputMode;
+}
+
+applyScrollInputMode(scrollInputMode);
+
+function resetVisualCompletion() {
+  if (visualCompletionTimer !== undefined) {
+    clearTimeout(visualCompletionTimer);
+    visualCompletionTimer = undefined;
+  }
+  visualCompletionState = undefined;
+}
+
+function beginVisualCompletion(revision, cacheId) {
+  resetVisualCompletion();
+  if (!vscodeApi || typeof cacheId !== "string" || cacheId.length === 0) {
+    return;
+  }
+  visualCompletionState = {
+    revision,
+    cacheId,
+    startedAt: performance.now(),
+    firstFrame: false,
+    rootText: false,
+    rootImages: false,
+    emitted: false,
+  };
+}
+
+function visualCompletionEvaluation() {
+  const state = visualCompletionState;
+  if (
+    !state ||
+    state.revision !== openRevision ||
+    state.cacheId !== activeHostCacheId ||
+    state.emitted
+  ) {
+    return undefined;
+  }
+  const viewport = activeInteraction?.snapshot();
+  return evaluateVisualCompletion({
+    firstFrame: state.firstFrame,
+    rootText: state.rootText,
+    rootImages: state.rootImages,
+    detailLoading: viewport?.detail?.loading ?? -1,
+    imageDecoding: viewport?.render?.images?.decodingImages ?? 0,
+    pendingFontRequests: pendingHostFontRequests.size,
+    pendingEmbeddedImages: pendingEmbeddedImageRequests.size,
+    // Curve refinement is a view-dependent quality upgrade and can continue
+    // long after the current drawing, references, text, and images are usable.
+    postprocessBusy: fontRefreshTimer !== undefined,
+    fonts: [...fontDiagnostics.values()],
+    references: [...xrefDiagnostics.values()],
+  });
+}
+
+function scheduleVisualCompletionCheck() {
+  const state = visualCompletionState;
+  if (
+    !state ||
+    state.emitted ||
+    visualCompletionTimer !== undefined
+  ) {
+    return;
+  }
+  visualCompletionTimer = setTimeout(() => {
+    visualCompletionTimer = undefined;
+    const evaluation = visualCompletionEvaluation();
+    if (!evaluation?.complete) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const current = visualCompletionEvaluation();
+        if (!current?.complete || visualCompletionState !== state) {
+          return;
+        }
+        state.emitted = true;
+        vscodeApi.postMessage({
+          type: "dwg-visual-complete/1",
+          cacheId: state.cacheId,
+          webviewSettleMs: Math.max(
+            0,
+            Math.round(performance.now() - state.startedAt),
+          ),
+          detailPendingCount: current.detailLoading,
+          xrefCount: current.xrefCount,
+          xrefIssueCount: current.xrefIssueCount,
+          imageCount: current.imageCount,
+          imageIssueCount: current.imageIssueCount,
+          fontCount: current.fontCount,
+          fontIssueCount: current.fontIssueCount,
+        });
+      });
+    });
+  }, 80);
+}
+
+function markVisualCompletionTask(task, revision) {
+  const state = visualCompletionState;
+  if (!state || state.revision !== revision || state.emitted) {
+    return;
+  }
+  if (task === "text") {
+    state.rootText = true;
+  } else if (task === "images") {
+    state.rootImages = true;
+  }
+  scheduleVisualCompletionCheck();
+}
+
+function markVisualCompletionFirstFrame(cacheId) {
+  const state = visualCompletionState;
+  if (!state || state.cacheId !== cacheId || state.emitted) {
+    return;
+  }
+  state.firstFrame = true;
+  scheduleVisualCompletionCheck();
+}
 
 function bytesToHex(bytes) {
   return [...bytes]
@@ -879,6 +1089,19 @@ function normalizePlotStyleName(value) {
     : "";
 }
 
+function isNamedPlotStyleName(value) {
+  return (
+    typeof value === "string" &&
+    value
+      .trim()
+      .replace(/^['"]|['"]$/gu, "")
+      .split(/[\\/]/u)
+      .at(-1)
+      ?.toLocaleLowerCase("en-US")
+      .endsWith(".stb") === true
+  );
+}
+
 function resetPlotStyleSession() {
   activePlotStyleName = "";
   activePlotStyleEnabled = false;
@@ -906,6 +1129,7 @@ function setPlotStyleUnavailable(name, state) {
       invalid: "toolbar.plotStyle.unavailable.invalid",
       missing: "toolbar.plotStyle.unavailable.missing",
       unavailable: "toolbar.plotStyle.unavailable.unavailable",
+      named: "toolbar.plotStyle.unavailable.named",
     }[state] ?? "toolbar.plotStyle.unavailable.fallback";
   const label = t(messageKey);
   const canSelect =
@@ -916,7 +1140,11 @@ function setPlotStyleUnavailable(name, state) {
   plotStyleToggle.disabled = !canSelect;
   setViewerToolMessage(
     plotStyleToggle,
-    canSelect ? "toolbar.plotStyle.select" : "toolbar.plotStyle.none",
+    canSelect
+      ? "toolbar.plotStyle.select"
+      : state === "named"
+        ? "toolbar.plotStyle.named"
+        : "toolbar.plotStyle.none",
   );
   plotStyleToggle.setAttribute("aria-pressed", "false");
   plotStyleToggle.title = `${name} · ${label}${
@@ -924,8 +1152,21 @@ function setPlotStyleUnavailable(name, state) {
   }`;
 }
 
+function currentViewportBackground({ plotPreview = false } = {}) {
+  return plotPreview
+    ? "#ffffff"
+    : getComputedStyle(dropZone).backgroundColor || "#0e1013";
+}
+
+function displayAciPalette({ plotPreview = false } = {}) {
+  return makeBackgroundAwareAciPalette(
+    currentViewportBackground({ plotPreview }),
+    DEFAULT_ACI_PALETTE,
+  );
+}
+
 function clearPlotStyleForView(scene) {
-  scene.renderer.clearPlotStyle();
+  scene.renderer.clearPlotStyle(displayAciPalette());
   activeTextComposite?.setPalette(scene.renderer.aciPalette);
   dropZone.classList.remove("plot-style-preview");
 }
@@ -936,7 +1177,10 @@ function applyPlotStyleEntry(scene, key, entry, enabled) {
   }
   try {
     if (enabled) {
-      const palette = makePlotStylePalette(entry.table);
+      const palette = makePlotStylePalette(
+        entry.table,
+        displayAciPalette({ plotPreview: true }),
+      );
       scene.renderer.setPlotStyle(
         palette,
         makePlotStyleLineWeights(entry.table),
@@ -980,6 +1224,10 @@ function configurePlotStyleForView(scene, view, revision) {
     return;
   }
   const requestedName = view.layout?.styleSheet ?? "";
+  if (isNamedPlotStyleName(requestedName)) {
+    setPlotStyleUnavailable(requestedName, "named");
+    return;
+  }
   const key = normalizePlotStyleName(requestedName);
   if (!key) {
     setPlotStyleUnavailable(t("toolbar.plotStyle.currentLayout"), "missing");
@@ -988,6 +1236,7 @@ function configurePlotStyleForView(scene, view, revision) {
   activePlotStyleName = key;
   activePlotStyleEnabled = resolveScreenPlotStyleEnabled(
     plotStylePreferences.get(key),
+    view.layout,
   );
   const cached = plotStyleTables.get(key);
   if (cached?.status === "loaded") {
@@ -1383,20 +1632,26 @@ async function captureExportPage(
   const plotStylesEnabled = renderer.plotStylesEnabled;
   const lineWeightsVisible = renderer.lineWeightsVisible;
   let plotStyleEntry = null;
-  let appliedPlotStyle = false;
   if (settings.plotStyle && view.kind === "layout") {
     plotStyleEntry = await waitForPlotStyleEntry(view, signal);
   }
   throwIfExportCancelled(signal);
   try {
+    const background =
+      settings.target === "screen" && !settings.plotStyle
+        ? currentViewportBackground()
+        : "#ffffff";
+    const exportBasePalette = makeBackgroundAwareAciPalette(
+      background,
+      DEFAULT_ACI_PALETTE,
+    );
     if (settings.plotStyle && plotStyleEntry?.status === "loaded") {
       renderer.setPlotStyle(
-        makePlotStylePalette(plotStyleEntry.table),
+        makePlotStylePalette(plotStyleEntry.table, exportBasePalette),
         makePlotStyleLineWeights(plotStyleEntry.table),
       );
       activeTextComposite?.setPalette(renderer.aciPalette);
       renderer.setLineWeightsVisible(true);
-      appliedPlotStyle = true;
     } else if (settings.plotStyle && view.kind === "layout") {
       const requested = view.layout?.styleSheet?.trim();
       if (requested) {
@@ -1407,17 +1662,13 @@ async function captureExportPage(
           }),
         );
       }
-      renderer.clearPlotStyle();
+      renderer.clearPlotStyle(exportBasePalette);
       activeTextComposite?.setPalette(renderer.aciPalette);
     } else if (!settings.plotStyle) {
-      renderer.clearPlotStyle();
+      renderer.clearPlotStyle(exportBasePalette);
       activeTextComposite?.setPalette(renderer.aciPalette);
     }
     const camera = exportCameraForView(view, page, pixels, settings);
-    const background =
-      settings.target === "screen" && !appliedPlotStyle
-        ? getComputedStyle(dropZone).backgroundColor || "#0e1013"
-        : "#ffffff";
     return renderer.captureRaster(camera, {
       width: pixels.width,
       height: pixels.height,
@@ -1428,7 +1679,7 @@ async function captureExportPage(
     if (plotStylesEnabled) {
       renderer.setPlotStyle(palette, lineWeights);
     } else {
-      renderer.clearPlotStyle();
+      renderer.clearPlotStyle(palette);
     }
     activeTextComposite?.setPalette(renderer.aciPalette);
     renderer.redraw(returnCamera);
@@ -1824,6 +2075,7 @@ function bigFontEncodingLabel(encoding) {
 }
 
 function renderFontDiagnostics() {
+  scheduleVisualCompletionCheck();
   const entries = [...fontDiagnostics.values()];
   const ready = entries.filter(({ state }) =>
     ["loaded", "mapped"].includes(state),
@@ -1937,6 +2189,8 @@ function xrefStateLabel(state) {
     converting: "xrefs.state.converting",
     decoding: "xrefs.state.decoding",
     ready: "xrefs.state.ready",
+    unloaded: "xrefs.state.unloaded",
+    unresolved: "xrefs.state.unresolved",
     missing: "xrefs.state.missing",
     ambiguous: "xrefs.state.ambiguous",
     cycle: "xrefs.state.cycle",
@@ -1948,12 +2202,15 @@ function xrefStateLabel(state) {
 }
 
 function renderXrefDiagnostics() {
+  scheduleVisualCompletionCheck();
   const entries = [...xrefDiagnostics.values()];
   const ready = entries.filter((entry) => entry.status === "ready").length;
   const unresolved = entries.filter((entry) =>
     [
       "missing",
       "ambiguous",
+      "unloaded",
+      "unresolved",
       "cycle",
       "limit",
       "unsupported",
@@ -2017,13 +2274,35 @@ function renderXrefDiagnostics() {
       detail.textContent = entry.message;
       item.append(detail);
     }
+    const actions = document.createElement("div");
+    actions.className = "xref-actions";
+    const disableActions = () => {
+      for (const button of actions.querySelectorAll("button")) {
+        button.disabled = true;
+      }
+    };
+    if (entry.kind !== "image" && entry.canLoad && vscodeApi) {
+      const load = document.createElement("button");
+      load.type = "button";
+      load.className = "xref-load";
+      load.textContent = t("xrefs.loadSession");
+      load.addEventListener("click", () => {
+        disableActions();
+        vscodeApi.postMessage({
+          type: "dwg-xref-load/1",
+          parentCacheId: entry.parentCacheId,
+          blockIndex: entry.blockIndex,
+        });
+      });
+      actions.append(load);
+    }
     if (entry.canSelect && vscodeApi) {
       const select = document.createElement("button");
       select.type = "button";
       select.className = "xref-select";
       select.textContent = t("xrefs.selectFile");
       select.addEventListener("click", () => {
-        select.disabled = true;
+        disableActions();
         vscodeApi.postMessage(
           entry.kind === "image"
             ? {
@@ -2038,7 +2317,10 @@ function renderXrefDiagnostics() {
               },
         );
       });
-      item.append(select);
+      actions.append(select);
+    }
+    if (actions.childElementCount > 0) {
+      item.append(actions);
     }
     fragment.append(item);
   }
@@ -2254,6 +2536,7 @@ function scheduleFontRefresh(revision) {
   fontRefreshTimer = setTimeout(() => {
     fontRefreshTimer = undefined;
     refreshTextAfterFontChange(revision);
+    scheduleVisualCompletionCheck();
   }, 40);
 }
 
@@ -3285,6 +3568,7 @@ function requestSceneRasterImage(scene, request) {
     })
     .finally(() => {
       pendingEmbeddedImageRequests.delete(key);
+      scheduleVisualCompletionCheck();
     });
   return true;
 }
@@ -3473,6 +3757,13 @@ async function initializeImageOverlay(
       maskOrder: activeMaskOrder,
       sourceId: "root",
       sourceLabel: t("common.currentDrawing"),
+      imageFrame:
+        effectiveFrameSetting(
+          scene.metadata.drawing.frame,
+          scene.metadata.drawing.imageFrame,
+        ) ?? 0,
+      rasterImageQualityHigh:
+        scene.metadata.drawing.rasterImageQualityHigh ?? true,
     });
   activeImageComposite.add(
     overlay,
@@ -3510,6 +3801,17 @@ async function initializeTextOverlay(
     maskOrder,
     sourceId: "root",
     sourceLabel: t("common.currentDrawing"),
+    attributeDisplayMode:
+      scene.metadata.drawing.attributeDisplayMode ?? 1,
+    quickTextMode:
+      scene.metadata.drawing.quickTextMode ?? false,
+    annotationAllVisible:
+      instanceGraph.annotationAllVisible ?? true,
+    xclipFrame:
+      effectiveFrameSetting(
+        scene.metadata.drawing.frame,
+        scene.metadata.drawing.xclipFrame,
+      ) ?? 0,
     onInlineFonts: (names) =>
       requestInlineTextFonts(names, revision),
   });
@@ -3760,6 +4062,9 @@ function remapExternalVertices(
   {
     recordSize = 32,
     linetypeMap = null,
+    externalReferenceOverrides = false,
+    lineStyle = Boolean(linetypeMap),
+    secondaryColor = false,
   } = {},
 ) {
   if (!vertices?.buffer || vertices.byteLength === 0) {
@@ -3773,36 +4078,71 @@ function remapExternalVertices(
       recordSize,
     );
   }
+  if (externalReferenceOverrides) {
+    overrideExternalVertexProperties(vertices.buffer, {
+      stride: recordSize,
+      lineStyle,
+      secondaryColor,
+    });
+  }
   return vertices;
 }
 
-function remapExternalPrimitiveResult(result, layerMap, linetypeMap) {
-  remapExternalVertices(result.primitives.points.vertices, layerMap);
-  remapExternalVertices(result.primitives.solidFills.vertices, layerMap);
+function remapExternalPrimitiveResult(
+  result,
+  layerMap,
+  linetypeMap,
+  externalReferenceOverrides,
+) {
+  remapExternalVertices(result.primitives.points.vertices, layerMap, {
+    externalReferenceOverrides,
+    lineStyle: false,
+  });
+  remapExternalVertices(result.primitives.solidFills.vertices, layerMap, {
+    externalReferenceOverrides,
+    lineStyle: false,
+    secondaryColor: true,
+  });
   remapExternalVertices(
     result.primitives.solidOutlines.vertices,
     layerMap,
-    { linetypeMap },
+    { linetypeMap, externalReferenceOverrides },
   );
   remapExternalVertices(result.primitives.wipeoutMasks.vertices, layerMap);
   return result;
 }
 
-function remapExternalHatchResult(result, layerMap, linetypeMap) {
-  remapExternalVertices(result.fill.vertices, layerMap);
+function remapExternalHatchResult(
+  result,
+  layerMap,
+  linetypeMap,
+  externalReferenceOverrides,
+) {
+  remapExternalVertices(result.fill.vertices, layerMap, {
+    externalReferenceOverrides,
+    lineStyle: false,
+    secondaryColor: true,
+  });
   if (result.pattern) {
     remapExternalVertices(result.pattern.vertices, layerMap, {
       linetypeMap,
+      externalReferenceOverrides,
     });
   }
   return result;
 }
 
-function remapExternalCurveResult(result, layerMap, linetypeMap) {
+function remapExternalCurveResult(
+  result,
+  layerMap,
+  linetypeMap,
+  externalReferenceOverrides,
+) {
   for (const entry of result.refinement.entries) {
     remapExternalVertices(entry.vertices, layerMap, {
       recordSize: entry.vertices.recordSize ?? 36,
       linetypeMap,
+      externalReferenceOverrides,
     });
   }
   return result;
@@ -3972,7 +4312,7 @@ async function createPrimitiveWorker(workerSource) {
     workerHandle.terminate();
   };
   return {
-    initialize(wipeoutFrame, fillMode, maskOrder) {
+    initialize(wipeoutFrame, fillMode, splineFrame, maskOrder) {
       if (settled) {
         return Promise.reject(
           new DOMException("후처리 작업 취소됨", "AbortError"),
@@ -4013,6 +4353,7 @@ async function createPrimitiveWorker(workerSource) {
           ...workerSourcePayload(workerSource),
           wipeoutFrame,
           fillMode,
+          splineFrame,
           maskOrder,
         });
       });
@@ -4324,8 +4665,12 @@ async function initializePrimitives(
   let result;
   try {
     result = await worker.initialize(
-      scene.metadata.drawing.wipeoutFrame,
+      effectiveFrameSetting(
+        scene.metadata.drawing.frame,
+        scene.metadata.drawing.wipeoutFrame,
+      ),
       scene.metadata.drawing.fillMode,
+      scene.metadata.drawing.splineFrame ?? false,
       maskOrder,
     );
   } finally {
@@ -4394,6 +4739,7 @@ async function initializeHatchFills(
     ...workerSourcePayload(workerSource),
     camera: workerCamera(scene.render.camera),
     maskOrder,
+    fillMode: scene.metadata.drawing.fillMode,
     view: hatchWorkerView(scene),
   });
   if (revision !== openRevision || activeScene !== scene) {
@@ -4530,6 +4876,8 @@ function scheduleHatchPatterns(scene, camera, revision) {
         }
         remapExternalVertices(result.pattern.vertices, context.layerMap, {
           linetypeMap: context.linetypeMap,
+          externalReferenceOverrides:
+            context.externalReferenceOverrides,
         });
         scene.renderer.setExternalHatchPatterns(
           sceneId,
@@ -4677,6 +5025,7 @@ async function drainCurveRefinementRequest() {
         drainCurveRefinementRequest();
       }, 0);
     }
+    scheduleVisualCompletionCheck();
   }
 }
 
@@ -4790,6 +5139,7 @@ async function drainExternalCurveRefinementRequest() {
           result,
           context.layerMap,
           context.linetypeMap,
+          context.externalReferenceOverrides,
         );
         request.scene.renderer.setExternalCurveRefinement(
           sceneId,
@@ -4928,6 +5278,7 @@ async function initializeExternalPrimitives({
   maskOrder,
   rootScene,
   revision,
+  externalReferenceOverrides = false,
 }) {
   const worker = await createPrimitiveWorker(workerSource);
   if (revision !== openRevision || activeScene !== rootScene) {
@@ -4937,14 +5288,23 @@ async function initializeExternalPrimitives({
   externalPrimitiveWorkers.add(worker);
   try {
     const result = await worker.initialize(
-      childScene.metadata.drawing.wipeoutFrame,
+      effectiveFrameSetting(
+        childScene.metadata.drawing.frame,
+        childScene.metadata.drawing.wipeoutFrame,
+      ),
       childScene.metadata.drawing.fillMode,
+      childScene.metadata.drawing.splineFrame ?? false,
       maskOrder,
     );
     if (revision !== openRevision || activeScene !== rootScene) {
       return;
     }
-    remapExternalPrimitiveResult(result, layerMap, linetypeMap);
+    remapExternalPrimitiveResult(
+      result,
+      layerMap,
+      linetypeMap,
+      externalReferenceOverrides,
+    );
     rootScene.renderer.setExternalPrimitiveMeshes(
       sceneId,
       result.primitives,
@@ -4964,6 +5324,7 @@ async function initializeExternalHatches({
   maskOrder,
   rootScene,
   revision,
+  externalReferenceOverrides = false,
 }) {
   externalHatchContexts.get(sceneId)?.worker.cancel();
   const worker = await createHatchWorker(workerSource);
@@ -4973,6 +5334,7 @@ async function initializeExternalHatches({
     rootScene,
     layerMap,
     linetypeMap,
+    externalReferenceOverrides,
     lastCameraKey: null,
     ready: false,
   };
@@ -4988,6 +5350,7 @@ async function initializeExternalHatches({
       ...workerSourcePayload(workerSource),
       camera: workerCamera(camera),
       maskOrder,
+      fillMode: childScene.metadata.drawing.fillMode,
       view: Object.freeze({ kind: "model" }),
       externalInstanceGraph: composedInstanceGraph,
     });
@@ -4999,7 +5362,12 @@ async function initializeExternalHatches({
       worker.cancel();
       return;
     }
-    remapExternalHatchResult(result, layerMap, linetypeMap);
+    remapExternalHatchResult(
+      result,
+      layerMap,
+      linetypeMap,
+      externalReferenceOverrides,
+    );
     rootScene.renderer.setExternalHatchFills(sceneId, result.fill);
     context.ready = true;
     if (result.pattern) {
@@ -5025,6 +5393,7 @@ function registerExternalCurveContext({
   maskOrder,
   rootScene,
   revision,
+  externalReferenceOverrides = false,
 }) {
   externalCurveContexts.get(sceneId)?.worker?.cancel();
   externalCurveContexts.set(sceneId, {
@@ -5040,6 +5409,7 @@ function registerExternalCurveContext({
     instanceGraph: composedInstanceGraph,
     layerMap,
     linetypeMap,
+    externalReferenceOverrides,
     maskOrder,
     rootScene,
     revision,
@@ -5127,19 +5497,22 @@ function discoverExternalReferences(scene, cacheId, depth = 0) {
   }
   discoveredXrefCaches.add(cacheId);
   const references = scene.metadata.blocks
-    .filter(
-      (block) =>
-        (block.flags & (1 << 2)) !== 0 &&
-        typeof block.xrefPath === "string" &&
-        block.xrefPath.length > 0,
-    )
-    .slice(0, 64)
+    .filter(blockExternalReferenceIsDiscoverable)
     .map((block) => ({
       blockIndex: block.index,
       name: block.name,
-      path: block.xrefPath,
+      path: typeof block.xrefPath === "string" ? block.xrefPath : "",
       overlay: (block.flags & (1 << 3)) !== 0,
-    }));
+      xrefLoaded: block.xrefLoaded !== false,
+      xrefResolved: block.xrefResolved !== false,
+      savedState: blockExternalReferenceSavedState(block),
+    }))
+    .sort(
+      (left, right) =>
+        Number(left.savedState !== "enabled") -
+        Number(right.savedState !== "enabled"),
+    )
+    .slice(0, 64);
   for (const reference of references) {
     const key = `${cacheId}:${reference.blockIndex}`;
     if (!xrefDiagnostics.has(key)) {
@@ -5147,8 +5520,13 @@ function discoverExternalReferences(scene, cacheId, depth = 0) {
         ...reference,
         parentCacheId: cacheId,
         storedPath: reference.path,
-        status: "waiting",
+        status:
+          reference.savedState === "enabled"
+            ? "waiting"
+            : reference.savedState,
         depth,
+        canLoad: reference.savedState !== "enabled",
+        canSelect: reference.savedState !== "enabled",
       });
     }
   }
@@ -5183,6 +5561,7 @@ function handleXrefStatus(message) {
         ? message.message.slice(0, 300)
         : undefined,
     canSelect: Boolean(message.canSelect),
+    canLoad: Boolean(message.canLoad),
   });
   renderXrefDiagnostics();
 }
@@ -5203,6 +5582,57 @@ function externalParentContexts(parentCacheId) {
     ];
   }
   return externalAttachmentsByCache.get(parentCacheId) ?? [];
+}
+
+function synchronizeMountedExternalLayers(
+  childLayers,
+  prefix,
+  retainExternalReferenceLayers,
+) {
+  const scene = activeScene;
+  const baselineLayers = scene?.metadata.layers;
+  if (
+    !scene ||
+    retainExternalReferenceLayers ||
+    !Array.isArray(baselineLayers) ||
+    !activeRenderInstanceGraph
+  ) {
+    return;
+  }
+  const currentLayers = activeDisplayLayers ?? baselineLayers;
+  const synchronized = synchronizeExternalLayerProperties(
+    currentLayers,
+    childLayers,
+    prefix,
+  );
+  if (synchronized.changedIndices.length === 0) {
+    return;
+  }
+  const presentation = applyDisplayLayerProperties(
+    activeRenderInstanceGraph,
+    currentLayers,
+    synchronized.layers,
+    scene.metadata.linetypes,
+  );
+  activeDisplayLayers = synchronized.layers;
+  activeRenderInstanceGraph = presentation.instanceGraph;
+  for (const contexts of externalAttachmentsByCache.values()) {
+    for (const context of contexts) {
+      context.instanceGraph = applyDisplayLayerProperties(
+        context.instanceGraph,
+        currentLayers,
+        activeDisplayLayers,
+        scene.metadata.linetypes,
+      ).instanceGraph;
+    }
+  }
+  scene.renderer.setDisplayLayerPresentation(
+    activeDisplayLayers,
+    activeRenderInstanceGraph,
+    presentation.layerLinetypeCodes,
+    synchronized.changedIndices,
+  );
+  syncLayerCheckboxes(scene.renderer.getLayerVisibility());
 }
 
 function loadExternalCacheData(message, revision) {
@@ -5345,6 +5775,7 @@ async function addExternalText(
   linetypeMap = null,
   maskOrder = null,
   maskBucketScale = 1,
+  externalReferenceOverrides = false,
 ) {
   const revision = openRevision;
   const rootScene = activeScene;
@@ -5371,11 +5802,12 @@ async function addExternalText(
     textEntities,
     layerMap,
     linetypeMap,
+    { externalReferenceOverrides },
   );
   const overlay = new CanvasTextOverlay(textCanvas, {
     textEntities: remapped,
     blocks: externalScene.metadata.blocks,
-    layers: rootScene.metadata.layers,
+    layers: activeDisplayLayers ?? rootScene.metadata.layers,
     instanceGraph: composedInstanceGraph,
     glyphCache,
     maskOrder,
@@ -5386,6 +5818,19 @@ async function addExternalText(
     maskBucketScale,
     sourceId,
     sourceLabel,
+    attributeDisplayMode:
+      externalScene.metadata.drawing.attributeDisplayMode ?? 1,
+    quickTextMode:
+      externalScene.metadata.drawing.quickTextMode ?? false,
+    annotationAllVisible:
+      composedInstanceGraph.annotationAllVisible ?? true,
+    xclipFrame:
+      effectiveFrameSetting(
+        externalScene.metadata.drawing.frame,
+        externalScene.metadata.drawing.xclipFrame,
+      ) ?? 0,
+    xclipFrameStartIndex:
+      composedInstanceGraph.localClipNodeStartIndex ?? 0,
     onInlineFonts: (names) =>
       requestInlineTextFonts(names, revision),
   });
@@ -5396,7 +5841,7 @@ async function addExternalText(
       batches: overview.batches,
       linetypes: rootScene.metadata.linetypes,
       textStyles: rootStyles,
-      layers: rootScene.metadata.layers,
+      layers: activeDisplayLayers ?? rootScene.metadata.layers,
       instanceGraph: composedInstanceGraph,
       glyphCache,
       globalLinetypeScale:
@@ -5424,9 +5869,11 @@ async function addExternalImages(
   sceneId,
   composedInstanceGraph,
   layerMap,
+  linetypeMap,
   sourceLabel,
   maskOrder = null,
   maskBucketScale = 1,
+  externalReferenceOverrides = false,
 ) {
   const revision = openRevision;
   const rootScene = activeScene;
@@ -5457,7 +5904,7 @@ async function addExternalImages(
       imageEntities,
       blocks: externalScene.metadata.blocks,
       layers: externalScene.metadata.layers,
-      displayLayers: rootScene.metadata.layers,
+      displayLayers: activeDisplayLayers ?? rootScene.metadata.layers,
       instanceGraph: composedInstanceGraph,
       cacheId,
       assetStore: store,
@@ -5469,12 +5916,17 @@ async function addExternalImages(
       ),
       orderDepthBias: -0.25 * maskBucketScale,
       layerMap,
-      linetypeMap: buildExternalLinetypeMap(
-        rootScene.metadata.linetypes,
-        externalScene.metadata.linetypes,
-      ),
+      linetypeMap,
       sourceId: sceneId,
       sourceLabel,
+      imageFrame:
+        effectiveFrameSetting(
+          externalScene.metadata.drawing.frame,
+          externalScene.metadata.drawing.imageFrame,
+        ) ?? 0,
+      rasterImageQualityHigh:
+        externalScene.metadata.drawing.rasterImageQualityHigh ?? true,
+      externalReferenceOverrides,
       maskBucketScale,
     });
   activeImageComposite.add(overlay);
@@ -5538,12 +5990,24 @@ async function handleExternalCacheReady(message) {
   );
   refreshMaskSourceCount();
   const childContexts = externalAttachmentsByCache.get(message.cacheId) ?? [];
+  const externalReferenceOverrides =
+    activeScene.metadata.drawing.externalReferenceOverrides ?? false;
+  const retainExternalReferenceLayers =
+    activeScene.metadata.drawing.retainExternalReferenceLayers ?? true;
   let lastFit;
   for (const parentContext of parentContexts) {
     const maskState = externalMaskState(loaded, parentContext);
     const prefix = parentContext.prefix
       ? `${parentContext.prefix}|${message.name}`
       : message.name;
+    synchronizeMountedExternalLayers(
+      loaded.scene.metadata.layers,
+      prefix,
+      retainExternalReferenceLayers,
+    );
+    if (parentContext.id === "root") {
+      parentContext.instanceGraph = activeRenderInstanceGraph;
+    }
     const layerMap = buildExternalLayerMap(
       activeScene.metadata.layers,
       loaded.scene.metadata.layers,
@@ -5552,6 +6016,7 @@ async function handleExternalCacheReady(message) {
     const linetypeMap = buildExternalLinetypeMap(
       activeScene.metadata.linetypes,
       loaded.scene.metadata.linetypes,
+      prefix,
     );
     const composed = composeExternalInstanceGraph(
       parentContext.instanceGraph,
@@ -5561,6 +6026,7 @@ async function handleExternalCacheReady(message) {
       layerMap,
       linetypeMap,
       maskState.maskBucketScale,
+      externalReferenceOverrides,
     );
     if (composed.instanceGraph.instanceCount === 0) {
       continue;
@@ -5585,6 +6051,11 @@ async function handleExternalCacheReady(message) {
         linetypeMap,
         loaded.scene.overview.recordSize,
       );
+      if (externalReferenceOverrides) {
+        overrideExternalVertexProperties(overviewBuffer, {
+          stride: loaded.scene.overview.recordSize,
+        });
+      }
       lastFit = activeScene.renderer.addExternalOverview({
         id: sceneId,
         batches: composed.batches,
@@ -5599,9 +6070,9 @@ async function handleExternalCacheReady(message) {
         },
       });
       const detailReader = {
-        async readBatchVertices(batch) {
+        async readBatchVertices(batch, options) {
           const vertices =
-            await loaded.scene.reader.readBatchVertices(batch);
+            await loaded.scene.reader.readBatchVertices(batch, options);
           remapLineVertexLayers(
             vertices.buffer,
             layerMap,
@@ -5612,6 +6083,11 @@ async function handleExternalCacheReady(message) {
             linetypeMap,
             vertices.recordSize,
           );
+          if (externalReferenceOverrides) {
+            overrideExternalVertexProperties(vertices.buffer, {
+              stride: vertices.recordSize,
+            });
+          }
           return vertices;
         },
       };
@@ -5651,7 +6127,7 @@ async function handleExternalCacheReady(message) {
       batches: mountedOverview?.batches ?? [],
       vertices: mountedOverview?.vertices,
       instanceGraph: composed.instanceGraph,
-      layers: activeScene.metadata.layers,
+      layers: activeDisplayLayers ?? activeScene.metadata.layers,
       blocks: loaded.scene.metadata.blocks,
       linetypes: activeScene.metadata.linetypes,
       layerMap,
@@ -5670,6 +6146,7 @@ async function handleExternalCacheReady(message) {
       linetypeMap,
       maskState.maskOrder,
       maskState.maskBucketScale,
+      externalReferenceOverrides,
     );
     const imageFit = await addExternalImages(
       loaded.scene,
@@ -5677,9 +6154,11 @@ async function handleExternalCacheReady(message) {
       sceneId,
       composed.instanceGraph,
       layerMap,
+      linetypeMap,
       prefix,
       maskState.maskOrder,
       maskState.maskBucketScale,
+      externalReferenceOverrides,
     );
     lastFit = imageFit ?? lastFit;
     const externalSource = externalHostSources.get(message.cacheId);
@@ -5694,6 +6173,7 @@ async function handleExternalCacheReady(message) {
         maskOrder: maskState.maskOrder,
         rootScene: activeScene,
         revision,
+        externalReferenceOverrides,
       });
       if (revision !== openRevision || !activeScene) {
         return;
@@ -5739,6 +6219,7 @@ async function handleExternalCacheReady(message) {
       ...existing,
       status: "ready",
       canSelect: false,
+      canLoad: false,
       fileName:
         typeof message.fileName === "string"
           ? message.fileName.slice(0, 300)
@@ -5813,6 +6294,7 @@ function installInteraction(
   });
   activeInteraction = new ViewportInteraction(interactionScene, canvas, {
     ...zoomSensitivitySettings,
+    scrollInputMode,
     onUpdate(viewport) {
       renderMetrics(scene, source, viewport);
       if (viewport.render.interactive) {
@@ -5858,6 +6340,7 @@ function installInteraction(
       }
       status.textContent += missingFontSuffix();
       activeReviewTools?.setCamera(viewport.render.camera);
+      scheduleVisualCompletionCheck();
     },
     onError(error) {
       status.textContent = t("status.viewport.detailError", {
@@ -5901,7 +6384,8 @@ function installInteraction(
     instanceGraph,
     getCamera: () =>
       activeInteraction?.snapshot().render.camera ?? render.camera,
-    getLayerVisibility: () => scene.renderer.getLayerVisibility(),
+    getLayerVisibility: () =>
+      scene.renderer.getDisplayLayerVisibility(),
     onFit: () => activeInteraction?.reset(),
     findOverlayCandidates({ x, y, snapKinds, tolerancePixels }) {
       return [
@@ -6062,6 +6546,12 @@ async function activateView(
     ) {
       return;
     }
+    activeDisplayLayers = scene.metadata.layers;
+    scene.renderer.setDisplayLayerPresentation(
+      activeDisplayLayers,
+      instanceGraph,
+      instanceGraph.layerLinetypeCodes,
+    );
     const render = scene.renderer.setInstanceGraph(instanceGraph, {
       preferredBounds: view.preferredBounds,
       preferredView: view.preferredView,
@@ -6192,10 +6682,12 @@ function populateLayoutTabs(scene, source, revision) {
 }
 
 async function openCache(source, workerSource, cacheSha256) {
+  clearPackagedDisplayStateObservation();
   activeExportController?.abort();
   activeExportController = undefined;
   setExportPanelOpen(false);
   const revision = ++openRevision;
+  resetVisualCompletion();
   viewSwitchRevision += 1;
   activeViewId = undefined;
   activeViewHistory = undefined;
@@ -6263,6 +6755,7 @@ async function openCache(source, workerSource, cacheSha256) {
   activeCurveStatus = undefined;
   activeMaskOrder = undefined;
   activeRenderInstanceGraph = undefined;
+  activeDisplayLayers = undefined;
   activeMaskStatus = undefined;
   activeWipeoutMasksVisible = false;
   updateWipeoutToggle();
@@ -6301,6 +6794,7 @@ async function openCache(source, workerSource, cacheSha256) {
     interactionRenderingMode,
     interactionCanvas,
   });
+  renderer.setAciPalette(displayAciPalette());
   renderer.setWipeoutMasksVisible(activeWipeoutMasksVisible);
   let runtime;
   try {
@@ -6326,6 +6820,10 @@ async function openCache(source, workerSource, cacheSha256) {
     }
     activeViewerRuntime = runtime;
     activeScene = scene;
+    activeDisplayLayers = scene.metadata.layers;
+    if (!scene.metrics.preview) {
+      beginVisualCompletion(revision, activeHostCacheId);
+    }
     activeTextComposite = new CompositeTextOverlay(textCanvas);
     scene.renderer.setTextOverlay(activeTextComposite);
     activeImageComposite = new CompositeRasterImageOverlay(imageCanvas);
@@ -6380,6 +6878,7 @@ async function openCache(source, workerSource, cacheSha256) {
       revision,
     );
     populateLayoutTabs(scene, source, revision);
+    publishPackagedDisplayStateObservation(scene);
     configurePlotStyleForView(scene, scene.activeView, revision);
     setControlsEnabled(true);
     discoverExternalReferences(
@@ -6387,15 +6886,13 @@ async function openCache(source, workerSource, cacheSha256) {
       activeHostCacheId,
       0,
     );
-    initializeDeferredGeometry(
+    void initializeDeferredGeometry(
       workerSource,
       activeScene,
       revision,
       activeMaskOrder,
-    ).catch(
-      console.error,
-    );
-    initializeTextOverlay(
+    ).catch(console.error);
+    const textReady = initializeTextOverlay(
       activeScene,
       revision,
       activeMaskOrder,
@@ -6408,7 +6905,10 @@ async function openCache(source, workerSource, cacheSha256) {
       }
       console.error(error);
     });
-    initializeImageOverlay(
+    void textReady.finally(() =>
+      markVisualCompletionTask("text", revision),
+    );
+    const imagesReady = initializeImageOverlay(
       activeScene,
       revision,
       activeHostCacheId ?? `local-${revision}`,
@@ -6421,6 +6921,9 @@ async function openCache(source, workerSource, cacheSha256) {
       }
       console.error(error);
     });
+    void imagesReady.finally(() =>
+      markVisualCompletionTask("images", revision),
+    );
   } catch (error) {
     if (activeViewerRuntime === runtime) {
       activeViewerRuntime = undefined;
@@ -6439,6 +6942,7 @@ async function openCache(source, workerSource, cacheSha256) {
     activeReviewTools?.dispose();
     activeReviewTools = undefined;
     activeScene = undefined;
+    activeDisplayLayers = undefined;
     dropZone.classList.remove("loaded");
     status.textContent = t("status.openFailed", {
       detail: error.message,
@@ -6712,6 +7216,10 @@ if (vscodeApi) {
       activeInteraction?.refresh();
       return;
     }
+    if (message?.type === "dwg-scroll-input-mode/1") {
+      applyScrollInputMode(message.mode);
+      return;
+    }
     if (message?.type === "dwg-zoom-sensitivity/1") {
       applyZoomSensitivitySettings(message);
       return;
@@ -6868,6 +7376,9 @@ if (vscodeApi) {
           cacheId: message.cacheId,
           firstFrameMs: activeScene?.metrics.timings.firstFrameMs ?? null,
         });
+        if (!isPreview) {
+          markVisualCompletionFirstFrame(message.cacheId);
+        }
       })
       .catch((error) => {
         if (activeHostCacheId !== message.cacheId) {
@@ -6982,6 +7493,18 @@ for (const control of viewControls) {
     }
   });
 }
+
+trackpadModeToggle?.addEventListener("click", () => {
+  const nextMode =
+    scrollInputMode === SCROLL_INPUT_MODE_TRACKPAD_PAN
+      ? SCROLL_INPUT_MODE_MOUSE_ZOOM
+      : SCROLL_INPUT_MODE_TRACKPAD_PAN;
+  applyScrollInputMode(nextMode);
+  vscodeApi?.postMessage({
+    type: "dwg-scroll-input-mode-set/1",
+    mode: nextMode,
+  });
+});
 
 viewBookmarkForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -7287,6 +7810,7 @@ window.addEventListener("beforeunload", () => {
   resetExternalReferences();
   activeInteraction = undefined;
   activeScene = undefined;
+  activeDisplayLayers = undefined;
   activeRangeMetricsSource = undefined;
   activeMemoryTelemetry = undefined;
   glyphCache.dispose();

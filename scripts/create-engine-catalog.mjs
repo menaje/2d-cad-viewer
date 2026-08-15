@@ -75,13 +75,13 @@ export async function createEngineCatalog({ directory, version }) {
   return Object.freeze({
     schema: ENGINE_ASSET_CATALOG_SCHEMA,
     viewerVersion: version,
-    repository: "menaje/dwg-viewer",
+    repository: "menaje/2d-cad-viewer",
     releaseTag: `v${version}`,
     engine: Object.freeze({
       id: "libredwg",
       version: LIBREDWG_VERSION,
       protocol: "dwg-engine-adapter/1",
-      cacheSchema: "dwg-scene-cache/1.21",
+      cacheSchema: "dwg-scene-cache/1.26",
       license: "GPL-3.0-or-later",
     }),
     targets: Object.freeze(targets),

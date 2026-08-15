@@ -1,7 +1,12 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, open, stat } from "node:fs/promises";
+import {
+  access,
+  type FileHandle,
+  open,
+  stat,
+} from "node:fs/promises";
 import path from "node:path";
 import {
   abortSceneEngineError,
@@ -27,6 +32,24 @@ const MAX_STDERR_BYTES = 64 * 1024;
 const MAX_DOCTOR_STDOUT_BYTES = 64 * 1024;
 const DEFAULT_DOCTOR_TIMEOUT_MS = 5_000;
 const TERMINATION_GRACE_MS = 1_500;
+const MAX_ADAPTER_REVISION_CACHE_ENTRIES = 16;
+
+interface AdapterFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+
+interface AdapterRevisionCacheEntry extends AdapterFileIdentity {
+  readonly revision: string;
+}
+
+const adapterRevisionCache = new Map<
+  string,
+  AdapterRevisionCacheEntry
+>();
 
 export interface AdapterSelection {
   configuredPath?: string;
@@ -73,7 +96,7 @@ export async function resolveLibreDwgAdapter(
   } catch (error) {
     throw new SceneEngineError(
       "ADAPTER_NOT_FOUND",
-      "LibreDWG 변환기를 찾을 수 없습니다. 자동 설치를 다시 시도하거나 DWG Viewer 설정에서 검증된 오프라인 변환기 경로를 지정해 주세요.",
+      "LibreDWG 변환기를 찾을 수 없습니다. 자동 설치를 다시 시도하거나 2D CAD Viewer 설정에서 검증된 오프라인 변환기 경로를 지정해 주세요.",
       { cause: error },
     );
   }
@@ -92,13 +115,53 @@ function hashFields(fields: readonly string[]): string {
   return hash.digest("hex");
 }
 
+function sameAdapterFile(
+  left: AdapterFileIdentity,
+  right: AdapterFileIdentity,
+): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function rememberAdapterRevision(
+  adapterPath: string,
+  identity: AdapterFileIdentity,
+  revision: string,
+): void {
+  adapterRevisionCache.delete(adapterPath);
+  adapterRevisionCache.set(adapterPath, { ...identity, revision });
+  while (
+    adapterRevisionCache.size > MAX_ADAPTER_REVISION_CACHE_ENTRIES
+  ) {
+    const oldest = adapterRevisionCache.keys().next().value as
+      | string
+      | undefined;
+    if (!oldest) {
+      break;
+    }
+    adapterRevisionCache.delete(oldest);
+  }
+}
+
 async function hashAdapterContents(adapterPath: string): Promise<string> {
+  const cacheKey = path.resolve(adapterPath);
   const before = await stat(adapterPath, { bigint: true });
   if (!before.isFile()) {
     throw new SceneEngineError(
       "ENGINE_NOT_FILE",
       "LibreDWG Native 변환기 파일을 읽을 수 없습니다.",
     );
+  }
+  const cached = adapterRevisionCache.get(cacheKey);
+  if (cached && sameAdapterFile(cached, before)) {
+    adapterRevisionCache.delete(cacheKey);
+    adapterRevisionCache.set(cacheKey, cached);
+    return cached.revision;
   }
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(adapterPath)) {
@@ -118,7 +181,9 @@ async function hashAdapterContents(adapterPath: string): Promise<string> {
       "LibreDWG Native 변환기가 확인 중 변경되었습니다. 다시 시도해 주세요.",
     );
   }
-  return hash.digest("hex");
+  const revision = hash.digest("hex");
+  rememberAdapterRevision(cacheKey, after, revision);
+  return revision;
 }
 
 interface AdapterReport {
@@ -330,7 +395,7 @@ export function parseLibreDwgDoctorReport(
   ) {
     throw new SceneEngineError(
       "ADAPTER_DOCTOR_REPORT_REJECTED",
-      "선택한 LibreDWG 변환기는 이 버전의 DWG Viewer와 호환되지 않습니다.",
+      "선택한 LibreDWG 변환기는 이 버전의 2D CAD Viewer와 호환되지 않습니다.",
     );
   }
 
@@ -548,9 +613,19 @@ function windowsChildPath(
   return path.basename(resolvedPath);
 }
 
-async function windowsPipedInputMetadata(
+interface WindowsInputMetadata {
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly version: string;
+}
+
+interface WindowsInheritedInput extends WindowsInputMetadata {
+  readonly handle: FileHandle;
+}
+
+async function openWindowsInput(
   inputPath: string,
-): Promise<{ size: bigint; version: string }> {
+): Promise<WindowsInheritedInput> {
   const handle = await open(inputPath, "r");
   try {
     const [metadata, header] = await Promise.all([
@@ -571,15 +646,19 @@ async function windowsPipedInputMetadata(
     ) {
       throw new Error("invalid DWG input metadata");
     }
-    return { size: metadata.size, version: header };
+    return {
+      handle,
+      size: metadata.size,
+      mtimeNs: metadata.mtimeNs,
+      version: header,
+    };
   } catch (error) {
+    await handle.close().catch(() => undefined);
     throw new SceneEngineError(
       "INPUT_METADATA_FAILED",
       "Windows에서 도면 입력 스트림을 준비하지 못했습니다.",
       { cause: error },
     );
-  } finally {
-    await handle.close();
   }
 }
 
@@ -603,14 +682,13 @@ export async function runLibreDwgAdapter({
   let adapterInputPath = inputPath;
   let adapterOutputPath = outputPath;
   let adapterPreviewPath = previewPath;
-  let pipedInput:
-    | {
-        size: bigint;
-        version: string;
-      }
-    | undefined;
+  let inheritedInput: WindowsInheritedInput | undefined;
   if (platform === "win32") {
-    pipedInput = await windowsPipedInputMetadata(inputPath);
+    inheritedInput = await openWindowsInput(inputPath);
+    if (signal.aborted) {
+      await inheritedInput.handle.close().catch(() => undefined);
+      throw abortSceneEngineError();
+    }
     adapterInputPath = "-";
     adapterOutputPath = windowsChildPath(
       outputPath,
@@ -637,12 +715,14 @@ export async function runLibreDwgAdapter({
           ...process.env,
           DWG_VIEWER_ADAPTER_PROTOCOL: ADAPTER_PROTOCOL,
           DWG_VIEWER_BENCHMARK_PHASE: "convert",
-          ...(pipedInput
+          ...(inheritedInput
             ? {
+                DWG_VIEWER_INPUT_TRANSPORT:
+                  "inherited-file-handle",
                 DWG_VIEWER_STDIN_SOURCE_SIZE:
-                  pipedInput.size.toString(),
+                  inheritedInput.size.toString(),
                 DWG_VIEWER_STDIN_SOURCE_VERSION:
-                  pipedInput.version,
+                  inheritedInput.version,
               }
             : {}),
           ...(adapterPreviewPath
@@ -653,15 +733,30 @@ export async function runLibreDwgAdapter({
               }
             : {}),
         },
-        stdio: [pipedInput ? "pipe" : "ignore", "pipe", "pipe"],
+        stdio: [
+          inheritedInput ? inheritedInput.handle.fd : "ignore",
+          "pipe",
+          "pipe",
+        ],
         windowsHide: true,
         cwd: workingDirectory,
       },
     );
   } catch (error) {
+    await inheritedInput?.handle.close().catch(() => undefined);
     throw new SceneEngineError(
       "ADAPTER_START_FAILED",
       "LibreDWG 변환기를 시작하지 못했습니다.",
+      { cause: error },
+    );
+  }
+  try {
+    await inheritedInput?.handle.close();
+  } catch (error) {
+    child.kill("SIGKILL");
+    throw new SceneEngineError(
+      "INPUT_CLEANUP_FAILED",
+      "Windows 도면 입력 파일 핸들을 닫지 못했습니다.",
       { cause: error },
     );
   }
@@ -675,7 +770,6 @@ export async function runLibreDwgAdapter({
   let terminationTimer: NodeJS.Timeout | undefined;
   let previewNotified = false;
   let previewCheck: Promise<void> | undefined;
-  let pipedInputBytes = 0n;
 
   const checkPreview = async (): Promise<void> => {
     if (
@@ -738,44 +832,6 @@ export async function runLibreDwgAdapter({
   };
   const onAbort = (): void => terminate();
   signal.addEventListener("abort", onAbort, { once: true });
-  const inputStream = pipedInput
-    ? createReadStream(inputPath)
-    : undefined;
-  if (inputStream) {
-    inputStream.on("data", (chunk: Buffer | string) => {
-      pipedInputBytes += BigInt(Buffer.byteLength(chunk));
-    });
-    inputStream.on("error", (error) => {
-      if (!outputError) {
-        outputError = new SceneEngineError(
-          "INPUT_READ_FAILED",
-          "Windows에서 도면 입력 스트림을 읽지 못했습니다.",
-          { cause: error },
-        );
-      }
-      terminate();
-    });
-    child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
-      if (error.code !== "EPIPE" && !outputError) {
-        outputError = new SceneEngineError(
-          "INPUT_READ_FAILED",
-          "Windows 도면 입력 스트림 전송이 중단되었습니다.",
-          { cause: error },
-        );
-        terminate();
-      }
-    });
-    if (!child.stdin) {
-      inputStream.destroy();
-      outputError = new SceneEngineError(
-        "ADAPTER_START_FAILED",
-        "Windows 변환기의 입력 스트림을 열지 못했습니다.",
-      );
-      terminate();
-    } else {
-      inputStream.pipe(child.stdin);
-    }
-  }
 
   child.stdout!.on("data", (value: Buffer | string) => {
     if (outputError) {
@@ -824,8 +880,6 @@ export async function runLibreDwgAdapter({
     });
   });
 
-  inputStream?.destroy();
-  child.stdin?.destroy();
   if (previewTimer) {
     clearInterval(previewTimer);
   }
@@ -841,11 +895,27 @@ export async function runLibreDwgAdapter({
   if (outputError) {
     throw outputError;
   }
-  if (pipedInput && pipedInputBytes !== pipedInput.size) {
-    throw new SceneEngineError(
-      "INPUT_CHANGED",
-      "Windows 도면 입력 크기가 변환 중 변경되었습니다.",
-    );
+  if (inheritedInput) {
+    let currentInput;
+    try {
+      currentInput = await stat(inputPath, { bigint: true });
+    } catch (error) {
+      throw new SceneEngineError(
+        "INPUT_CHANGED",
+        "Windows 도면 입력 파일이 변환 중 변경되었습니다.",
+        { cause: error },
+      );
+    }
+    if (
+      !currentInput.isFile() ||
+      currentInput.size !== inheritedInput.size ||
+      currentInput.mtimeNs !== inheritedInput.mtimeNs
+    ) {
+      throw new SceneEngineError(
+        "INPUT_CHANGED",
+        "Windows 도면 입력 파일이 변환 중 변경되었습니다.",
+      );
+    }
   }
   if (result.error) {
     throw new SceneEngineError(

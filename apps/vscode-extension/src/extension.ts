@@ -16,7 +16,13 @@ import {
   ManagedEngineManager,
 } from "./managed-engine";
 import { CacheRangeChannel } from "./range-channel";
-import { SceneCacheManager } from "./scene-cache-manager";
+import {
+  DEFAULT_PERSISTENT_CACHE_BYTES,
+  normalizeSceneCacheMode,
+  normalizePersistentCacheBytes,
+  SceneCacheManager,
+  type SceneCacheMode,
+} from "./scene-cache-manager";
 import {
   isSceneEngineAbort,
   SceneEngineError,
@@ -30,19 +36,23 @@ import {
 import { CtbPlotStyleChannel } from "./ctb-plot-style";
 import {
   createQualificationReporter,
+  displayStateQualificationEnabled,
   type QualificationCloseStage,
   type QualificationFields,
   type QualificationReporter,
 } from "./qualification";
 import { activateRevisionComparisonQualification } from "./comparison-qualification";
 import {
+  DEFAULT_SCROLL_INPUT_MODE,
   DEFAULT_MOUSE_WHEEL_ZOOM_SENSITIVITY,
   DEFAULT_TRACKPAD_PINCH_ZOOM_SENSITIVITY,
+  normalizeWebviewScrollInputMode,
   normalizeWebviewZoomSensitivity,
   renderWebviewHtml,
   type InteractionRenderingMode,
   type MenuLabelMode,
   type RenderResolutionMode,
+  type ScrollInputMode,
 } from "./webview-html";
 import { XrefController } from "./xref-controller";
 import { ImageReferenceChannel } from "./image-reference-channel";
@@ -57,6 +67,7 @@ const SELECT_LIBREDWG_ADAPTER_COMMAND =
   "dwgViewer.selectLibreDwgAdapter";
 const DIAGNOSE_LIBREDWG_ADAPTER_COMMAND =
   "dwgViewer.diagnoseLibreDwgAdapter";
+const REUSED_PREVIEW_FRAME_WAIT_MS = 10_000;
 
 function bundledLibreDwgExtensionPath(): string | undefined {
   return vscode.extensions.getExtension(
@@ -94,6 +105,81 @@ function configuredInteractionRendering(
     : "hybrid";
 }
 
+function configuredScrollInputMode(
+  configuration: vscode.WorkspaceConfiguration,
+): ScrollInputMode {
+  return normalizeWebviewScrollInputMode(
+    configuration.get<unknown>(
+      "scrollInputMode",
+      DEFAULT_SCROLL_INPUT_MODE,
+    ),
+  );
+}
+
+function scrollInputModeConfigurationTarget(
+  configuration: vscode.WorkspaceConfiguration,
+): vscode.ConfigurationTarget {
+  const inspected = configuration.inspect<ScrollInputMode>(
+    "scrollInputMode",
+  );
+  if (inspected?.workspaceFolderValue !== undefined) {
+    return vscode.ConfigurationTarget.WorkspaceFolder;
+  }
+  if (inspected?.workspaceValue !== undefined) {
+    return vscode.ConfigurationTarget.Workspace;
+  }
+  return vscode.ConfigurationTarget.Global;
+}
+
+function configuredSceneCacheMode(
+  configuration: vscode.WorkspaceConfiguration,
+): SceneCacheMode {
+  return normalizeSceneCacheMode(
+    configuration.get<unknown>("sceneCacheMode", "session"),
+  );
+}
+
+function configuredPersistentCacheBytes(
+  configuration: vscode.WorkspaceConfiguration,
+): number {
+  const gibibytes = configuration.get<unknown>(
+    "sceneCacheMaximumSizeGiB",
+    5,
+  );
+  return normalizePersistentCacheBytes(
+    typeof gibibytes === "number" && Number.isSafeInteger(gibibytes)
+      ? gibibytes * 1024 * 1024 * 1024
+      : DEFAULT_PERSISTENT_CACHE_BYTES,
+  );
+}
+
+async function maintainSceneCacheStorage(
+  context: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
+  adapterPath: string,
+): Promise<void> {
+  const manager = new SceneCacheManager(
+    path.join(context.globalStorageUri.fsPath, "cache"),
+    new LibreDwgNativeSceneEngine(adapterPath),
+    {
+      mode: configuredSceneCacheMode(
+        vscode.workspace.getConfiguration("dwgViewer"),
+      ),
+      maximumPersistentBytes: configuredPersistentCacheBytes(
+        vscode.workspace.getConfiguration("dwgViewer"),
+      ),
+    },
+  );
+  try {
+    await manager.maintain();
+    output.appendLine("[SCENE_CACHE_STORAGE_MAINTAINED]");
+  } catch {
+    output.appendLine("[SCENE_CACHE_STORAGE_MAINTENANCE_DEFERRED]");
+  } finally {
+    await manager.dispose();
+  }
+}
+
 function configuredZoomSensitivity(
   configuration: vscode.WorkspaceConfiguration,
   key:
@@ -125,7 +211,7 @@ async function diagnoseAdapterWithProgress(
   return vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: "DWG Viewer: LibreDWG 변환기 진단",
+      title: "2D CAD Viewer: LibreDWG 변환기 진단",
       cancellable: false,
     },
     () => diagnoseLibreDwgAdapter(adapterPath),
@@ -139,7 +225,7 @@ async function selectLibreDwgAdapter(
     canSelectFiles: true,
     canSelectFolders: false,
     canSelectMany: false,
-    title: "DWG Viewer용 LibreDWG 변환기 선택",
+    title: "2D CAD Viewer용 LibreDWG 변환기 선택",
     openLabel: "선택 후 진단",
   });
   const adapterUri = selected?.find((uri) => uri.scheme === "file");
@@ -168,14 +254,14 @@ async function selectLibreDwgAdapter(
       `[ADAPTER_READY] engine=${report.engineVersion} linkage=${report.linkage} target=${report.platform}-${report.architecture}`,
     );
     void vscode.window.showInformationMessage(
-      `DWG Viewer: LibreDWG ${report.engineVersion} 변환기 진단을 통과했습니다 (${linkage}).`,
+      `2D CAD Viewer: LibreDWG ${report.engineVersion} 변환기 진단을 통과했습니다 (${linkage}).`,
     );
     return true;
   } catch (error) {
     const details = adapterErrorDetails(error);
     output.appendLine(`[${details.code}] adapter selection failed`);
     void vscode.window.showErrorMessage(
-      `DWG Viewer: ${details.message}`,
+      `2D CAD Viewer: ${details.message}`,
     );
     return false;
   }
@@ -194,7 +280,7 @@ async function diagnoseConfiguredLibreDwgAdapter(
       `[MANAGED_ENGINE_READY] engine=${report.engineVersion} linkage=${report.linkage} target=${installation.target} reused=${installation.reused} source=${installation.sourceUrl}`,
     );
     void vscode.window.showInformationMessage(
-      `DWG Viewer: 자동 설치된 LibreDWG ${report.engineVersion} 변환기가 정상입니다 (${report.platform}-${report.architecture}, ${report.linkage}).`,
+      `2D CAD Viewer: 자동 설치된 LibreDWG ${report.engineVersion} 변환기가 정상입니다 (${report.platform}-${report.architecture}, ${report.linkage}).`,
     );
     return true;
   } catch (error) {
@@ -204,14 +290,14 @@ async function diagnoseConfiguredLibreDwgAdapter(
     );
     if (fallback) {
       void vscode.window.showInformationMessage(
-        `DWG Viewer: 호환되는 오프라인 변환기를 사용합니다 (${fallback.report.platform}-${fallback.report.architecture}).`,
+        `2D CAD Viewer: 호환되는 오프라인 변환기를 사용합니다 (${fallback.report.platform}-${fallback.report.architecture}).`,
       );
       return true;
     }
     const details = adapterErrorDetails(error);
     output.appendLine(`[${details.code}] adapter diagnosis failed`);
     void vscode.window.showErrorMessage(
-      `DWG Viewer: ${details.message}`,
+      `2D CAD Viewer: ${details.message}`,
     );
     return false;
   }
@@ -312,7 +398,7 @@ async function addShxFontFolders(): Promise<boolean> {
     canSelectFiles: false,
     canSelectFolders: true,
     canSelectMany: true,
-    title: "DWG Viewer에서 사용할 SHX·BigFont 폴더 선택",
+    title: "2D CAD Viewer에서 사용할 SHX·BigFont 폴더 선택",
     openLabel: "글꼴 폴더 추가",
   });
   const directories = (selected ?? [])
@@ -362,8 +448,8 @@ async function addShxFontFolders(): Promise<boolean> {
   );
   void vscode.window.showInformationMessage(
     added > 0
-      ? `DWG Viewer: SHX 글꼴 폴더 ${added.toLocaleString()}개를 추가했습니다.`
-      : "DWG Viewer: 기존 SHX 글꼴 폴더 설정을 다시 읽습니다.",
+      ? `2D CAD Viewer: SHX 글꼴 폴더 ${added.toLocaleString()}개를 추가했습니다.`
+      : "2D CAD Viewer: 기존 SHX 글꼴 폴더 설정을 다시 읽습니다.",
   );
   return true;
 }
@@ -394,9 +480,26 @@ interface HostMessage {
   firstFrameMs?: unknown;
   format?: unknown;
   kind?: unknown;
+  mode?: unknown;
   requestId?: unknown;
   name?: unknown;
   suggestedName?: unknown;
+  webviewSettleMs?: unknown;
+  detailPendingCount?: unknown;
+  xrefCount?: unknown;
+  xrefIssueCount?: unknown;
+  imageCount?: unknown;
+  imageIssueCount?: unknown;
+  fontCount?: unknown;
+  fontIssueCount?: unknown;
+}
+
+function visualCompletionCount(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) &&
+    (value as number) >= 0 &&
+    (value as number) <= 1_000_000
+    ? (value as number)
+    : undefined;
 }
 
 class DwgEditorProvider
@@ -416,6 +519,7 @@ class DwgEditorProvider
     private readonly output: vscode.OutputChannel,
     private readonly managedEngine: ManagedEngineManager,
     private readonly qualification?: QualificationReporter,
+    private readonly displayStateQualification = false,
   ) {}
 
   private documentKey(uri: vscode.Uri): string {
@@ -472,7 +576,7 @@ class DwgEditorProvider
     _token: vscode.CancellationToken,
   ): DwgDocument {
     if (uri.scheme !== "file") {
-      throw new Error("DWG Viewer currently supports local files only.");
+      throw new Error("2D CAD Viewer currently supports local files only.");
     }
     return new DwgDocument(uri);
   }
@@ -532,6 +636,12 @@ class DwgEditorProvider
     const progressivePreview = vscode.workspace
       .getConfiguration("dwgViewer", document.uri)
       .get<boolean>("progressivePreview", false);
+    const sceneCacheMode = configuredSceneCacheMode(
+      vscode.workspace.getConfiguration("dwgViewer", document.uri),
+    );
+    const maximumPersistentCacheBytes = configuredPersistentCacheBytes(
+      vscode.workspace.getConfiguration("dwgViewer", document.uri),
+    );
 
     const menuDisplaySettings = () => {
       const configuration = vscode.workspace.getConfiguration(
@@ -565,6 +675,13 @@ class DwgEditorProvider
       ),
     } as const);
 
+    const scrollInputModeSettings = () => ({
+      type: "dwg-scroll-input-mode/1",
+      mode: configuredScrollInputMode(
+        vscode.workspace.getConfiguration("dwgViewer", document.uri),
+      ),
+    } as const);
+
     const zoomSensitivitySettings = () => {
       const configuration = vscode.workspace.getConfiguration(
         "dwgViewer",
@@ -591,11 +708,14 @@ class DwgEditorProvider
     let generation = 0;
     let conversion: AbortController | undefined;
     const rangeChannels = new Map<string, CacheRangeChannel>();
+    const cacheReleases = new Map<string, () => Promise<void>>();
     const previewReleases = new Map<string, () => Promise<void>>();
+    const previewFrameWaiters = new Map<string, () => void>();
     let fontChannel: ShxFontChannel | undefined;
     let plotStyleChannel: CtbPlotStyleChannel | undefined;
     let xrefController: XrefController | undefined;
     let imageReferenceChannel: ImageReferenceChannel | undefined;
+    let sceneCacheManager: SceneCacheManager | undefined;
     let activeCacheId: string | undefined;
     let activeCacheReused = false;
     let activeEngine: SceneEngineDescriptor | undefined;
@@ -628,6 +748,7 @@ class DwgEditorProvider
       const menuSettings = menuDisplaySettings();
       const renderSettings = renderResolutionSettings();
       const interactionSettings = interactionRenderingSettings();
+      const scrollSettings = scrollInputModeSettings();
       const zoomSettings = zoomSensitivitySettings();
       webviewPanel.webview.html = renderWebviewHtml(template, {
         cspSource: webviewPanel.webview.cspSource,
@@ -645,10 +766,12 @@ class DwgEditorProvider
         leftToolbarLabels: menuSettings.leftToolbarLabels,
         renderResolution: renderSettings.mode,
         interactionRendering: interactionSettings.mode,
+        scrollInputMode: scrollSettings.mode,
         mouseWheelZoomSensitivity:
           zoomSettings.mouseWheelZoomSensitivity,
         trackpadPinchZoomSensitivity:
           zoomSettings.trackpadPinchZoomSensitivity,
+        displayStateQualification: this.displayStateQualification,
       });
     };
 
@@ -672,6 +795,15 @@ class DwgEditorProvider
       }
       void webviewPanel.webview.postMessage(
         interactionRenderingSettings(),
+      );
+    };
+
+    const postScrollInputModeSettings = (): void => {
+      if (!webviewReady) {
+        return;
+      }
+      void webviewPanel.webview.postMessage(
+        scrollInputModeSettings(),
       );
     };
 
@@ -710,9 +842,18 @@ class DwgEditorProvider
       activeCacheReadyMessage = undefined;
       pendingStateMessage = undefined;
       const channels = [...rangeChannels.values()];
-      const releases = [...previewReleases.values()];
+      const cacheReleaseCallbacks = [...cacheReleases.values()];
+      const previewReleaseCallbacks = [...previewReleases.values()];
+      const previewWaiters = [...previewFrameWaiters.values()];
+      const manager = sceneCacheManager;
+      sceneCacheManager = undefined;
       rangeChannels.clear();
+      cacheReleases.clear();
       previewReleases.clear();
+      previewFrameWaiters.clear();
+      for (const settle of previewWaiters) {
+        settle();
+      }
       fontChannel?.dispose();
       fontChannel = undefined;
       plotStyleChannel?.dispose();
@@ -724,10 +865,56 @@ class DwgEditorProvider
       await Promise.allSettled(
         channels.map((channel) => channel.dispose()),
       );
-      await Promise.allSettled(releases.map((release) => release()));
+      await Promise.allSettled(
+        previewReleaseCallbacks.map((release) => release()),
+      );
+      await Promise.allSettled(
+        cacheReleaseCallbacks.map((release) => release()),
+      );
+      await manager?.dispose();
+    };
+
+    const settlePreviewFrame = (cacheId: string): void => {
+      const settle = previewFrameWaiters.get(cacheId);
+      previewFrameWaiters.delete(cacheId);
+      settle?.();
+    };
+
+    const waitForPreviewFrame = (
+      cacheId: string,
+      signal: AbortSignal,
+    ): Promise<void> => {
+      settlePreviewFrame(cacheId);
+      return new Promise((resolve) => {
+        let settled = false;
+        let timer: NodeJS.Timeout | undefined;
+        const finish = (): void => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (timer) {
+            clearTimeout(timer);
+          }
+          signal.removeEventListener("abort", finish);
+          if (previewFrameWaiters.get(cacheId) === finish) {
+            previewFrameWaiters.delete(cacheId);
+          }
+          resolve();
+        };
+        previewFrameWaiters.set(cacheId, finish);
+        timer = setTimeout(finish, REUSED_PREVIEW_FRAME_WAIT_MS);
+        timer.unref();
+        if (signal.aborted) {
+          finish();
+        } else {
+          signal.addEventListener("abort", finish, { once: true });
+        }
+      });
     };
 
     const disposePreview = async (cacheId: string): Promise<void> => {
+      settlePreviewFrame(cacheId);
       const channel = rangeChannels.get(cacheId);
       const release = previewReleases.get(cacheId);
       rangeChannels.delete(cacheId);
@@ -888,14 +1075,19 @@ class DwgEditorProvider
         const manager = new SceneCacheManager(
           path.join(this.context.globalStorageUri.fsPath, "cache"),
           engine,
+          {
+            mode: sceneCacheMode,
+            maximumPersistentBytes: maximumPersistentCacheBytes,
+          },
         );
+        sceneCacheManager = manager;
         this.output.appendLine(
           `[ENGINE_SELECTED] id=${engine.descriptor.engineId} version=${engine.descriptor.engineVersion} backend=${engine.descriptor.backendId}`,
         );
         const prepared = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: "DWG Viewer",
+            title: "2D CAD Viewer",
             cancellable: true,
           },
           async (progress, cancellationToken) => {
@@ -940,8 +1132,14 @@ class DwgEditorProvider
                         preview.cacheId,
                         preview.release,
                       );
+                      const firstFrame = preview.reused
+                        ? waitForPreviewFrame(
+                            preview.cacheId,
+                            controller.signal,
+                          )
+                        : undefined;
                       try {
-                        await webviewPanel.webview.postMessage({
+                        const posted = await webviewPanel.webview.postMessage({
                           type: "dwg-cache-preview-ready/1",
                           cacheId: preview.cacheId,
                           size: preview.size,
@@ -950,9 +1148,14 @@ class DwgEditorProvider
                           engineBackend: preview.engine.backendId,
                           bigFontEncodings: bigFontEncodings(),
                         });
+                        if (!posted) {
+                          settlePreviewFrame(preview.cacheId);
+                        }
                         void emitQualification("preview-published", {
                           size_bytes: preview.size,
+                          reused: preview.reused,
                         });
+                        await firstFrame;
                       } catch (error) {
                         await disposePreview(preview.cacheId);
                         throw error;
@@ -1001,6 +1204,7 @@ class DwgEditorProvider
             }
           },
         );
+        cacheReleases.set(prepared.cachePath, prepared.release);
         if (
           disposed ||
           controller.signal.aborted ||
@@ -1046,6 +1250,7 @@ class DwgEditorProvider
           postMessage: (message) =>
             webviewPanel.webview.postMessage(message),
           publishCache: async (xrefCache, sourcePath) => {
+            cacheReleases.set(xrefCache.cachePath, xrefCache.release);
             imageReferenceChannel?.registerSource(
               xrefCache.cacheId,
               sourcePath,
@@ -1169,6 +1374,7 @@ class DwgEditorProvider
             postMenuDisplaySettings();
             postRenderResolutionSettings();
             postInteractionRenderingSettings();
+            postScrollInputModeSettings();
             postZoomSensitivitySettings();
             if (activeCacheReadyMessage) {
               void webviewPanel.webview.postMessage(
@@ -1185,6 +1391,32 @@ class DwgEditorProvider
               document.uri,
               webviewPanel,
             );
+            break;
+          }
+          case "dwg-scroll-input-mode-set/1": {
+            if (
+              raw.mode !== "mouse-zoom" &&
+              raw.mode !== "trackpad-pan"
+            ) {
+              postScrollInputModeSettings();
+              break;
+            }
+            const configuration = vscode.workspace.getConfiguration(
+              "dwgViewer",
+              document.uri,
+            );
+            void Promise.resolve(
+              configuration.update(
+                "scrollInputMode",
+                raw.mode,
+                scrollInputModeConfigurationTarget(configuration),
+              ),
+            ).catch(() => {
+              postScrollInputModeSettings();
+              void vscode.window.showErrorMessage(
+                "2D CAD Viewer: 스크롤 입력 모드 설정을 저장하지 못했습니다.",
+              );
+            });
             break;
           }
           case "dwg-cache-retry/1":
@@ -1247,7 +1479,7 @@ class DwgEditorProvider
                 defaultUri: vscode.Uri.file(
                   path.join(path.dirname(document.uri.fsPath), fileName),
                 ),
-                title: "DWG Viewer 출력 파일 저장",
+                title: "2D CAD Viewer 출력 파일 저장",
                 saveLabel: "저장",
                 filters:
                   format === "pdf"
@@ -1281,7 +1513,7 @@ class DwgEditorProvider
                   bytes: bytes.length,
                 });
                 void vscode.window.showInformationMessage(
-                  `DWG Viewer: ${path.basename(selected.fsPath || selected.path)} 저장 완료`,
+                  `2D CAD Viewer: ${path.basename(selected.fsPath || selected.path)} 저장 완료`,
                 );
               })
               .catch((error: unknown) => {
@@ -1482,6 +1714,60 @@ class DwgEditorProvider
               );
             break;
           }
+          case "dwg-visual-complete/1": {
+            if (raw.cacheId !== activeCacheId) {
+              break;
+            }
+            const webviewSettleMs = visualCompletionCount(
+              raw.webviewSettleMs,
+            );
+            const detailPendingCount = visualCompletionCount(
+              raw.detailPendingCount,
+            );
+            const xrefCount = visualCompletionCount(raw.xrefCount);
+            const xrefIssueCount = visualCompletionCount(
+              raw.xrefIssueCount,
+            );
+            const imageCount = visualCompletionCount(raw.imageCount);
+            const imageIssueCount = visualCompletionCount(
+              raw.imageIssueCount,
+            );
+            const fontCount = visualCompletionCount(raw.fontCount);
+            const fontIssueCount = visualCompletionCount(
+              raw.fontIssueCount,
+            );
+            if (
+              webviewSettleMs === undefined ||
+              detailPendingCount === undefined ||
+              xrefCount === undefined ||
+              xrefIssueCount === undefined ||
+              imageCount === undefined ||
+              imageIssueCount === undefined ||
+              fontCount === undefined ||
+              fontIssueCount === undefined ||
+              xrefIssueCount > xrefCount ||
+              imageIssueCount > imageCount ||
+              fontIssueCount > fontCount
+            ) {
+              break;
+            }
+            const hostElapsed = Math.max(0, Date.now() - openStartedAt);
+            this.output.appendLine(
+              `[VISUAL_COMPLETE] host_to_visual_ms=${hostElapsed} webview_settle_ms=${webviewSettleMs} detail_pending=${detailPendingCount} xrefs=${xrefCount} xref_issues=${xrefIssueCount} images=${imageCount} image_issues=${imageIssueCount} fonts=${fontCount} font_issues=${fontIssueCount}`,
+            );
+            void emitQualification("visual-complete", {
+              host_to_visual_complete_ms: hostElapsed,
+              webview_settle_ms: webviewSettleMs,
+              detail_pending_count: detailPendingCount,
+              xref_count: xrefCount,
+              xref_issue_count: xrefIssueCount,
+              image_count: imageCount,
+              image_issue_count: imageIssueCount,
+              font_count: fontCount,
+              font_issue_count: fontIssueCount,
+            }).finally(() => closeAfterQualification("visual"));
+            break;
+          }
           case "dwg-first-frame-ready/1":
             if (raw.cacheId === activeCacheId) {
               const hostElapsed = Math.max(0, Date.now() - openStartedAt);
@@ -1507,6 +1793,7 @@ class DwgEditorProvider
               typeof raw.cacheId === "string" &&
               previewReleases.has(raw.cacheId)
             ) {
+              settlePreviewFrame(raw.cacheId);
               const hostElapsed = Math.max(0, Date.now() - openStartedAt);
               this.output.appendLine(
                 `[PREVIEW_FRAME_READY] engine=${
@@ -1603,6 +1890,14 @@ class DwgEditorProvider
         }
         if (
           event.affectsConfiguration(
+            "dwgViewer.scrollInputMode",
+            document.uri,
+          )
+        ) {
+          postScrollInputModeSettings();
+        }
+        if (
+          event.affectsConfiguration(
             "dwgViewer.mouseWheelZoomSensitivity",
             document.uri,
           ) ||
@@ -1662,7 +1957,7 @@ export function activate(context: vscode.ExtensionContext): void {
       qualificationReporter,
     );
   }
-  const output = vscode.window.createOutputChannel("DWG Viewer");
+  const output = vscode.window.createOutputChannel("2D CAD Viewer");
   const managedEngine = new ManagedEngineManager({
     storageRoot: path.join(
       context.globalStorageUri.fsPath,
@@ -1682,9 +1977,14 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   if (context.extensionMode === vscode.ExtensionMode.Production) {
     void managedEngine.ensure().then(
-      (installation) => {
+      async (installation) => {
         output.appendLine(
           `[MANAGED_ENGINE_PREFETCHED] target=${installation.target} reused=${installation.reused} source=${installation.sourceUrl}`,
+        );
+        await maintainSceneCacheStorage(
+          context,
+          output,
+          installation.adapterPath,
         );
       },
       (error) => {
@@ -1700,6 +2000,7 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     managedEngine,
     qualificationReporter,
+    displayStateQualificationEnabled(),
   );
   const textSearch = new WorkspaceTextSearchController(
     context,

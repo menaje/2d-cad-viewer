@@ -35,7 +35,7 @@ test("pins the unmodified official MPL text and separate project notice", async 
     createHash("sha256").update(license).digest("hex"),
     MPL_2_0_SHA256,
   );
-  assert.match(notice, /Copyright 2026 dwg-viewer contributors/u);
+  assert.match(notice, /Copyright 2026 2d-cad-viewer contributors/u);
 });
 
 test("pins the unmodified GPLv3 text conveyed with LibreDWG", async () => {
@@ -157,9 +157,33 @@ test("bounds the expanded Windows PE dependency audit", async () => {
   assert.match(packageSource, /timeout: 30_000,/u);
 });
 
-test("keeps package and source preparation pins synchronized", async () => {
-  const [prepareScript, buildScript, nativeEngineSource] = await Promise.all([
+test("centralizes source preparation behind target profiles", async () => {
+  const [
+    prepareScript,
+    commonPrepareScript,
+    linuxProfile,
+    macosProfile,
+    windowsProfile,
+    buildScript,
+    nativeEngineSource,
+  ] = await Promise.all([
     readFile(path.join(import.meta.dirname, "prepare.sh"), "utf8"),
+    readFile(
+      path.join(import.meta.dirname, "scripts", "prepare-common.sh"),
+      "utf8",
+    ),
+    readFile(
+      path.join(import.meta.dirname, "scripts", "platform", "linux.sh"),
+      "utf8",
+    ),
+    readFile(
+      path.join(import.meta.dirname, "scripts", "platform", "macos.sh"),
+      "utf8",
+    ),
+    readFile(
+      path.join(import.meta.dirname, "scripts", "platform", "windows.sh"),
+      "utf8",
+    ),
     readFile(path.join(import.meta.dirname, "build.sh"), "utf8"),
     readFile(
       path.join(
@@ -175,21 +199,39 @@ test("keeps package and source preparation pins synchronized", async () => {
     ),
   ]);
   assert.match(
-    prepareScript,
+    commonPrepareScript,
     new RegExp(`LIBREDWG_VERSION=${LIBREDWG_VERSION.replace(".", "\\.")}`, "u"),
   );
   assert.match(
-    prepareScript,
+    commonPrepareScript,
     new RegExp(`LIBREDWG_SHA256=${LIBREDWG_SOURCE_SHA256}`, "u"),
   );
-  assert.match(prepareScript, /--disable-shared/u);
-  assert.match(prepareScript, /--enable-static/u);
+  assert.match(commonPrepareScript, /--disable-shared/u);
+  assert.match(commonPrepareScript, /--enable-static/u);
+  assert.match(prepareScript, /platform_profile=linux/u);
+  assert.match(prepareScript, /platform_profile=macos/u);
+  assert.match(prepareScript, /platform_profile=windows/u);
+  assert.match(prepareScript, /scripts\/prepare-common\.sh/u);
+  assert.match(commonPrepareScript, /dwg_viewer_platform_configure/u);
+  assert.match(linuxProfile, /PKG_CONFIG=/u);
+  assert.match(windowsProfile, /x86_64\|amd64/u);
+  assert.match(macosProfile, /x86_64\|arm64/u);
+  assert.match(
+    macosProfile,
+    /CFLAGS=\$\{CFLAGS:--O3 -DNDEBUG\}/u,
+  );
+  assert.doesNotMatch(linuxProfile, /-O3|-DNDEBUG/u);
+  assert.doesNotMatch(windowsProfile, /-O3|-DNDEBUG/u);
   assert.match(
     buildScript,
     new RegExp(`LIBREDWG_VERSION=${LIBREDWG_VERSION.replace(".", "\\.")}`, "u"),
   );
   assert.match(buildScript, /--exact-version="\$LIBREDWG_VERSION"/u);
   assert.match(buildScript, /static_library=.*libredwg\.a/u);
+  assert.match(buildScript, /build_cflags=\$\{CFLAGS:--O3 -DNDEBUG\}/u);
+  assert.match(buildScript, /build_ldflags=\$\{LDFLAGS:-\}/u);
+  assert.match(buildScript, /\$build_cflags -Wall/u);
+  assert.match(buildScript, /\$platform_ldflags \$build_ldflags/u);
   assert.match(buildScript, /"\$static_library" -lm/u);
   assert.match(buildScript, /MINGW\*.*MSYS\*.*CYGWIN\*/u);
   assert.match(buildScript, /-static -static-libgcc/u);
@@ -203,7 +245,7 @@ test("keeps package and source preparation pins synchronized", async () => {
   );
 });
 
-test("uses native Windows isolation and a path-safe piped input contract", async () => {
+test("uses native Windows isolation and an inherited input handle", async () => {
   const [adapterSource, sceneCacheSource, hostSource] = await Promise.all([
     readFile(
       path.join(import.meta.dirname, "libredwg_adapter.c"),
@@ -238,12 +280,134 @@ test("uses native Windows isolation and a path-safe piped input contract", async
   assert.match(sceneCacheSource, /FILE_FLAG_DELETE_ON_CLOSE/u);
   assert.match(sceneCacheSource, /_O_NOINHERIT/u);
   assert.match(sceneCacheSource, /_lseeki64/u);
-  assert.match(hostSource, /adapterInputPath = "-"/u);
+  assert.match(adapterSource, /K32GetProcessMemoryInfo/u);
+  assert.match(adapterSource, /PeakWorkingSetSize/u);
+  assert.match(adapterSource, /counters\.WorkingSetSize/u);
+  assert.match(adapterSource, /PeakPagefileUsage/u);
+  assert.match(adapterSource, /counters\.PrivateUsage/u);
+  assert.match(adapterSource, /GetProcessIoCounters/u);
+  assert.match(adapterSource, /parse_working_set_bytes/u);
+  assert.match(adapterSource, /parse_private_bytes/u);
+  assert.match(adapterSource, /parse_peak_private_bytes/u);
+  assert.match(adapterSource, /peak_private_bytes/u);
+  assert.match(hostSource, /openWindowsInput/u);
   assert.match(hostSource, /windowsChildPath/u);
-  assert.match(hostSource, /createReadStream\(inputPath\)/u);
+  assert.match(
+    hostSource,
+    /inheritedInput \? inheritedInput\.handle\.fd : "ignore"/u,
+  );
+  assert.match(
+    hostSource,
+    /DWG_VIEWER_INPUT_TRANSPORT:[\s\S]*"inherited-file-handle"/u,
+  );
+  assert.match(hostSource, /adapterInputPath = "-"/u);
+  assert.doesNotMatch(hostSource, /stageWindowsInput|copyFile\(|stagedPath/u);
+  assert.match(
+    sceneCacheSource,
+    /block_is_external_reference \(block\)/u,
+  );
 });
 
-test("serializes sparse viewport layer overrides in Scene Cache v1.21", async () => {
+test("streams merged spatial runs directly into the GPU section encoder", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+  const mergeFunction = sceneCacheSource.match(
+    /merge_spatial_sort_runs \([\s\S]*?\n\}/u,
+  );
+  const storeBuilder = sceneCacheSource.match(
+    /build_spatial_segment_store \([\s\S]*?\n\}/u,
+  );
+
+  assert.ok(mergeFunction, "spatial run merge is missing");
+  assert.match(
+    sceneCacheSource,
+    /#define SPATIAL_MERGE_BUFFER_RECORDS 64u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /random_access \? FILE_FLAG_RANDOM_ACCESS[\s\S]*?FILE_FLAG_SEQUENTIAL_SCAN/u,
+  );
+  assert.match(mergeFunction[0], /LineSegmentConsumer consumer/u);
+  assert.match(
+    mergeFunction[0],
+    /consumer \(consumer_context,[\s\S]*?\.segment\)/u,
+  );
+  assert.doesNotMatch(mergeFunction[0], /fwrite|FILE \*output/u);
+  assert.ok(storeBuilder, "spatial run store builder is missing");
+  assert.equal(
+    storeBuilder[0].match(/open_spatial_run_file/g)?.length,
+    1,
+  );
+  assert.match(storeBuilder[0], /store->runs = builder\.runs/u);
+  assert.doesNotMatch(storeBuilder[0], /sorted_file/u);
+});
+
+test("writes full-cache GPU vertices directly into the final cache", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+  const gpuWriter = sceneCacheSource.match(
+    /write_gpu_sections \([\s\S]*?\n\}/u,
+  );
+
+  assert.ok(gpuWriter, "GPU section writer is missing");
+  assert.match(gpuWriter[0], /int split_output/u);
+  assert.match(gpuWriter[0], /int direct_output/u);
+  assert.match(gpuWriter[0], /batch_writer = &staging_writer/u);
+  assert.match(gpuWriter[0], /vertex_writer = writer/u);
+  assert.match(gpuWriter[0], /\*prefix_file = staging_file/u);
+  assert.match(
+    sceneCacheSource,
+    /if \(group == 3u\)[\s\S]*?tasks\[group\]\.file = writer->file;[\s\S]*?tasks\[group\]\.direct_output = 1;/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /if \(tasks\[group\]\.direct_output\)\s*continue;/u,
+  );
+});
+
+test("buffers packed scalar writes and flushes every publication boundary", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /#define CACHE_WRITE_BUFFER_BYTES \(64u \* 1024u\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /#if defined\(__APPLE__\)[\s\S]*?defined\(__x86_64__\)[\s\S]*?defined\(__aarch64__\)[\s\S]*?defined\(__arm64__\)[\s\S]*?DWG_VIEWER_MACOS_BUFFERED_WRITER/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /uint8_t buffer\[CACHE_WRITE_BUFFER_BYTES\]/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /writer->buffered == sizeof \(writer->buffer\)[\s\S]*?flush_writer \(writer\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /position \(CacheWriter \*writer[\s\S]*?flush_writer \(writer\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /seek_to \(CacheWriter \*writer[\s\S]*?flush_writer \(writer\)/u,
+  );
+  assert.equal(
+    sceneCacheSource.match(
+      /write_directory \(&writer, sections\)[\s\S]{0,80}?flush_writer \(&writer\)/gu,
+    )?.length,
+    2,
+  );
+});
+
+test("serializes sparse viewport layer overrides in Scene Cache v1.26", async () => {
   const [sceneCacheSource, sceneCacheHeader] = await Promise.all([
     readFile(
       path.join(import.meta.dirname, "libredwg_scene_cache.c"),
@@ -257,11 +421,11 @@ test("serializes sparse viewport layer overrides in Scene Cache v1.21", async ()
 
   assert.match(
     sceneCacheHeader,
-    /LIBREDWG_SCENE_CACHE_VERSION_MINOR 21u/u,
+    /LIBREDWG_SCENE_CACHE_VERSION_MINOR 26u/u,
   );
   assert.match(
     sceneCacheHeader,
-    /LIBREDWG_SCENE_SECTION_COUNT 49/u,
+    /LIBREDWG_SCENE_SECTION_COUNT 51/u,
   );
   assert.match(
     sceneCacheSource,
@@ -280,6 +444,110 @@ test("serializes sparse viewport layer overrides in Scene Cache v1.21", async ()
   assert.match(
     sceneCacheSource,
     /write_viewport_layer_override_section \(\s*&writer, dwg, tables, &sections\[46\]\)/u,
+  );
+});
+
+test("preserves saved presentation controls and XREF load state", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  for (const setting of [
+    "ATTMODE",
+    "IMAGEFRAME",
+    "XCLIPFRAME",
+    "OLEFRAME",
+    "ANNOALLVISIBLE",
+    "MSLTSCALE",
+    "CANNOSCALE",
+    "PDFFRAME",
+    "DWFFRAME",
+    "DGNFRAME",
+  ]) {
+    assert.match(sceneCacheSource, new RegExp(setting, "u"));
+  }
+  assert.match(
+    sceneCacheSource,
+    /copy_variable_dictionary_value[\s\S]*?copy_versioned_text/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /model_annotation_scale[\s\S]*?copy_variable_dictionary_value \(dwg, "CANNOSCALE"\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /loaded = !block->xref_loaded;/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /loaded \|\| block->is_xref_resolved/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /flags \|= block_xref_state_flags \(block\);/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /block->blkisxref \|\| block->xrefoverlaid[\s\S]*?block_xref_path_is_explicit \(block->xref_pname\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /strchr \(value, '\/'\) \|\| strchr \(value, '\\\\'\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /value\[length - 4u\] == '\.'[\s\S]*?value\[length - 1u\] == 'G'/u,
+  );
+  assert.doesNotMatch(
+    sceneCacheSource,
+    /if \(block->xref_loaded\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /tables->presentation_settings >> 6/u,
+  );
+  assert.match(sceneCacheSource, /AcadAnnoAV/u);
+  assert.match(
+    sceneCacheSource,
+    /eed->data->code != 70u[\s\S]*?eed->data->u\.eed_70\.rs/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /write_u16 \(writer, annotation_all_visible\)/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /has_layout_annotation_all_visible\s*\? layout_annotation_all_visible\s*:\s*1u/u,
+  );
+});
+
+test("normalizes embedded MTEXT attributes without reclassifying single-line records", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.equal(
+    sceneCacheSource.match(
+      /if \(text->mtext_type > 1\)\s+source->flags \|= TEXT_FLAG_MULTILINE;/gu,
+    )?.length,
+    2,
+  );
+  assert.equal(
+    sceneCacheSource.match(
+      /if \(text->mtext_type > 1\)\s+copy_embedded_mtext \(source, &text->mtext\);/gu,
+    )?.length,
+    2,
+  );
+  assert.match(
+    sceneCacheSource,
+    /source->extents_width[\s\S]*?mtext->extents_height[\s\S]*?source->extents_height[\s\S]*?mtext->extents_width/u,
+  );
+  assert.match(sceneCacheSource, /direction_length > 1\.0e-12/u);
+  assert.match(
+    sceneCacheSource,
+    /mtext->column_type == 1 \? \(int32_t\)mtext->numfragments/u,
   );
 });
 
@@ -529,9 +797,13 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
     wasmBuildScript,
     acdsPatchSource,
     highCompressionPatchSource,
+    seekableStdinPatchSource,
   ] = await Promise.all([
       readFile(path.join(import.meta.dirname, "package.mjs"), "utf8"),
-      readFile(path.join(import.meta.dirname, "prepare.sh"), "utf8"),
+      readFile(
+        path.join(import.meta.dirname, "scripts", "prepare-common.sh"),
+        "utf8",
+      ),
       readFile(
         path.join(import.meta.dirname, "wasm", "build.sh"),
         "utf8",
@@ -547,13 +819,22 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
         ),
         "utf8",
       ),
+      readFile(
+        path.join(import.meta.dirname, "libredwg-seekable-stdin.patch"),
+        "utf8",
+      ),
     ]);
 
   assert.match(packageSource, /"libredwg-acds-sab\.patch"/u);
+  assert.match(packageSource, /"scripts\/prepare-common\.sh"/u);
+  assert.match(packageSource, /"scripts\/platform\/linux\.sh"/u);
+  assert.match(packageSource, /"scripts\/platform\/macos\.sh"/u);
+  assert.match(packageSource, /"scripts\/platform\/windows\.sh"/u);
   assert.match(
     packageSource,
     /"libredwg-r2007-high-compression\.patch"/u,
   );
+  assert.match(packageSource, /"libredwg-seekable-stdin\.patch"/u);
   assert.match(
     prepareScript,
     /patch_tool=\$\{DWG_VIEWER_PATCH:-patch\}/u,
@@ -568,6 +849,13 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
   );
   assert.match(prepareScript, /libredwg-r2007-high-compression\.patch/u);
   assert.match(wasmBuildScript, /libredwg-r2007-high-compression\.patch/u);
+  assert.match(prepareScript, /libredwg-seekable-stdin\.patch/u);
+  assert.match(wasmBuildScript, /libredwg-seekable-stdin\.patch/u);
+  assert.match(
+    prepareScript,
+    /command -v sha256sum[\s\S]*command -v shasum/u,
+  );
+  assert.match(prepareScript, /if \[ "\$jobs" -gt 8 \]/u);
   assert.match(acdsPatchSource, /ACIS BinaryFile/u);
   assert.match(acdsPatchSource, /ASM BinaryFile/u);
   assert.match(acdsPatchSource, /sol->sab_size/u);
@@ -576,6 +864,9 @@ test("applies the pinned LibreDWG patches to every converter build", async () =>
     /MAX_R2007_SECTION_DECOMP_SIZE/u,
   );
   assert.match(highCompressionPatchSource, /section->data_size > MAX_/u);
+  assert.match(seekableStdinPatchSource, /seekable_stdin/u);
+  assert.match(seekableStdinPatchSource, /S_ISREG \(attrib\.st_mode\)/u);
+  assert.match(seekableStdinPatchSource, /dat_read_file/u);
 });
 
 test("rejects a silent LibreDWG parse that contains no drawing objects", async () => {
@@ -592,6 +883,22 @@ test("rejects a silent LibreDWG parse that contains no drawing objects", async (
     adapterSource.match(/LibreDWG parse produced no drawing objects/gu)
       ?.length,
     2,
+  );
+});
+
+test("uses the BLOCK entity name for current paper layout identity", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /copy_block_name[\s\S]*?block->block_entity[\s\S]*?DWG_TYPE_BLOCK[\s\S]*?"BLOCK", "name"/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /entry->name = copy_block_name \([\s\S]*?BLOCK_HEADER\);/u,
   );
 });
 
@@ -631,11 +938,96 @@ test("streams bounded proxy table graphics into lines and UTF-8 text", async () 
   assert.match(sceneCacheSource, /proxy_read_utf16_string/u);
   assert.match(sceneCacheSource, /iterate_proxy_graphic_segments/u);
   assert.match(sceneCacheSource, /for_each_scene_text_source/u);
+  assert.match(
+    sceneCacheSource,
+    /iterate_proxy_graphic_segments[\s\S]*?!proxy_graphic_has_supported_display \(object\)[\s\S]*?return 1;/u,
+  );
   assert.doesNotMatch(sceneCacheSource, /TextSourceList/u);
   assert.match(sceneCacheHeader, /uint64_t proxy_graphics;/u);
   assert.match(adapterSource, /proxy_graphics/u);
+  assert.match(sceneCacheHeader, /uint64_t unsupported_underlays;/u);
+  assert.match(sceneCacheHeader, /uint64_t unsupported_proxy_graphics;/u);
+  assert.match(sceneCacheHeader, /uint64_t unsupported_3d_entities;/u);
+  assert.ok(adapterSource.includes('\\"deferred_reasons\\"'));
+  assert.ok(adapterSource.includes('\\"proxyshow\\":1'));
+  assert.match(
+    adapterSource,
+    /\[6,7,14,18,22,23,29,30,31,32,38\]/u,
+  );
   assert.match(
     adapterSource,
     /object->klass && object->klass->dxfname/u,
   );
+});
+
+test("serializes pre-R13 simple linetype dashes without dereferencing modern records", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /serialized_linetype_dash_count[\s\S]*?header\.version < R_13b1[\s\S]*?count > 12u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /linetype->dashes_r11\[dash_index\]/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /dwg->header\.version < R_13b1[\s\S]*?texts\[cursor\] = strdup \(""\)/u,
+  );
+});
+
+test("preserves qualified MLINE fills and fails closed on fill cuts", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(
+    sceneCacheSource,
+    /write_mline_fill_records[\s\S]*?style->flag & 1u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /write_mline_fill_segment[\s\S]*?parameter_count != 0u/u,
+  );
+  assert.doesNotMatch(
+    sceneCacheSource,
+    /write_mline_fill_segment[\s\S]*?areafillparms\[/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /write_solid_surface_record[\s\S]*?&style->fill_color/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /write_mline_round_fill_cap[\s\S]*?const size_t chords = 12u/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /SOLID\/MLINE fill source exceeds its record limit/u,
+  );
+  assert.match(
+    sceneCacheSource,
+    /MLINE area-fill boundary is unsupported or incomplete/u,
+  );
+});
+
+test("preserves concrete HATCH background TrueColor and rejects None", async () => {
+  const sceneCacheSource = await readFile(
+    path.join(import.meta.dirname, "libredwg_scene_cache.c"),
+    "utf8",
+  );
+
+  assert.match(sceneCacheSource, /HATCHBACKGROUNDCOLOR/u);
+  assert.match(
+    sceneCacheSource,
+    /eed->data->code != 71u[\s\S]*?eed_71\.rl >> 24\) != 0xc2u[\s\S]*?0x00ffffffu/u,
+  );
+  assert.match(sceneCacheSource, /0xc8 means None/u);
+  assert.match(sceneCacheSource, /HATCH_FLAG_BACKGROUND_COLOR/u);
+  assert.match(sceneCacheSource, /write_u32 \(writer, background_color\)/u);
 });

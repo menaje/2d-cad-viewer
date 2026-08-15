@@ -168,12 +168,22 @@ function crossSections(sampled) {
   return { left, right, center: sampled.points };
 }
 
-function appendTriangle(output, matrix, triangle) {
+function appendTriangle(
+  output,
+  matrix,
+  triangle,
+  patternOutput = null,
+  patternValues = null,
+) {
   if (!usableTriangle(triangle)) {
     return;
   }
-  for (const point of triangle) {
+  for (let index = 0; index < triangle.length; index += 1) {
+    const point = triangle[index];
     output.push(transformPoint(matrix, point));
+    if (patternOutput && patternValues) {
+      patternOutput.push(patternValues[index]);
+    }
   }
 }
 
@@ -228,9 +238,11 @@ export function buildWidePolylineGeometry(
   const closed = Boolean(entity.polylineFlags & 1);
   const edgeCount = vertices.length - 1 + Number(closed);
   const edges = new Array(edgeCount);
+  let patternCursor = 0;
   let sampledSegments = 0;
   let drawableEdges = 0;
   let wideEdges = 0;
+  let maximumDrawableWidth = 0;
   let invalidWidths = false;
   for (let index = 0; index < edgeCount; index += 1) {
     const start = vertices[index];
@@ -254,6 +266,7 @@ export function buildWidePolylineGeometry(
       continue;
     }
     drawableEdges += 1;
+    maximumDrawableWidth = Math.max(maximumDrawableWidth, ...widths);
     if (!wide) {
       edges[index] = { wide: false, degenerate: false };
       continue;
@@ -281,19 +294,37 @@ export function buildWidePolylineGeometry(
       return null;
     }
     wideEdges += 1;
-    edges[index] = { wide: true, degenerate: false, sections };
+    const patternDistances = new Array(sampled.points.length);
+    patternDistances[0] = patternCursor;
+    for (let pointIndex = 1; pointIndex < sampled.points.length; pointIndex += 1) {
+      patternCursor += Math.hypot(
+        sampled.points[pointIndex][0] - sampled.points[pointIndex - 1][0],
+        sampled.points[pointIndex][1] - sampled.points[pointIndex - 1][1],
+        sampled.points[pointIndex][2] - sampled.points[pointIndex - 1][2],
+      );
+      patternDistances[pointIndex] = patternCursor;
+    }
+    edges[index] = {
+      wide: true,
+      degenerate: false,
+      sections,
+      patternDistances,
+    };
   }
   if (wideEdges === 0) {
     return Object.freeze({
       fillVertices: Object.freeze([]),
+      fillPatternDistances: Object.freeze([]),
       outlineVertices: Object.freeze([]),
       allDrawableEdgesWide: false,
+      maximumDrawableWidth,
       mixedWidth: false,
       sampledSegments,
     });
   }
   const matrix = arbitraryAxisMat4(entity.normal);
   const fillVertices = [];
+  const fillPatternDistances = [];
   const outlineVertices = [];
   for (let index = 0; index < edges.length; index += 1) {
     const edge = edges[index];
@@ -301,17 +332,26 @@ export function buildWidePolylineGeometry(
       continue;
     }
     const { left, right, center } = edge.sections;
+    const { patternDistances } = edge;
     for (let segment = 0; segment < left.length - 1; segment += 1) {
       if (fillMode) {
         appendTriangle(fillVertices, matrix, [
           left[segment],
           right[segment],
           right[segment + 1],
+        ], fillPatternDistances, [
+          patternDistances[segment],
+          patternDistances[segment],
+          patternDistances[segment + 1],
         ]);
         appendTriangle(fillVertices, matrix, [
           left[segment],
           right[segment + 1],
           left[segment + 1],
+        ], fillPatternDistances, [
+          patternDistances[segment],
+          patternDistances[segment + 1],
+          patternDistances[segment + 1],
         ]);
       } else {
         appendLine(outlineVertices, matrix, [
@@ -335,11 +375,19 @@ export function buildWidePolylineGeometry(
           center[0],
           previousLeft,
           left[0],
+        ], fillPatternDistances, [
+          patternDistances[0],
+          patternDistances[0],
+          patternDistances[0],
         ]);
         appendTriangle(fillVertices, matrix, [
           center[0],
           right[0],
           previousRight,
+        ], fillPatternDistances, [
+          patternDistances[0],
+          patternDistances[0],
+          patternDistances[0],
         ]);
       } else {
         appendLine(outlineVertices, matrix, [previousLeft, left[0]]);
@@ -355,9 +403,11 @@ export function buildWidePolylineGeometry(
   }
   return Object.freeze({
     fillVertices: Object.freeze(fillVertices),
+    fillPatternDistances: Object.freeze(fillPatternDistances),
     outlineVertices: Object.freeze(outlineVertices),
     allDrawableEdgesWide:
       !invalidWidths && drawableEdges > 0 && wideEdges === drawableEdges,
+    maximumDrawableWidth,
     mixedWidth: wideEdges > 0 && wideEdges < drawableEdges,
     sampledSegments,
   });

@@ -1,12 +1,16 @@
-DWG Viewer notices
-==================
+2D CAD Viewer notices
+=====================
 
-Copyright 2026 dwg-viewer contributors
+Copyright 2026 2d-cad-viewer contributors
 
-DWG Viewer source code is made available under the Mozilla Public License
+2D CAD Viewer source code is made available under the Mozilla Public License
 Version 2.0 unless a file or directory states otherwise. The complete,
 unmodified MPL 2.0 text is in LICENSE.
 
 Third-party copyright and permission notices are in THIRD_PARTY_NOTICES.md.
 Artifact-specific licensing and source-availability rules are documented in
 docs/licensing.md.
+
+Autodesk, AutoCAD, and DWG are registered trademarks or trademarks of Autodesk,
+Inc. This project is independently developed and is not affiliated with,
+authorized by, endorsed by, or sponsored by Autodesk.

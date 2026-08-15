@@ -56,8 +56,15 @@ test("reads the layout Display Plot Styles flag", () => {
   assert.equal(plotStyleShownInLayout(null), false);
 });
 
-test("keeps screen plot styles off until the user enables them", () => {
-  assert.equal(resolveScreenPlotStyleEnabled(undefined), false);
-  assert.equal(resolveScreenPlotStyleEnabled(false), false);
-  assert.equal(resolveScreenPlotStyleEnabled(true), true);
+test("defaults screen plot styles to the saved layout flag", () => {
+  assert.equal(
+    resolveScreenPlotStyleEnabled(undefined, { plotFlags: 676 }),
+    false,
+  );
+  assert.equal(
+    resolveScreenPlotStyleEnabled(undefined, { plotFlags: 678 }),
+    true,
+  );
+  assert.equal(resolveScreenPlotStyleEnabled(false, { plotFlags: 678 }), false);
+  assert.equal(resolveScreenPlotStyleEnabled(true, { plotFlags: 676 }), true);
 });

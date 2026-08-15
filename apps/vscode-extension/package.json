@@ -1,14 +1,14 @@
 {
   "name": "dwg-viewer-vscode",
-  "displayName": "DWG Viewer for VS Code",
-  "description": "Open-source, local-first DWG viewing with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
-  "version": "0.1.7",
+  "displayName": "2D CAD Viewer for VS Code",
+  "description": "Open-source, local-first 2D CAD viewer compatible with the DWG file format, with Korean CAD fonts, XREFs, measurements, text search, layouts, and PNG/PDF export",
+  "version": "0.1.8",
   "publisher": "menaje",
   "license": "MPL-2.0",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/menaje/dwg-viewer.git",
+    "url": "https://github.com/menaje/2d-cad-viewer.git",
     "directory": "apps/vscode-extension"
   },
   "engines": {
@@ -47,29 +47,29 @@
     "commands": [
       {
         "command": "dwgViewer.addShxFontFolders",
-        "title": "DWG Viewer: SHX 글꼴 폴더 추가"
+        "title": "2D CAD Viewer: SHX 글꼴 폴더 추가"
       },
       {
         "command": "dwgViewer.selectLibreDwgAdapter",
-        "title": "DWG Viewer: LibreDWG 변환기 선택"
+        "title": "2D CAD Viewer: LibreDWG 변환기 선택"
       },
       {
         "command": "dwgViewer.diagnoseLibreDwgAdapter",
-        "title": "DWG Viewer: LibreDWG 변환기 진단"
+        "title": "2D CAD Viewer: LibreDWG 변환기 진단"
       },
       {
         "command": "dwgViewer.searchWorkspaceText",
-        "title": "DWG Viewer: 워크스페이스 도면 문자 검색",
+        "title": "2D CAD Viewer: 워크스페이스 도면 문자 검색",
         "icon": "$(search)"
       },
       {
         "command": "dwgViewer.refreshWorkspaceTextSearch",
-        "title": "DWG Viewer: 도면 문자 검색 다시 실행",
+        "title": "2D CAD Viewer: 도면 문자 검색 다시 실행",
         "icon": "$(refresh)"
       },
       {
         "command": "dwgViewer.toggleTextSearchRegularExpression",
-        "title": "DWG Viewer: 도면 문자 검색 정규식 사용",
+        "title": "2D CAD Viewer: 도면 문자 검색 정규식 사용",
         "icon": "$(regex)"
       }
     ],
@@ -105,7 +105,7 @@
     "customEditors": [
       {
         "viewType": "dwgViewer.dwg",
-        "displayName": "DWG Viewer",
+        "displayName": "2D CAD Viewer",
         "selector": [
           {
             "filenamePattern": "*.dwg"
@@ -118,7 +118,7 @@
       }
     ],
     "configuration": {
-      "title": "DWG Viewer",
+      "title": "2D CAD Viewer",
       "properties": {
         "dwgViewer.libredwgAdapterPath": {
           "type": "string",
@@ -131,6 +131,28 @@
           "default": false,
           "scope": "window",
           "description": "Show an overview while full conversion continues. This improves first-frame latency but substantially increases concurrent memory."
+        },
+        "dwgViewer.sceneCacheMode": {
+          "type": "string",
+          "enum": [
+            "session",
+            "persistent"
+          ],
+          "enumDescriptions": [
+            "Keep generated Scene Caches only while the drawing or workspace search is using them, then delete them.",
+            "Keep validated Scene Caches for faster subsequent opens. This can use several times the source DWG size on local disk."
+          ],
+          "default": "session",
+          "scope": "machine",
+          "description": "Choose whether generated drawing caches are retained between sessions. Changing this setting affects newly opened drawings."
+        },
+        "dwgViewer.sceneCacheMaximumSizeGiB": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 5,
+          "scope": "machine",
+          "description": "Maximum local disk space in GiB for persistent drawing caches. Oldest closed drawings are removed first; session mode does not retain them."
         },
         "dwgViewer.renderResolution": {
           "type": "string",
@@ -163,6 +185,20 @@
           "default": "hybrid",
           "scope": "window",
           "description": "Choose how the viewer redraws while panning or zooming. Conversion and export performance are unaffected."
+        },
+        "dwgViewer.scrollInputMode": {
+          "type": "string",
+          "enum": [
+            "mouse-zoom",
+            "trackpad-pan"
+          ],
+          "enumDescriptions": [
+            "Zoom with every unmodified vertical scroll, including a detented wheel, smooth-scrolling wheel, or Magic Mouse. This is the default.",
+            "Pan with every unmodified scroll regardless of speed. Trackpad pinch remains zoom."
+          ],
+          "default": "mouse-zoom",
+          "scope": "window",
+          "description": "Choose deterministic scroll behavior. Input hardware is not detected automatically because smooth mouse and trackpad events are indistinguishable."
         },
         "dwgViewer.mouseWheelZoomSensitivity": {
           "type": "number",

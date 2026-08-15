@@ -1,7 +1,7 @@
-# DWG Viewer
+# 2D CAD Viewer for VS Code
 
-VS Code 안에서 DWG 도면을 빠르게 확인하고, 찾고, 측정하고, 내보낼 수 있는
-오픈소스 읽기 전용 뷰어입니다.
+VS Code 안에서 DWG 파일 형식의 도면을 빠르게 확인하고, 찾고, 측정하고,
+내보낼 수 있는 오픈소스·로컬 우선 읽기 전용 2D CAD 뷰어입니다.
 
 도면과 글꼴은 사용자의 컴퓨터 안에서만 처리됩니다. 대형 도면, 국내
 SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게 확인하는
@@ -18,8 +18,9 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 - DWG 변환, 글꼴 처리, 외부참조 탐색과 화면 표시는 모두 로컬에서
   수행합니다.
 - 원본을 수정하지 않는 읽기 전용 방식입니다.
-- 한 번 변환한 도면은 안전한 로컬 캐시를 재사용해 다음 열기를
-  단축합니다.
+- 기본값은 변환 캐시를 도면을 연 세션에서만 사용하고 닫을 때
+  삭제합니다. **Scene Cache Mode**를 `persistent`로 선택하면 안전한 로컬
+  캐시를 재사용해 다음 열기를 단축할 수 있습니다.
 
 ### 국내 CAD 한글 도면을 고려했습니다
 
@@ -44,8 +45,13 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 
 ### 마우스와 트랙패드 모두 자연스럽게 사용할 수 있습니다
 
-- 클릭 드래그 또는 트랙패드 두 손가락 스크롤로 화면을 이동합니다.
-- 마우스 휠과 트랙패드 핀치로 커서 위치를 중심으로 확대·축소합니다.
+- 기본 **마우스 확대** 모드에서는 톱니식 휠, 프리스핀 휠과 Magic Mouse를
+  포함한 모든 일반 스크롤로 커서 위치를 중심으로 확대·축소합니다.
+- 트랙패드에서는 도구 모음의 **트랙패드 이동**을 켜면 스크롤 속도와 관계없이
+  두 손가락 스크롤로 화면을 이동합니다. 핀치는 두 모드 모두 확대·축소입니다.
+- 입력 장치는 자동 판별하지 않으므로 느려진 트랙패드 스크롤이 마우스 휠로
+  바뀌는 일이 없습니다.
+- 클릭 드래그로도 항상 화면을 이동할 수 있습니다.
 - 사각 영역 확대, 전체 보기, 이전/다음 화면과 이름을 붙인 뷰 북마크를
   지원합니다.
 - 오른쪽 위와 왼쪽 도구 모음은 각각 아이콘 전용으로 유지하거나,
@@ -61,6 +67,9 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
   그룹화합니다.
 - Windows, macOS와 Linux 사이에서 달라지는 경로 형식을 고려해 XREF와
   JPG/PNG 이미지를 찾습니다.
+- 원본 도면에 언로드 또는 미해결 상태로 저장된 XREF도 상태 패널에서
+  확인하고, 원본을 변경하지 않은 채 이번 세션에서만 명시적으로 로드할 수
+  있습니다.
 - 자동으로 찾지 못하거나 후보가 여러 개인 참조는 사용자가 직접
   선택하고 연결 범위를 저장할 수 있습니다.
 
@@ -92,14 +101,14 @@ SHX/BigFont 한글, 외부참조(XREF), 배치(Layout)를 실무에서 편하게
 
 ### 설치
 
-VS Code Marketplace에서 **DWG Viewer for VS Code**를 설치하면 현재
+VS Code Marketplace에서 **2D CAD Viewer for VS Code**를 설치하면 현재
 운영체제와 확장 버전에 정확히 맞는 네이티브 변환기를 같은 GitHub
 Release에서 백그라운드로 준비합니다. 다운로드 크기와 SHA-256, 실행 전
 자체 진단을 모두 통과한 변환기만 사용합니다. 별도 경로 설정 없이
 Explorer에서 `.dwg` 파일을 열면 됩니다.
 
 수동 또는 오프라인 설치에서는
-[GitHub Releases](https://github.com/menaje/dwg-viewer/releases)의
+[GitHub Releases](https://github.com/menaje/2d-cad-viewer/releases)의
 `dwg-viewer-vscode-<version>.vsix`와 운영체제에 맞는
 `dwg-viewer-native-converter-<version>-<platform>`을 내려받습니다. 변환기
 선택 명령은 자동 설치를 사용할 수 없는 통제된 오프라인 환경을 위한
@@ -110,16 +119,23 @@ Explorer에서 `.dwg` 파일을 열면 됩니다.
 
 ## 기본 사용법
 
-- **화면 이동:** 클릭 드래그 또는 트랙패드 두 손가락 스크롤
-- **확대·축소:** 마우스 휠 또는 트랙패드 핀치
-- **확대 감도:** VS Code의 DWG Viewer 설정에서 **Mouse Wheel Zoom
+- **스크롤 입력 모드:** 기본 `mouse-zoom`은 모든 일반 스크롤로 확대·축소.
+  도구 모음에서 **트랙패드 이동**을 켜거나 VS Code의 **Scroll Input Mode**를
+  `trackpad-pan`으로 설정하면 모든 일반 스크롤로 화면 이동. 자동 판별 없음
+- **화면 이동:** 클릭 드래그 또는 `trackpad-pan`의 두 손가락 스크롤
+- **확대·축소:** `mouse-zoom`의 휠·Magic Mouse 스크롤 또는 트랙패드 핀치
+- **확대 감도:** VS Code의 2D CAD Viewer 설정에서 **Mouse Wheel Zoom
   Sensitivity**와 **Trackpad Pinch Zoom Sensitivity**를 각각 조절
 - **도구 이름 확인:** 도구 모음에 마우스를 올리거나 키보드로 초점을
   옮기면 전체 메뉴명이 함께 펼쳐짐
-- **간략 메뉴 설정:** VS Code의 DWG Viewer 설정에서 **Top Toolbar
+- **간략 메뉴 설정:** VS Code의 2D CAD Viewer 설정에서 **Top Toolbar
   Labels**와 **Left Toolbar Labels**를 각각 `icons` 또는 `hover`로 선택
 - **렌더 해상도:** **Render Resolution**을 `auto`(권장), `quality`,
   `performance` 중에서 선택
+- **다음 열기 가속:** **Scene Cache Mode**를 기본 `session`으로 두면 도면을
+  닫을 때 캐시를 삭제하고, `persistent`로 선택하면 디스크를 더 사용하는
+  대신 같은 도면의 다음 열기를 단축. 영구 캐시는 기본 5GiB 안에서 오래된
+  도면부터 정리되며 **Scene Cache Maximum Size GiB**에서 상한 조절
 - **이동·확대 표시 방식:** **Interaction Rendering**을 `hybrid`(권장),
   `continuous`(새 영역을 매 프레임 표시), `maximumPerformance`(멈출 때까지
   완성 프레임만 이동) 중에서 선택
@@ -193,3 +209,9 @@ VSIX 빌드와 배포 재현 방법은
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요. 각 플랫폼
 변환기의 정확한 대응 소스와 원문 라이선스는 같은 버전의 GitHub
 Release에 함께 제공됩니다.
+
+## 상표 안내
+
+Autodesk, AutoCAD 및 DWG는 Autodesk, Inc.의 등록 상표 또는 상표입니다.
+이 프로젝트는 Autodesk와 독립적으로 개발되며 Autodesk의 제휴, 승인, 보증
+또는 후원을 받지 않습니다.

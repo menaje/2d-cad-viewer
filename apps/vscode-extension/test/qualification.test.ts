@@ -11,6 +11,8 @@ import path from "node:path";
 import test from "node:test";
 import {
   createQualificationReporter,
+  DISPLAY_STATE_QUALIFICATION_MODE,
+  displayStateQualificationEnabled,
   QUALIFICATION_CLOSE_AFTER_ENV,
   QUALIFICATION_DRAWING_ENV,
   QUALIFICATION_EVENT_SCHEMA,
@@ -21,6 +23,35 @@ import {
 } from "../src/qualification";
 
 const TOKEN = "a".repeat(64);
+
+test("enables packaged display-state observation only for a private token", () => {
+  const drawingPath = path.resolve("drawing.dwg");
+  assert.equal(displayStateQualificationEnabled({}), false);
+  assert.equal(
+    displayStateQualificationEnabled({
+      [QUALIFICATION_TOKEN_ENV]: TOKEN,
+      [QUALIFICATION_DRAWING_ENV]: drawingPath,
+      [QUALIFICATION_MODE_ENV]: DISPLAY_STATE_QUALIFICATION_MODE,
+    }),
+    true,
+  );
+  assert.equal(
+    displayStateQualificationEnabled({
+      [QUALIFICATION_TOKEN_ENV]: "short",
+      [QUALIFICATION_DRAWING_ENV]: drawingPath,
+      [QUALIFICATION_MODE_ENV]: DISPLAY_STATE_QUALIFICATION_MODE,
+    }),
+    false,
+  );
+  assert.equal(
+    displayStateQualificationEnabled({
+      [QUALIFICATION_TOKEN_ENV]: TOKEN,
+      [QUALIFICATION_DRAWING_ENV]: "relative.dwg",
+      [QUALIFICATION_MODE_ENV]: DISPLAY_STATE_QUALIFICATION_MODE,
+    }),
+    false,
+  );
+});
 
 test("enables qualification only for a private absolute target and token", () => {
   assert.equal(createQualificationReporter({}, 42), undefined);
@@ -109,6 +140,28 @@ test("writes bounded path-free events and claims one close stage", async (contex
   if (process.platform !== "win32") {
     assert.equal((await stat(reportPath)).mode & 0o777, 0o600);
   }
+});
+
+test("accepts visual completion as a terminal qualification stage", async (context) => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "dwg-qualification-visual-"),
+  );
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const reporter = createQualificationReporter(
+    {
+      [QUALIFICATION_REPORT_ENV]: path.join(root, "events.jsonl"),
+      [QUALIFICATION_TOKEN_ENV]: TOKEN,
+      [QUALIFICATION_DRAWING_ENV]: path.join(root, "drawing.dwg"),
+      [QUALIFICATION_CLOSE_AFTER_ENV]: "visual",
+    },
+    4321,
+  );
+
+  assert.ok(reporter);
+  assert.equal(reporter.claimClose("full"), false);
+  assert.equal(reporter.claimClose("visual"), true);
+  assert.equal(reporter.claimClose("visual"), false);
+  await reporter.close();
 });
 
 test("never overwrites an existing qualification report", async (context) => {

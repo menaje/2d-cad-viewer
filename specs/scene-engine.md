@@ -1,6 +1,6 @@
 # Scene Engine protocol v1
 
-Issue [#17](https://github.com/menaje/dwg-viewer/issues/17) validates optional
+Issue [#17](https://github.com/menaje/2d-cad-viewer/issues/17) validates optional
 execution backends without replacing the accepted LibreDWG Native path or
 forking the renderer. The extension-side contract is
 `dwg-scene-engine/1`.
@@ -14,7 +14,7 @@ DWG
             -> first-frame preview sidecar
             -> validated full cache
        -> WASM Worker candidate (qualification only)
-  -> Scene Cache v1.21
+  -> Scene Cache v1.26
   -> one range reader and one WebGL renderer
 ```
 
@@ -53,11 +53,12 @@ without creating a whole-drawing JavaScript object graph.
 ## Native progressive publication
 
 The preview is optional and best-effort. When the caller supplies an
-`onPreview` callback, the cache manager gives the Native engine a new private
-preview path. The adapter:
+`onPreview` callback, the cache manager first checks a deterministic overview
+path derived from the full-cache identity. If no compatible overview exists,
+it gives the Native engine a new private temporary preview path. The adapter:
 
 1. parses the DWG once and builds the capped overview plan;
-2. writes and closes an independent Scene Cache v1.21 preview;
+2. writes and closes an independent Scene Cache v1.26 preview;
 3. creates a separate ready marker;
 4. continues the existing disk-backed detail sort and atomic full-cache write.
 
@@ -65,15 +66,19 @@ The preview contains drawing, layer, block and INSERT metadata plus only the
 LOD-0 GPU line prefix. Its geometry is capped by the existing 4 MiB overview
 limit; source, text, HATCH, primitive and draw-order sections remain present
 but empty. Header flag bit 0 identifies this display-only artifact. It is
-never committed under the canonical cache identity, reused on a later open or
-accepted as the final conversion result.
+never accepted as the final conversion result or committed under the
+canonical full-cache filename.
 
 The extension observes the marker without blocking the converter, verifies
-the preview path and size and rechecks both source and engine snapshots before
-opening a separate range channel. The Webview replaces the preview with the
-ordinary full cache when that cache is validated. The preview channel and file
-are released after the full first frame, or immediately on retry,
-cancellation, editor close or preview-render failure.
+the preview path, size, schema and preview flag, and rechecks both source and
+engine snapshots. It then atomically commits the overview as
+`<full-cache-id>.dwg.preview` and opens a separate range channel. A later
+forced or interrupted full conversion publishes that overview before starting
+the converter, gives its first frame a bounded opportunity to complete, and
+omits a duplicate preview request. The Webview replaces it with the ordinary
+full cache when that cache is validated. Retry, cancellation, editor close and
+preview-render failure release the range channel; the validated overview
+remains reusable.
 
 Preview creation, publication or rendering failure does not weaken the final
 cache contract: conversion continues through the existing validated,
@@ -106,7 +111,7 @@ The private cache filename is a SHA-256 digest over length-prefixed fields:
 ```text
 SceneEngine contract
 + Scene Cache version
-+ resolved source path, size and modification time
++ resolved source path (NFC-normalized on macOS), size and modification time
 + engine ID and version
 + backend ID and kind
 + implementation revision
@@ -116,7 +121,40 @@ SceneEngine contract
 Only the digest becomes the filename. Option order cannot change the identity,
 while changing an option value, engine/backend version or implementation
 revision must change it. Source and engine snapshots are checked again after
-conversion before the temporary output is committed.
+conversion before the temporary output is committed. On macOS, NFC
+normalization occurs before the existing length-prefixed UTF-8 encoding so
+canonically equivalent source paths share one identity. The original source
+path remains unchanged for file I/O. A compatible pre-normalization cache or
+persistent preview discovered from the supplied path, its NFD form or an
+NFC-equivalent filesystem real path may be promoted to the NFC identity
+without conversion. This filename-identity compatibility rule does not change
+the Scene Engine protocol or Scene Cache wire version. Other platforms retain
+their existing normalization-sensitive identity.
+
+Cache retention is a host storage policy rather than an engine capability.
+The VS Code product defaults `dwgViewer.sceneCacheMode` to `session`: every
+full cache, progressive preview and XREF cache receives an idempotent release
+operation and is deleted only after its range readers close. Workspace text
+search likewise releases each full cache after extracting its bounded index.
+Manager disposal waits for active preparations before removing the private
+session directory, and a lease heartbeat lets a later process remove only
+abandoned session directories.
+
+Users may opt into `persistent` retention for repeat-open performance. Durable
+files are grouped under a path-free storage-generation digest over the Scene
+Engine contract, Scene Cache version, engine ID/version, backend ID/kind and
+implementation revision. A different generation is removed once it has no
+fresh lease; this covers engine upgrades and changed converter executables
+without deleting a cache still read by another VS Code window. Selecting
+`session` removes every unleased durable generation. The first storage-layout
+migration also removes bounded legacy flat cache, preview and temporary names.
+After the last lease closes, full-cache and preview pairs are ordered by their
+most recent modification and the oldest pairs are removed until they fit the
+configured persistent byte budget. The product default is 5 GiB and the
+machine setting accepts 1–100 GiB. Files remain protected for their complete
+range-reader lifetime even when the budget has been exceeded temporarily.
+These storage rules do not change the cache identity, Scene Engine protocol or
+Scene Cache v1.26 bytes.
 
 ## WASM admission
 

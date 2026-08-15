@@ -46,7 +46,7 @@ importers:
         version: link:../render-protocol
     devDependencies:
       '@menaje/viewer-core':
-        specifier: 0.1.2
+        specifier: 0.1.3
         version: link:../viewer-core
 
   packages/native-document-adapter:
@@ -71,7 +71,7 @@ importers:
         specifier: 0.1.1
         version: link:../dwg-scene-source
       '@menaje/viewer-core':
-        specifier: 0.1.2
+        specifier: 0.1.3
         version: link:../viewer-core
       '@menaje/viewer-render-protocol':
         specifier: 0.1.2

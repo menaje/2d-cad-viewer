@@ -7,8 +7,8 @@ authority:
 last_reviewed: 2026-08-03
 decision_id: ADR-0001
 tracking:
-  - https://github.com/menaje/dwg-viewer/issues/26
-  - https://github.com/menaje/dwg-viewer/issues/30
+  - https://github.com/menaje/2d-cad-viewer/issues/26
+  - https://github.com/menaje/2d-cad-viewer/issues/30
 ---
 
 # ADR-0001: 독립 Viewer 제품과 공용 Viewer Core 경계
@@ -17,9 +17,9 @@ tracking:
 
 현재 제품은 raw DWG를 여는 VS Code Custom Editor이며, 검증된 renderer,
 camera, interaction, picking과 Scene Cache streaming 구현은
-`packages/webview`에 함께 있다. 이 구현은 독립 DWG Viewer에서 계속
+`packages/webview`에 함께 있다. 이 구현은 독립 2D CAD Viewer에서 계속
 동작해야 하지만, Coni Spatial도 renderer 코드를 복사하거나 설치된
-DWG Viewer extension을 제어하지 않고 같은 Viewer Core를 사용할 수 있어야
+2D CAD Viewer extension을 제어하지 않고 같은 Viewer Core를 사용할 수 있어야
 한다. raw BIM을 read/index/render하는 독립 `bim-explorer`도 세 번째
 consumer로 추가됐으며 source-neutral lifecycle, identity와 selection
 계약을 공유해야 한다.
@@ -34,8 +34,8 @@ Render Snapshot/Delta와 Service integration을 구현할 때 다시 경계를
 
 ## Decision
 
-독립 DWG Viewer, BIM Explorer와 Coni Spatial 제품은 저장소, 설치물과
-release를 분리한다. `dwg-viewer`는 다음 versioned package 경계를
+독립 2D CAD Viewer, BIM Explorer와 Coni Spatial 제품은 저장소, 설치물과
+release를 분리한다. `2d-cad-viewer`는 다음 versioned package 경계를
 소유한다.
 
 | Package | 책임 | 포함하지 않는 것 |
@@ -92,7 +92,7 @@ human capability를 발급하지 않는다.
 
 ## Version과 compatibility
 
-Viewer Core package, render protocol과 DWG Viewer 제품은 각각 semantic
+Viewer Core package, render protocol과 2D CAD Viewer 제품은 각각 semantic
 version을 가진다. BIM Explorer product/source package, Spatial Protocol과
 Viewer package version도 서로 독립적이다.
 
@@ -113,6 +113,13 @@ public preview package 0.1.0과 0.1.1은 기록으로 보존하고, 현재 previ
 protocol compatibility window를 기록하고, consumer는 자신의 lockfile과
 compatibility manifest에서 exact artifact를 pin한다. 0.x 범위를 벗어나는
 호환 주장은 cross-repository fixture 없이 하지 않는다.
+
+상호작용 중 detail streaming pause/resume과 async staged Render Delta
+lifecycle은 Viewer Core 0.1.3 개발 소스로 별도 qualification한다. 이 source
+artifact는 두 번 pack한 digest와 artifact-only consumer fixture를 통과하지만
+`publishedInDistribution: false`이며, immutable `viewer-core-v0.1.2` artifact를
+교체하거나 새 package가 배포됐다는 뜻이 아니다. 새 tag와 package publication은
+별도 promotion 승인이 있을 때만 수행한다.
 
 ## Extraction 순서
 
@@ -135,9 +142,9 @@ memory qualification을 유지해야 한다. 파일 이동 자체를 완료 조�
 - 초기에는 adapter code가 얇게 중복 연결될 수 있지만 renderer 구현을
   복사하지 않는다.
 - public contract는 현재 VS Code message보다 작고 source-neutral하다.
-- BIM Explorer는 standalone DWG Viewer 설치 없이 `BimModelSource`와
+- BIM Explorer는 standalone 2D CAD Viewer 설치 없이 `BimModelSource`와
   generic 3D surface를 제공할 수 있다.
-- Coni Spatial은 standalone DWG Viewer 설치 없이 호환 package를 bundle할
+- Coni Spatial은 standalone 2D CAD Viewer 설치 없이 호환 package를 bundle할
   수 있으며 BIM Explorer extension 설치에도 의존하지 않는다.
 - 2D와 3D surface는 같은 lifecycle/identity/selection 계약을 사용하지만
   서로 다른 renderer backend와 제품 package를 가질 수 있다.
@@ -188,6 +195,14 @@ vertex handle, HATCH/POINT/SOLID/3DFACE/WIPEOUT의 압축 identity-range
 sidecar와 Canvas text의 source-scoped handle filter를 통해 cached draw
 range로 적용한다. 따라서 Scene Cache buffer를 수정하지 않으며 preview
 rollback과 promotion은 같은 native identity/pick map을 사용한다.
+비동기 GPU/worker consumer는 기존 wire shape를 유지하고 additive staged
+adapter lifecycle을 사용한다. `prepareDelta()`는 current scene을 건드리지 않고
+CPU/GPU/range/worker 자원을 준비한 뒤 `commit()`, `rollback()`, `dispose()`
+transaction을 반환한다. Core는 stale·budget·ordering을 prepare 전에 거부하고,
+prepare 뒤에는 cancellation과 controller lifecycle을 다시 확인한다. 동기
+`commit()` 성공 시 geometry와 pick/identity revision이 함께 전환되며 실패나
+취소에서는 rollback/dispose가 완료될 때까지 transaction을 해제하지 않는다.
+기존 동기 `applyDelta()` consumer는 그대로 호환된다.
 direct INSERT transform은 block geometry를 복제하지 않고 root/XREF의
 addressed packed occurrence display/measurement matrix만 희소 교체한다.
 direct INSERT style은 같은 occurrence의 resolved color/layer/opacity/
@@ -293,7 +308,7 @@ source/service conformance와 외부 제품 없는 standalone runtime lifecycle�
 현재 `viewer-core-v0.1.2`는 prerelease로 유지한다. 새 tag publish는
 producer manifest의 `tagPublicationApproved`를 별도 변경하지 않으면
 workflow가 거부하며 stable 자동 승격은 없다. 이 qualification은
-`dwg-viewer`만 실행하고 BIM Explorer와 Coni Spatial 저장소를 수정하거나
+`2d-cad-viewer`만 실행하고 BIM Explorer와 Coni Spatial 저장소를 수정하거나
 그 consumer-owned 결과를 대신 주장하지 않는다.
 
 `bim-explorer`의 `BimModelSource`와 3D consumer는 아직 구현되지 않았다.

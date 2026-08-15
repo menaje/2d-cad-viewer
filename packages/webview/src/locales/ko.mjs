@@ -6,16 +6,22 @@ export const KO_MESSAGES = Object.freeze({
   "common.image": "이미지",
   "common.noPath": "(경로 없음)",
   "common.unknownError": "알 수 없는 오류",
-  "page.title": "DWG Scene Cache Viewer",
-  "page.eyebrow": "DWG Viewer · Scene Cache v1.21",
+  "page.title": "2D CAD Viewer",
+  "page.eyebrow": "2D CAD Viewer · Scene Cache v1.26",
   "page.heading": "대형 도면 첫 화면 검증기",
-  "page.hostHeading": "DWG 도면 뷰어",
+  "page.hostHeading": "2D CAD 뷰어",
   "toolbar.more.open": "도면 도구 펼치기",
   "toolbar.more.close": "도면 도구 접기",
   "toolbar.more.title": "도면 도구",
   "toolbar.controls": "도면 화면 조절",
   "toolbar.zoomOut": "축소",
   "toolbar.fit": "전체 보기",
+  "toolbar.trackpadMode.off": "마우스 확대",
+  "toolbar.trackpadMode.on": "트랙패드 이동",
+  "toolbar.trackpadMode.enable":
+    "트랙패드 모드 켜기: 스크롤로 도면 이동",
+  "toolbar.trackpadMode.disable":
+    "트랙패드 모드 끄기: 스크롤로 도면 확대·축소",
   "toolbar.layers": "레이어",
   "toolbar.fonts": "글꼴",
   "toolbar.fontsWithIssues": "글꼴 ({count})",
@@ -28,6 +34,7 @@ export const KO_MESSAGES = Object.freeze({
   "toolbar.plotStyle": "출력 스타일",
   "toolbar.plotStyle.select": "출력 선택",
   "toolbar.plotStyle.none": "출력 없음",
+  "toolbar.plotStyle.named": "STB 미지원",
   "toolbar.plotStyle.on": "출력 켬",
   "toolbar.plotStyle.off": "출력 끔",
   "toolbar.plotStyle.searching": "출력 찾는 중",
@@ -43,6 +50,8 @@ export const KO_MESSAGES = Object.freeze({
     "같은 이름의 CTB 파일을 찾지 못했습니다.",
   "toolbar.plotStyle.unavailable.unavailable":
     "VS Code에서 DWG를 열면 CTB를 자동으로 찾습니다.",
+  "toolbar.plotStyle.unavailable.named":
+    "명명된 STB 출력 스타일은 식별하지만 현재 2D 뷰어에서는 렌더링하지 않습니다.",
   "toolbar.plotStyle.unavailable.fallback":
     "CTB 출력 스타일을 사용할 수 없습니다.",
   "toolbar.plotStyle.selectHint":
@@ -193,6 +202,8 @@ export const KO_MESSAGES = Object.freeze({
   "xrefs.state.converting": "변환 중",
   "xrefs.state.decoding": "표시 준비",
   "xrefs.state.ready": "연결됨",
+  "xrefs.state.unloaded": "언로드됨",
+  "xrefs.state.unresolved": "미해결",
   "xrefs.state.missing": "누락",
   "xrefs.state.ambiguous": "선택 필요",
   "xrefs.state.cycle": "순환 참조",
@@ -205,6 +216,7 @@ export const KO_MESSAGES = Object.freeze({
   "xrefs.empty": "이 도면에는 외부 도면이나 이미지 참조가 없습니다.",
   "xrefs.imageName": "이미지 · {name}",
   "xrefs.noStoredPath": "저장 경로 없음",
+  "xrefs.loadSession": "이번 세션에서 로드",
   "xrefs.selectFile": "파일 직접 선택",
   "xrefs.resolution.relative": "도면 기준 상대경로에서 연결했습니다.",
   "xrefs.resolution.search":

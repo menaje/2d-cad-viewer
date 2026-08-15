@@ -4,6 +4,17 @@ const DEFAULT_CACHE_BYTES = 96 * 1024 * 1024;
 const DEFAULT_VISIBLE_BYTES = 32 * 1024 * 1024;
 const DEFAULT_CONCURRENCY = 2;
 
+class SupersededDetailLoadError extends Error {
+  constructor() {
+    super("detail candidate load was superseded");
+    this.name = "SupersededDetailLoadError";
+  }
+}
+
+function monotonicNow() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
 function method(value, name) {
   if (typeof value?.[name] !== "function") {
     throw new TypeError(
@@ -118,6 +129,7 @@ export class DetailStreamingController {
       onReviewCandidate = () => false,
       onReviewCandidateEvicted = () => {},
       onReviewSelection = () => {},
+      now = monotonicNow,
     } = {},
   ) {
     this.adapter = assertAdapter(adapter);
@@ -134,6 +146,10 @@ export class DetailStreamingController {
     this.onReviewCandidate = onReviewCandidate;
     this.onReviewCandidateEvicted = onReviewCandidateEvicted;
     this.onReviewSelection = onReviewSelection;
+    if (typeof now !== "function") {
+      throw new TypeError("detail streaming clock must be a function");
+    }
+    this.now = now;
     this.revision = 0;
     this.candidates = Object.freeze([]);
     this.loading = 0;
@@ -150,33 +166,25 @@ export class DetailStreamingController {
     this.reviewRevision = 0;
     this.reviewActive = Promise.resolve();
     this.reviewedSelections = new Map();
+    this.paused = false;
+    this.pendingUpdate = null;
+    this.requestRevisions = new WeakMap();
+    this.pendingLoads = new Set();
+    this.metrics = {
+      interactionPauses: 0,
+      interactionResumes: 0,
+      coalescedUpdates: 0,
+      loadStarts: 0,
+      interactionLoadStarts: 0,
+      cancellationRequests: 0,
+      staleCompletions: 0,
+      staleMounts: 0,
+      gpuUploads: 0,
+      settledUpdates: 0,
+      settledDetailLatencyMs: null,
+    };
     this.cache = new GpuBatchCache(
-      async (candidate) => {
-        const payload = await this.adapter.loadCandidate(candidate);
-        const byteLength = payloadBytes(payload);
-        if (this.disposed) {
-          return Object.freeze({
-            candidate,
-            byteLength,
-            resource: null,
-          });
-        }
-        const resource = this.adapter.mountCandidate(
-          candidate,
-          payload,
-        );
-        const current = this.candidates.find(
-          (value) => value.id === candidate.id,
-        );
-        if (this.reviewEnabled && current) {
-          this.publishReviewCandidate(current, payload);
-        }
-        return Object.freeze({
-          candidate,
-          byteLength,
-          resource,
-        });
-      },
+      (candidate) => this.loadAndMountCandidate(candidate),
       {
         maximumBytes: positiveSafeInteger(
           maximumCacheBytes,
@@ -196,13 +204,206 @@ export class DetailStreamingController {
     );
   }
 
+  currentCandidate(candidate, revision) {
+    if (
+      this.disposed ||
+      this.paused ||
+      revision !== this.revision
+    ) {
+      return null;
+    }
+    return (
+      this.candidates.find((value) => value.id === candidate.id) ??
+      null
+    );
+  }
+
+  async loadPayload(candidate, revision) {
+    let current = this.currentCandidate(candidate, revision);
+    if (!current) {
+      throw new SupersededDetailLoadError();
+    }
+
+    const controller = new AbortController();
+    const pending = {
+      controller,
+      promise: Promise.resolve(),
+    };
+    this.pendingLoads.add(pending);
+    this.metrics.loadStarts += 1;
+    if (this.paused) {
+      this.metrics.interactionLoadStarts += 1;
+    }
+
+    try {
+      let result;
+      try {
+        result = this.adapter.loadCandidate(current, {
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          !this.currentCandidate(candidate, revision)
+        ) {
+          this.metrics.staleCompletions += 1;
+          throw new SupersededDetailLoadError();
+        }
+        throw error;
+      }
+      pending.promise = Promise.resolve(result);
+      let payload;
+      try {
+        payload = await pending.promise;
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          !this.currentCandidate(candidate, revision)
+        ) {
+          this.metrics.staleCompletions += 1;
+          throw new SupersededDetailLoadError();
+        }
+        throw error;
+      }
+      payloadBytes(payload);
+      current = this.currentCandidate(candidate, revision);
+      if (!current) {
+        this.metrics.staleCompletions += 1;
+        throw new SupersededDetailLoadError();
+      }
+      return Object.freeze({ current, payload });
+    } finally {
+      this.pendingLoads.delete(pending);
+    }
+  }
+
+  async loadAndMountCandidate(candidate) {
+    const revision = this.requestRevisions.get(candidate);
+    if (!Number.isSafeInteger(revision)) {
+      throw new SupersededDetailLoadError();
+    }
+    const { current, payload } = await this.loadPayload(
+      candidate,
+      revision,
+    );
+    if (!this.currentCandidate(current, revision)) {
+      this.metrics.staleCompletions += 1;
+      throw new SupersededDetailLoadError();
+    }
+    const resource = this.adapter.mountCandidate(current, payload);
+    this.metrics.gpuUploads += 1;
+    if (this.reviewEnabled) {
+      this.publishReviewCandidate(current, payload);
+    }
+    return Object.freeze({
+      candidate: current,
+      byteLength: payload.byteLength,
+      resource,
+    });
+  }
+
+  async getCandidate(candidate, revision) {
+    let current = candidate;
+    while (this.currentCandidate(current, revision)) {
+      this.requestRevisions.set(current, revision);
+      try {
+        await this.cache.get(current);
+        return true;
+      } catch (error) {
+        if (!(error instanceof SupersededDetailLoadError)) {
+          throw error;
+        }
+        current = this.currentCandidate(current, revision);
+        if (!current) {
+          return false;
+        }
+        await Promise.resolve();
+      }
+    }
+    return false;
+  }
+
+  abortPendingLoads() {
+    for (const pending of this.pendingLoads) {
+      if (!pending.controller.signal.aborted) {
+        this.metrics.cancellationRequests += 1;
+        pending.controller.abort(
+          new DOMException(
+            "detail streaming state changed",
+            "AbortError",
+          ),
+        );
+      }
+    }
+  }
+
+  pause() {
+    if (this.disposed || this.paused) {
+      return false;
+    }
+    this.paused = true;
+    this.pendingUpdate = null;
+    this.revision += 1;
+    this.reviewRevision += 1;
+    this.loading = 0;
+    this.metrics.interactionPauses += 1;
+    this.abortPendingLoads();
+    this.emit();
+    return true;
+  }
+
+  resume(camera, options) {
+    if (this.disposed) {
+      throw new Error("cannot resume a disposed detail streamer");
+    }
+    const wasPaused = this.paused;
+    const pending =
+      camera === undefined
+        ? this.pendingUpdate
+        : { camera: assertCamera(camera), options };
+    this.paused = false;
+    this.pendingUpdate = null;
+    if (wasPaused) {
+      this.metrics.interactionResumes += 1;
+    }
+    if (!pending) {
+      if (wasPaused) {
+        this.emit();
+      }
+      return this.snapshot();
+    }
+    return this.startUpdate(
+      pending.camera,
+      pending.options,
+      wasPaused ? this.now() : null,
+    );
+  }
+
   update(
     camera,
-    { enabled = true, redraw = true, emit = true } = {},
+    options = {},
   ) {
     if (this.disposed) {
       throw new Error("cannot update a disposed detail streamer");
     }
+    const normalizedCamera = assertCamera(camera);
+    if (this.paused) {
+      this.setRenderCamera(normalizedCamera);
+      this.pendingUpdate = Object.freeze({
+        camera: normalizedCamera,
+        options: Object.freeze({ ...options }),
+      });
+      this.metrics.coalescedUpdates += 1;
+      return this.snapshot();
+    }
+    return this.startUpdate(normalizedCamera, options);
+  }
+
+  startUpdate(
+    camera,
+    { enabled = true, redraw = true, emit = true } = {},
+    settledStartedAt = null,
+  ) {
     const revision = ++this.revision;
     this.setRenderCamera(camera);
     this.lastError = null;
@@ -233,11 +434,18 @@ export class DetailStreamingController {
     }
     let cursor = 0;
     const worker = async () => {
-      while (revision === this.revision && cursor < queue.length) {
+      while (
+        revision === this.revision &&
+        !this.paused &&
+        cursor < queue.length
+      ) {
         const candidate = queue[cursor];
         cursor += 1;
         try {
-          await this.cache.get(candidate);
+          const loaded = await this.getCandidate(candidate, revision);
+          if (!loaded) {
+            return;
+          }
         } catch (error) {
           if (revision === this.revision) {
             this.lastError = error;
@@ -260,9 +468,16 @@ export class DetailStreamingController {
       Array.from({ length: workerCount }, () => worker()),
     ).then(async () => {
       await this.renderPromise;
-      if (revision === this.revision) {
+      if (revision === this.revision && !this.paused) {
         this.loading = 0;
         this.requestReviewCandidates();
+        if (settledStartedAt !== null) {
+          this.metrics.settledUpdates += 1;
+          this.metrics.settledDetailLatencyMs = Math.max(
+            this.now() - settledStartedAt,
+            0,
+          );
+        }
         this.emit();
       }
     });
@@ -270,8 +485,21 @@ export class DetailStreamingController {
   }
 
   async whenIdle() {
-    await this.active;
-    await this.reviewActive;
+    while (true) {
+      const active = this.active;
+      const reviewActive = this.reviewActive;
+      const pending = [...this.pendingLoads].map((value) =>
+        value.promise.catch(() => undefined),
+      );
+      await Promise.all([active, reviewActive, ...pending]);
+      if (
+        active === this.active &&
+        reviewActive === this.reviewActive &&
+        this.pendingLoads.size === 0
+      ) {
+        break;
+      }
+    }
     return this.snapshot();
   }
 
@@ -313,7 +541,7 @@ export class DetailStreamingController {
   }
 
   requestReviewCandidates() {
-    if (!this.reviewEnabled || this.disposed) {
+    if (!this.reviewEnabled || this.disposed || this.paused) {
       return this.reviewActive;
     }
     const revision = ++this.reviewRevision;
@@ -325,7 +553,8 @@ export class DetailStreamingController {
           if (
             revision !== this.reviewRevision ||
             !this.reviewEnabled ||
-            this.disposed
+            this.disposed ||
+            this.paused
           ) {
             return;
           }
@@ -336,9 +565,11 @@ export class DetailStreamingController {
             continue;
           }
           try {
-            const payload =
-              await this.adapter.loadCandidate(candidate);
-            payloadBytes(payload);
+            const selectionRevision = this.revision;
+            const { payload } = await this.loadPayload(
+              candidate,
+              selectionRevision,
+            );
             const current = this.candidates.find(
               (value) => value.id === candidate.id,
             );
@@ -346,15 +577,18 @@ export class DetailStreamingController {
               revision === this.reviewRevision &&
               current &&
               this.reviewEnabled &&
-              !this.disposed
+              !this.disposed &&
+              !this.paused
             ) {
               this.publishReviewCandidate(current, payload);
             }
           } catch (error) {
             if (
+              !(error instanceof SupersededDetailLoadError) &&
               revision === this.reviewRevision &&
               this.reviewEnabled &&
-              !this.disposed
+              !this.disposed &&
+              !this.paused
             ) {
               this.onError(error);
             }
@@ -367,7 +601,7 @@ export class DetailStreamingController {
   setReviewEnabled(enabled) {
     const next = Boolean(enabled);
     if (next === this.reviewEnabled) {
-      if (next) {
+      if (next && !this.paused) {
         this.syncReviewSelection();
         this.requestReviewCandidates();
       }
@@ -376,7 +610,7 @@ export class DetailStreamingController {
     this.reviewEnabled = next;
     this.reviewRevision += 1;
     this.reviewedSelections.clear();
-    if (next) {
+    if (next && !this.paused) {
       this.syncReviewSelection();
       this.requestReviewCandidates();
     } else {
@@ -411,9 +645,12 @@ export class DetailStreamingController {
         0,
       ),
       loading: this.loading,
+      paused: this.paused,
+      pendingUpdate: this.pendingUpdate !== null,
       cache: this.cache.snapshot(),
       render: this.lastRender,
       error: this.lastError,
+      metrics: Object.freeze({ ...this.metrics }),
     });
   }
 
@@ -463,6 +700,8 @@ export class DetailStreamingController {
       return false;
     }
     this.disposed = true;
+    this.paused = true;
+    this.pendingUpdate = null;
     this.revision += 1;
     this.reviewRevision += 1;
     this.loading = 0;
@@ -472,6 +711,7 @@ export class DetailStreamingController {
     this.adapter.setSelection(this.candidates);
     this.reviewedSelections.clear();
     this.onReviewSelection(Object.freeze([]));
+    this.abortPendingLoads();
     this.cache.clear();
     this.adapter.dispose?.();
     return true;

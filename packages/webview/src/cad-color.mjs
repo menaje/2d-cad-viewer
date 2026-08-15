@@ -76,6 +76,74 @@ function buildDefaultAciPalette() {
 
 export const DEFAULT_ACI_PALETTE = buildDefaultAciPalette();
 
+function cssColorChannels(background) {
+  if (Array.isArray(background) && background.length >= 3) {
+    const channels = background.slice(0, 3).map(Number);
+    return channels.every(
+      (value) => Number.isFinite(value) && value >= 0 && value <= 255,
+    )
+      ? channels
+      : null;
+  }
+  if (typeof background !== "string") {
+    return null;
+  }
+  const value = background.trim();
+  const hex = value.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/iu);
+  if (hex) {
+    const digits = hex[1].length === 3
+      ? [...hex[1]].map((digit) => `${digit}${digit}`).join("")
+      : hex[1];
+    return [0, 2, 4].map((offset) =>
+      Number.parseInt(digits.slice(offset, offset + 2), 16),
+    );
+  }
+  const functional = value.match(
+    /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/iu,
+  );
+  if (!functional) {
+    return null;
+  }
+  const channels = functional.slice(1, 4).map(Number);
+  return channels.every(
+    (channel) => Number.isFinite(channel) && channel >= 0 && channel <= 255,
+  )
+    ? channels
+    : null;
+}
+
+function relativeLuminance(channels) {
+  const linear = channels.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045
+      ? value / 12.92
+      : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+}
+
+/**
+ * AutoCAD treats ACI 7 as a foreground color: white on a dark canvas and
+ * black on a light canvas. Other ACI entries and explicit TrueColor values
+ * remain unchanged.
+ */
+export function makeBackgroundAwareAciPalette(
+  background,
+  basePalette = DEFAULT_ACI_PALETTE,
+) {
+  if (!(basePalette instanceof Uint8Array) || basePalette.length !== 256 * 4) {
+    throw new TypeError("ACI palette payload is invalid");
+  }
+  const channels = cssColorChannels(background);
+  if (!channels) {
+    throw new TypeError("display background color is invalid");
+  }
+  const palette = new Uint8Array(basePalette);
+  const foreground = relativeLuminance(channels) >= 0.5 ? 0 : 255;
+  palette.set([foreground, foreground, foreground, 255], 7 * 4);
+  return palette;
+}
+
 export function aciRgb(index, palette = DEFAULT_ACI_PALETTE) {
   if (
     !Number.isInteger(index) ||

@@ -181,7 +181,7 @@ jobs:
             exit 1
           fi
           unzip -p "$release_directory/$package_name" extension/readme.md \
-            | grep -Fq "https://github.com/menaje/dwg-viewer"
+            | grep -Fq "https://github.com/menaje/2d-cad-viewer"
           cmp \
             <(unzip -p "$release_directory/$package_name" extension/dist/engine-assets.json) \
             "$catalog_path"
@@ -556,7 +556,7 @@ jobs:
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$tag" "$release_sha" -m "DWG Viewer $tag"
+            git tag -a "$tag" "$release_sha" -m "2D CAD Viewer $tag"
             git push origin "refs/tags/$tag"
           fi
 
@@ -637,6 +637,6 @@ jobs:
             gh release create "$tag" "${files[@]}" \
               --verify-tag \
               "${release_flags[@]}" \
-              --title "DWG Viewer $tag" \
+              --title "2D CAD Viewer $tag" \
               --notes-file "$release_notes"
           fi
