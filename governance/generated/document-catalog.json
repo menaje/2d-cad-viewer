@@ -1,0 +1,130 @@
+{
+  "schemaVersion": "1.1.0",
+  "ownerRepository": "viewer",
+  "sourceRevision": "0c328ba082b0932c051d54860546904c911ae8ae",
+  "documents": [
+    {
+      "schemaVersion": "1.1.0",
+      "documentId": "CONI-VIEWER-ADR-0001",
+      "title": "Independent Viewer Product and Shared Viewer Core Boundary",
+      "type": "adr",
+      "version": "1.0.0",
+      "status": "accepted",
+      "normativity": "normative",
+      "authority": [
+        "viewer-core-package-boundary",
+        "viewer-render-protocol-versioning"
+      ],
+      "visibility": "public",
+      "supersedes": [],
+      "lastReviewed": "2026-08-30",
+      "effectiveAt": "2026-08-15",
+      "ownerRepository": "viewer",
+      "sourcePath": "docs/adr/ADR-0001-viewer-core-boundary.md",
+      "digest": "sha256:271a2c62774e0def3abf4dc4e33aa1a37933415e5bb9931f3b81e3a7c3bd2e87",
+      "supersededBy": []
+    },
+    {
+      "schemaVersion": "1.1.0",
+      "documentId": "CONI-VIEWER-ARCHITECTURE",
+      "title": "2D CAD Viewer Architecture",
+      "type": "architecture",
+      "version": "1.0.0",
+      "status": "accepted",
+      "normativity": "normative",
+      "authority": [
+        "viewer-system-architecture"
+      ],
+      "visibility": "public",
+      "supersedes": [],
+      "lastReviewed": "2026-08-30",
+      "effectiveAt": "2026-08-30",
+      "ownerRepository": "viewer",
+      "sourcePath": "docs/architecture.md",
+      "digest": "sha256:c4f3516944903b71fbec77529dbc9fc08d0a2bcfe48413b763871a4a0d5c2c24",
+      "supersededBy": []
+    },
+    {
+      "schemaVersion": "1.1.0",
+      "documentId": "CONI-VIEWER-DISTRIBUTION",
+      "title": "2D CAD Viewer Distribution and Installation",
+      "type": "release-policy",
+      "version": "1.0.0",
+      "status": "accepted",
+      "normativity": "normative",
+      "authority": [
+        "viewer-distribution-policy"
+      ],
+      "visibility": "public",
+      "supersedes": [],
+      "lastReviewed": "2026-08-30",
+      "effectiveAt": "2026-08-30",
+      "ownerRepository": "viewer",
+      "sourcePath": "docs/distribution.md",
+      "digest": "sha256:1046a9269f98799ed373c4a3bec3e21f4535255e6927d87f340157418eeb0e5f",
+      "supersededBy": []
+    },
+    {
+      "schemaVersion": "1.1.0",
+      "documentId": "CONI-VIEWER-ENGINE-DECISION",
+      "title": "DWG Engine Decision",
+      "type": "architecture-decision",
+      "version": "1.0.0",
+      "status": "accepted",
+      "normativity": "normative",
+      "authority": [
+        "viewer-dwg-engine-selection"
+      ],
+      "visibility": "public",
+      "supersedes": [],
+      "lastReviewed": "2026-08-30",
+      "effectiveAt": "2026-08-30",
+      "ownerRepository": "viewer",
+      "sourcePath": "docs/engine-decision.md",
+      "digest": "sha256:7cf77a62df85dd816b8313bd64912d825841f51a0d282837e991ab171d800eb3",
+      "supersededBy": []
+    },
+    {
+      "schemaVersion": "1.1.0",
+      "documentId": "CONI-VIEWER-SPEC-NATIVE-DOCUMENT-ADAPTER-0-1",
+      "title": "Native Document Adapter Protocol v0.1",
+      "type": "specification",
+      "version": "0.1.0",
+      "status": "draft",
+      "normativity": "normative",
+      "authority": [
+        "viewer-native-document-adapter-contract"
+      ],
+      "visibility": "public",
+      "supersedes": [],
+      "lastReviewed": "2026-08-30",
+      "effectiveAt": "2026-08-30",
+      "ownerRepository": "viewer",
+      "sourcePath": "specs/native-document-adapter.md",
+      "digest": "sha256:8302de7cba029de8ea31afdd5010d1d0ce0e018553e491ad62ac778826708747",
+      "supersededBy": []
+    },
+    {
+      "schemaVersion": "1.1.0",
+      "documentId": "CONI-VIEWER-SPEC-SCENE-CACHE-1-26",
+      "title": "Scene Cache v1.26",
+      "type": "specification",
+      "version": "1.26.0",
+      "status": "accepted",
+      "normativity": "normative",
+      "authority": [
+        "viewer-scene-cache-contract"
+      ],
+      "visibility": "public",
+      "supersedes": [],
+      "lastReviewed": "2026-08-30",
+      "effectiveAt": "2026-08-30",
+      "ownerRepository": "viewer",
+      "sourcePath": "specs/scene-cache.md",
+      "digest": "sha256:813be1c5d16f213333f57878b3d7074a4519feb8e116e69963cd62acf112372b",
+      "supersededBy": []
+    }
+  ],
+  "externalDocuments": [],
+  "generatorVersion": "1.1.0"
+}

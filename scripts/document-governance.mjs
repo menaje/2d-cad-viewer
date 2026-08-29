@@ -122,7 +122,7 @@ async function validate() {
   console.log(`document governance valid: ${catalog.documents.length} records`);
 }
 
-const command = process.argv[2];
-if (command === 'generate') await generate(process.argv[3]);
+const [command, sourceRevision] = process.argv.slice(2).filter((argument) => argument !== '--');
+if (command === 'generate') await generate(sourceRevision);
 else if (command === 'validate') await validate();
 else fail('use generate <40-hex-source-revision> or validate');
