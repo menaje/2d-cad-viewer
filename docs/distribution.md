@@ -1,3 +1,7 @@
+---
+{"schemaVersion":"1.1.0","documentId":"CONI-VIEWER-DISTRIBUTION","title":"2D CAD Viewer Distribution and Installation","type":"release-policy","version":"1.0.0","status":"accepted","normativity":"normative","authority":["viewer-distribution-policy"],"visibility":"public","supersedes":[],"lastReviewed":"2026-08-30","effectiveAt":"2026-08-30","extensions":{"repository":"viewer","documentRole":"release-policy"}}
+---
+
 # Distribution and installation
 
 Status: qualified release procedure for Linux x64, macOS arm64, macOS Intel

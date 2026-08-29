@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0.0",
+  "ownerRepository": "viewer",
+  "publicProjection": true,
+  "documents": [
+    { "sourcePath": "docs/adr/ADR-0001-viewer-core-boundary.md" },
+    { "sourcePath": "docs/architecture.md" },
+    { "sourcePath": "docs/distribution.md" },
+    { "sourcePath": "docs/engine-decision.md" },
+    { "sourcePath": "specs/native-document-adapter.md" },
+    { "sourcePath": "specs/scene-cache.md" }
+  ],
+  "externalDocuments": []
+}

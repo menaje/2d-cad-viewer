@@ -1,3 +1,7 @@
+---
+{"schemaVersion":"1.1.0","documentId":"CONI-VIEWER-ENGINE-DECISION","title":"DWG Engine Decision","type":"architecture-decision","version":"1.0.0","status":"accepted","normativity":"normative","authority":["viewer-dwg-engine-selection"],"visibility":"public","supersedes":[],"lastReviewed":"2026-08-30","effectiveAt":"2026-08-30","extensions":{"repository":"viewer","documentRole":"engine-decision"}}
+---
+
 # DWG engine decision
 
 Status: accepted on 2026-07-31

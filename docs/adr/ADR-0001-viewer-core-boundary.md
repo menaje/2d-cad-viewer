@@ -1,15 +1,5 @@
 ---
-type: adr
-status: accepted
-authority:
-  - viewer-core-package-boundary
-  - viewer-render-protocol-versioning
-last_reviewed: 2026-08-15
-decision_id: ADR-0001
-tracking:
-  - https://github.com/menaje/2d-cad-viewer/issues/26
-  - https://github.com/menaje/2d-cad-viewer/issues/30
-  - https://github.com/menaje/2d-cad-viewer/issues/48
+{"schemaVersion":"1.1.0","documentId":"CONI-VIEWER-ADR-0001","title":"Independent Viewer Product and Shared Viewer Core Boundary","type":"adr","version":"1.0.0","status":"accepted","normativity":"normative","authority":["viewer-core-package-boundary","viewer-render-protocol-versioning"],"visibility":"public","supersedes":[],"lastReviewed":"2026-08-30","effectiveAt":"2026-08-15","extensions":{"repository":"viewer","documentRole":"decision-authority"}}
 ---
 
 # ADR-0001: 독립 Viewer 제품과 공용 Viewer Core 경계

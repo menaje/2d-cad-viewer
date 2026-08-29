@@ -10,6 +10,8 @@
     "playwright-core": "1.62.1"
   },
   "scripts": {
+    "generate:documents": "node scripts/document-governance.mjs generate",
+    "check:documents": "node scripts/document-governance.mjs validate",
     "check": "pnpm run check:release-channel && pnpm run check:adapter-package && pnpm run check:viewport-layer-overrides && pnpm run check:display-state-matrix && pnpm run check:generated-large-fixture && pnpm run check:parser-memory && pnpm run check:reference-display && pnpm run check:viewer-package-archive && pnpm run check:vsix-archive && pnpm run check:wasm-probe && pnpm run check:korean-corpus && pnpm run check:native-performance-core && pnpm run check:windows-qualification && pnpm run check:macos-qualification && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm run check:js-packages && pnpm --filter dwg-viewer-libredwg check && pnpm --filter dwg-viewer-vscode check && pnpm run qualify:viewer-boundary",
     "check:release-channel": "node --check scripts/release-channel.mjs && node --check scripts/check-marketplace-version.mjs && node --check scripts/create-engine-catalog.mjs && node --test scripts/release-channel.test.mjs scripts/check-marketplace-version.test.mjs scripts/create-engine-catalog.test.mjs",
     "check:adapter-package": "node --test adapters/libredwg/package.test.mjs",

@@ -1,3 +1,7 @@
+---
+{"schemaVersion":"1.1.0","documentId":"CONI-VIEWER-ARCHITECTURE","title":"2D CAD Viewer Architecture","type":"architecture","version":"1.0.0","status":"accepted","normativity":"normative","authority":["viewer-system-architecture"],"visibility":"public","supersedes":[],"lastReviewed":"2026-08-30","effectiveAt":"2026-08-30","extensions":{"repository":"viewer","documentRole":"architecture"}}
+---
+
 # Architecture
 
 ## Decision

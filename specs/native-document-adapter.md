@@ -1,3 +1,7 @@
+---
+{"schemaVersion":"1.1.0","documentId":"CONI-VIEWER-SPEC-NATIVE-DOCUMENT-ADAPTER-0-1","title":"Native Document Adapter Protocol v0.1","type":"specification","version":"0.1.0","status":"draft","normativity":"normative","authority":["viewer-native-document-adapter-contract"],"visibility":"public","supersedes":[],"lastReviewed":"2026-08-30","effectiveAt":"2026-08-30","extensions":{"repository":"viewer","documentRole":"normative-specification"}}
+---
+
 # Native document adapter protocol v0.1
 
 Status: query-preview; production mutation and writer blocked.

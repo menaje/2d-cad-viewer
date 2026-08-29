@@ -1,3 +1,7 @@
+---
+{"schemaVersion":"1.1.0","documentId":"CONI-VIEWER-SPEC-SCENE-CACHE-1-26","title":"Scene Cache v1.26","type":"specification","version":"1.26.0","status":"accepted","normativity":"normative","authority":["viewer-scene-cache-contract"],"visibility":"public","supersedes":[],"lastReviewed":"2026-08-30","effectiveAt":"2026-08-30","extensions":{"repository":"viewer","documentRole":"normative-specification"}}
+---
+
 # Scene Cache v1.26
 
 Status: current writer. Product writers emit major 1, minor 26. Product
