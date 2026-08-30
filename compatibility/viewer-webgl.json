@@ -77,11 +77,5 @@
     "viewerCoreSourceVersion": "0.1.3",
     "publicApi": "mountWebGlRevisionComparison",
     "evidence": "compatibility/evidence/viewer-webgl-comparison-2026-08-10.json"
-  },
-  "consumers": {
-    "coniSpatial": {
-      "repository": "https://github.com/menaje/coni-spatial",
-      "manifest": "compatibility/viewer-core.json"
-    }
   }
 }

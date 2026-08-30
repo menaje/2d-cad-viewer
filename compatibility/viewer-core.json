@@ -123,10 +123,6 @@
     "bimExplorer": {
       "repository": "https://github.com/menaje/bim-explorer",
       "manifest": "compatibility/viewer-core.json"
-    },
-    "coniSpatial": {
-      "repository": "https://github.com/menaje/coni-spatial",
-      "manifest": "compatibility/viewer-core.json"
     }
   }
 }

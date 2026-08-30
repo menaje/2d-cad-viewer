@@ -165,7 +165,7 @@ reveal descriptor도 같은 snapshot layer와 revision에 묶여 검증된다.
 전달한다. `MockServiceRenderSource`와 재사용 가능한 service conformance는
 base/live layer 합성, stale pick 거부와 disposal을 실행한다. 실제
 `ConiServiceSource`, Canonical ID authority와 Context 저장소는 계속
-`coni-spatial`의 책임이다.
+consumer-specific integration layer의 책임이다.
 `Render Delta`는 base snapshot, exact from/to revision, monotonic sequence,
 affected bounds와 bounded opaque payload에 묶인다.
 `ViewerRenderDeltaController`는 전체 entity graph 대신 변경된 Render ID의
