@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.1.0",
   "ownerRepository": "viewer",
-  "sourceRevision": "0c328ba082b0932c051d54860546904c911ae8ae",
+  "sourceRevision": "9b509f80d1219896320f216c8a070fec28c6d364",
   "documents": [
     {
       "schemaVersion": "1.1.0",
@@ -21,7 +21,7 @@
       "effectiveAt": "2026-08-15",
       "ownerRepository": "viewer",
       "sourcePath": "docs/adr/ADR-0001-viewer-core-boundary.md",
-      "digest": "sha256:271a2c62774e0def3abf4dc4e33aa1a37933415e5bb9931f3b81e3a7c3bd2e87",
+      "digest": "sha256:988d0379a3021e8104ec88779c7ebba6468c77474ddad4ff6ec3c1a6c19ba282",
       "supersededBy": []
     },
     {

@@ -2,8 +2,8 @@
   "schemaVersion": "1.1.0",
   "projection": "public",
   "ownerRepository": "viewer",
-  "sourceRevision": "0c328ba082b0932c051d54860546904c911ae8ae",
-  "catalogDigest": "sha256:ae2ea1f58daf07e111f2c162508d956fcc1474b19465264beb76a494a47f20fd",
+  "sourceRevision": "9b509f80d1219896320f216c8a070fec28c6d364",
+  "catalogDigest": "sha256:65f7b279fd0b973425a79da460c54aa057c0de8fb4d3ef1c2e7c8bee43f5ded2",
   "documents": [
     {
       "schemaVersion": "1.1.0",
@@ -23,7 +23,7 @@
       "effectiveAt": "2026-08-15",
       "ownerRepository": "viewer",
       "sourcePath": "docs/adr/ADR-0001-viewer-core-boundary.md",
-      "digest": "sha256:271a2c62774e0def3abf4dc4e33aa1a37933415e5bb9931f3b81e3a7c3bd2e87"
+      "digest": "sha256:988d0379a3021e8104ec88779c7ebba6468c77474ddad4ff6ec3c1a6c19ba282"
     },
     {
       "schemaVersion": "1.1.0",
