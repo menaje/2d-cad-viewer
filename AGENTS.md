@@ -34,7 +34,7 @@ instruction layer may be stricter but cannot weaken a higher accepted boundary.
 - Protocol/cache changes require an exact version, compatibility window, valid/invalid fixtures and rollback behavior.
 - A package or adapter migration does not transfer consumer authority or release authority.
 
-## Execution profile and five Gates
+## Execution profile and canonical five Gates
 
 Execution profile: `hosted-public`.
 
@@ -46,9 +46,45 @@ Execution profile: `hosted-public`.
 | `prerelease` | `pnpm install --frozen-lockfile`<br>`pnpm check` | `.github/workflows/release-route.yml` | `hosted` | `candidate-provenance`, `environment-provenance`, `execution-provenance`, `result` | `HOLD` |
 | `release` | `pnpm install --frozen-lockfile`<br>`pnpm check` | `.github/workflows/release.yml` | `hosted` | `release-artifact-provenance`, `release-readiness`, `execution-provenance`, `result` | `HOLD` |
 
-The Gate identifiers and order are closed. `PASS`, `FAIL` and `HOLD`
-apply only to exact inputs and evidence; a command success on another revision
-does not create promotion or release authority.
+The Gate identifiers and order are closed. Release/Promotion policy version
+`2.1.0` is the sole authority for all five Gate meanings, including
+`prerelease` and `release`. `PASS`, `FAIL` and `HOLD` apply only to
+exact inputs and evidence; a command success on another revision does not
+create promotion or release authority.
+
+## Repository Validation profile overlay
+
+Thin profile proposal: `1.0.0-proposal`.
+
+| Validation Class | Canonical Gate mapping | Repository-owned command selection | Mapping status |
+| --- | --- | --- | --- |
+| `fast` | `fast` | `pnpm run check:documents`<br>`pnpm run check:release-channel` | `mapped` |
+| `affected` | `affected` | `pnpm run test:viewer-contracts` | `mapped` |
+| `full` | `full-integration` | `pnpm check` | `mapped` |
+
+These are three Validation Classes, not a second Gate authority. The thin
+profile owns command selection and capability declarations only. Command
+strings and runner semantics are repository-owned and opaque to central policy.
+Long-running class `full`: `unknown`; reuse key:
+`unknown`; duplicate policy: `unknown`;
+resume policy: `unknown`.
+
+The `prerelease` and `release` Gate command and evidence meanings remain
+outside this overlay. Release target `unknown` declares only
+optional deployment or publication participation; it is not a Validation Class
+or Gate declaration. A Validation result never creates promotion or release
+authority.
+
+Thin-profile projection rollout: `pending`. Remote
+profile observation: default branch `dev`, selected ref
+`dev`, revision `7ea53d7dfea2d23689dbc986b61555a1ad507f73`, selection
+basis `development-branch`, observed at `2026-09-01T11:07:41Z`.
+
+This proposal does not claim that the thin profile is applied to the checkout
+or remote AGENTS. The observed remote AGENTS digest and the generated proposal
+digest are separate records and may differ while pending. Exact remote rollout
+verification and any applied-state model require a separate future rollout
+change; they are not authority created by this proposal.
 
 ## Branch readiness and promotion constraints
 
