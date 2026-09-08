@@ -132,7 +132,9 @@ a different input, and local results cannot substitute for required hosted ones.
 The [compatibility rule](../compatibility/README.md#environmentdocumentation-only-development-repack)
 narrowly permits PR #57's three package README corrections to change archive
 bytes while public API/runtime/package manifests/versions/dependencies stay
-identical to the recorded baseline. Exact source commit precedes the separate
+identical to the recorded baseline. The non-payload Core manifest test may only
+replace its stale development-evidence absence assertion with source/report
+validation; any other test edit fails closed. Exact source commit precedes the separate
 artifact-evidence commit; the source cannot contain its own development evidence.
 Only classified environment files are allowed before that source, and only
 specified evidence/catalog digest records afterward. All other changes fail

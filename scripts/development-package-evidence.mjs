@@ -23,7 +23,9 @@ const run = (command, args, cwd = root) => execFileSync(command, args, { cwd, en
 const git = (...args) => run('git', args).trim();
 const gitBytes = (revision, path) => execFileSync('git', ['show', `${revision}:${path}`], { cwd: root, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
 
+const manifestTestPath = 'packages/viewer-core/test/viewer-core.test.mjs';
 const sourcePaths = new Set([
+  manifestTestPath,
   'AGENTS.md', 'package.json', 'compatibility/README.md', 'compatibility/viewer-core.json',
   'docs/architecture.md', 'docs/adr/ADR-0001-viewer-core-boundary.md',
   'governance/README.md', 'governance/adoption.md', 'governance/environment.json',
@@ -80,13 +82,23 @@ export function validateRootMetadata(before, after) {
   for (const [key, command] of Object.entries(expected)) assert.equal(newScripts[key], command, 'only focused script additions allowed');
 }
 export function validatePackageFiles(baseFiles, sourceFiles) {
-  same(sourceFiles.filter(({ path }) => !path.endsWith('/README.md')), baseFiles.filter(({ path }) => !path.endsWith('/README.md')));
+  same(sourceFiles.filter(({ path }) => !path.endsWith('/README.md') && path !== manifestTestPath), baseFiles.filter(({ path }) => !path.endsWith('/README.md') && path !== manifestTestPath));
 }
 export function compareMeasuredArtifacts(actual, expected) { same(actual, expected); }
 export function validateQualifierChange(before, after) {
   const expected = before.replace('const repositoryRoot = path.resolve(', 'import { validateSourceBinding, validateQualificationReport } from "./development-package-evidence.mjs";\n\nconst repositoryRoot = path.resolve(')
     .replace('if (developmentActive) {\n  assert.equal(developmentQualification.status, "passed");', 'if (developmentActive) {\n  validateSourceBinding(developmentQualification, { allowEvidenceWorktree: emitOnly });\n  if (!emitOnly) validateQualificationReport(developmentQualification);\n  assert.equal(developmentQualification.status, "passed");');
   assert.equal(after, expected, 'only the development evidence guard may change the qualifier');
+}
+export function validateManifestTestChange(before, after) {
+  const expected = before.replace('  assert.equal(manifest.developmentQualification, undefined);', `  if (manifest.developmentQualification !== undefined) {
+    const { validateSourceBinding, validateQualificationReport } = await import(
+      "../../../scripts/development-package-evidence.mjs"
+    );
+    validateSourceBinding(manifest.developmentQualification);
+    validateQualificationReport(manifest.developmentQualification);
+  }`);
+  assert.equal(after, expected, 'only the non-payload manifest governance assertion may change');
 }
 function trackedFiles(revision, directories) {
   return git('ls-tree', '-r', revision, '--', ...directories).split('\n').filter(Boolean).map((line) => {
@@ -100,7 +112,7 @@ function sourceChanges(revision) {
   return git('diff', '--name-status', '--no-renames', baselineRevision, revision).split('\n').filter(Boolean).map((line) => {
     const [status, path] = line.split('\t');
     assert.ok(['A', 'M'].includes(status), 'source deletions or renames require separate review');
-    return { path, status, classification: path.startsWith('packages/') ? 'package-readme-only' : 'governance-environment-only', sourceBlob: git('rev-parse', `${revision}:${path}`) };
+    return { path, status, classification: path === manifestTestPath ? 'non-payload-manifest-governance-test' : path.startsWith('packages/') ? 'package-readme-only' : 'governance-environment-only', sourceBlob: git('rev-parse', `${revision}:${path}`) };
   });
 }
 function ensureHistory(revision) {
@@ -138,6 +150,7 @@ export function validateSourceBinding(development, { allowEvidenceWorktree = fal
   validateCompatibilityPreservation(historical, sourceManifest);
   validateCompatibilityPreservation(historical, readJson(join(root, 'compatibility/viewer-core.json')));
   validateQualifierChange(gitBytes(baselineRevision, 'scripts/qualify-viewer-boundary.mjs').toString('utf8'), gitBytes(development.sourceRevision, 'scripts/qualify-viewer-boundary.mjs').toString('utf8'));
+  validateManifestTestChange(gitBytes(baselineRevision, manifestTestPath).toString('utf8'), gitBytes(development.sourceRevision, manifestTestPath).toString('utf8'));
   const changes = sourceChanges(development.sourceRevision);
   validateChangePaths(changes.map(({ path }) => path));
   same(development.sourceChanges, changes);

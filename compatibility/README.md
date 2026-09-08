@@ -67,7 +67,9 @@ consumer manifest가 책임진다. 현재 고정 evidence는
 
 Core `developmentQualification.classification = environment-documentation-only`는
 현재 PR의 정확히 분류된 governance 파일과 세 public package의 `README.md`
-교정에만 적용한다. public API, runtime, package manifest/version/dependency,
+교정 및 배포 payload에 포함되지 않는 Core manifest governance 테스트의 기존
+absence assertion 교정에만 적용한다. 해당 assertion은 새 source/report 검증을
+호출하며 이외의 test 변경도 거부한다. public API, runtime, package manifest/version/dependency,
 LICENSE/NOTICE, 기존 package script와 release workflow가 하나라도 바뀌면 거부한다.
 이는 일반 제품 변경을 같은 버전의 개발 증거로 승인하는 예외가 아니다.
 

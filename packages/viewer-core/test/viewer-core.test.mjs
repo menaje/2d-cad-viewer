@@ -476,7 +476,13 @@ test("keeps package versions and producer compatibility manifest aligned", async
       "compatibility/evidence/viewer-boundary-0.1.3-2026-08-15.json",
     externalConsumers: "consumer-owned",
   });
-  assert.equal(manifest.developmentQualification, undefined);
+  if (manifest.developmentQualification !== undefined) {
+    const { validateSourceBinding, validateQualificationReport } = await import(
+      "../../../scripts/development-package-evidence.mjs"
+    );
+    validateSourceBinding(manifest.developmentQualification);
+    validateQualificationReport(manifest.developmentQualification);
+  }
   assert.equal(
     manifest.sources.mockRenderDelta,
     "delta-conformance",

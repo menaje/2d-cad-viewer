@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { validateArtifactRecords, validateChangePaths, validateCompatibilityPreservation, validateRootMetadata, validatePackageFiles, compareMeasuredArtifacts, validateSourceBinding, validateQualificationReport, validateQualifierChange } from './development-package-evidence.mjs';
+import { validateArtifactRecords, validateChangePaths, validateCompatibilityPreservation, validateRootMetadata, validatePackageFiles, compareMeasuredArtifacts, validateSourceBinding, validateQualificationReport, validateQualifierChange, validateManifestTestChange } from './development-package-evidence.mjs';
 
 const manifest = JSON.parse(readFileSync(new URL('../compatibility/viewer-core.json', import.meta.url)));
 const artifacts = structuredClone(manifest.distribution.artifacts);
@@ -91,4 +91,12 @@ test('qualifier correction cannot weaken historical or consumer assertions', () 
   const current = readFileSync(new URL('./qualify-viewer-boundary.mjs', import.meta.url), 'utf8');
   assert.doesNotThrow(() => validateQualifierChange(before, current));
   assert.throws(() => validateQualifierChange(before, current.replace('assert.equal(archiveDigest, expected.sha256);', '')));
+});
+
+test('non-payload manifest test changes only the stale absence assertion', () => {
+  const before = execFileSync('git', ['show', 'b955e9cda3e24bfa4dd9f6fd3597f1aa1d6a5ccb:packages/viewer-core/test/viewer-core.test.mjs'], { encoding: 'utf8' });
+  const current = readFileSync(new URL('../packages/viewer-core/test/viewer-core.test.mjs', import.meta.url), 'utf8');
+  assert.doesNotThrow(() => validateManifestTestChange(before, current));
+  assert.throws(() => validateManifestTestChange(before, current.replace('validateSourceBinding(manifest.developmentQualification);', '')));
+  assert.throws(() => validateManifestTestChange(before, current.replace('assert.equal(manifest.distribution.published, true);', '')));
 });

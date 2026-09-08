@@ -146,7 +146,7 @@ const allowedPaths = new Set([
   'scripts/check-governance.mjs', 'scripts/check-governance.test.mjs',
   'scripts/check-public-surface.mjs', 'scripts/check-public-surface.test.mjs',
   'scripts/development-package-evidence.mjs', 'scripts/development-package-evidence.test.mjs',
-  'scripts/qualify-viewer-boundary.mjs',
+  'scripts/qualify-viewer-boundary.mjs', 'packages/viewer-core/test/viewer-core.test.mjs',
   'compatibility/evidence/viewer-boundary-development-environment.json', ...boundaryPaths,
 ]);
 export function validateChangedPaths(paths) {
