@@ -123,5 +123,192 @@
       "repository": "https://github.com/menaje/bim-explorer",
       "manifest": "compatibility/viewer-core.json"
     }
+  },
+  "developmentQualification": {
+    "status": "passed",
+    "publishedInDistribution": false,
+    "sourceVersion": "0.1.3",
+    "feature": "environment-documentation-repack",
+    "classification": "environment-documentation-only",
+    "command": "pnpm run qualify:viewer-boundary",
+    "baselineRevision": "b955e9cda3e24bfa4dd9f6fd3597f1aa1d6a5ccb",
+    "sourceRevision": "bc8e8a6c428a8ab4e5d671d20de411ea186b7c4c",
+    "sourceTree": "a6c8bfe1a98116131f46e7bb4da0988900bbd325",
+    "sourceChanges": [
+      {
+        "path": "AGENTS.md",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "2abd45083f45e17f182bf241526c5e1db0052a3d"
+      },
+      {
+        "path": "compatibility/README.md",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "55e73caf094dea25d654b0c50193857c454090db"
+      },
+      {
+        "path": "compatibility/viewer-core.json",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "a5f1df4c667fb9b075a0ca3a74e8d76168a30895"
+      },
+      {
+        "path": "docs/adr/ADR-0001-viewer-core-boundary.md",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "bb109d490347f3b8121544c4a35ffd7773aea9bd"
+      },
+      {
+        "path": "docs/architecture.md",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "6cd9c45f88eced132de5c59ab3d2c4f64e26d3cf"
+      },
+      {
+        "path": "governance/README.md",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "1704ad3841187dcd172076df0e88ec4bdc909201"
+      },
+      {
+        "path": "governance/adoption.md",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "02c447628bed48d8e58514bc22bb6a550813859f"
+      },
+      {
+        "path": "governance/document-generation.json",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "0e6501d6cddbf3ad46b3a65385cd6000b3324584"
+      },
+      {
+        "path": "governance/environment.json",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "9aaca74c5e24faeba3bbd5208a4f0a899d9e069c"
+      },
+      {
+        "path": "governance/generated/document-catalog.json",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "c5881f09e287af06ce6a859e2e941bc43d7a6468"
+      },
+      {
+        "path": "governance/generated/document-export.public.json",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "ce7714d1df2dd0536ef19d44ab63272341d5979f"
+      },
+      {
+        "path": "governance/governed-documents.json",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "b5abc8aa9dbc941ec93b449b346d39c642f895c5"
+      },
+      {
+        "path": "governance/public-boundary-corrections.json",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "418547186ea7502bef79b0de8be903ba3007fc18"
+      },
+      {
+        "path": "package.json",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "13a925bd32f9d13b358b5b522d780da085102dd1"
+      },
+      {
+        "path": "packages/render-protocol/README.md",
+        "status": "M",
+        "classification": "package-readme-only",
+        "sourceBlob": "6f238551bd201691f3b72c781b01b7a319431f31"
+      },
+      {
+        "path": "packages/viewer-core/README.md",
+        "status": "M",
+        "classification": "package-readme-only",
+        "sourceBlob": "799bb80718dacc595f08a8a8dec359f26c2115ef"
+      },
+      {
+        "path": "packages/viewer-core/test/viewer-core.test.mjs",
+        "status": "M",
+        "classification": "non-payload-manifest-governance-test",
+        "sourceBlob": "4b8b03c1b61b89c9e0c30b68f6efe9d1e8f6e6c3"
+      },
+      {
+        "path": "packages/viewer-ui/README.md",
+        "status": "M",
+        "classification": "package-readme-only",
+        "sourceBlob": "46fb02597e261eec9c68b0b3d41d7751dd01b506"
+      },
+      {
+        "path": "scripts/check-governance.mjs",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "61f9b0ec47e77d1f6dbc18e71b53cf60c3ca9aaf"
+      },
+      {
+        "path": "scripts/check-governance.test.mjs",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "5a0be08427518179707761fae486dafd9c425987"
+      },
+      {
+        "path": "scripts/check-public-surface.mjs",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "8e40bf60f05fc7e4c954e24e5ea10b3451f3dfe6"
+      },
+      {
+        "path": "scripts/check-public-surface.test.mjs",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "df76d9ab07d07ad5dde8b0acb7374767705601e8"
+      },
+      {
+        "path": "scripts/development-package-evidence.mjs",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "3bef5f1d09462dd2fcf235ab2653c936d7d4a11f"
+      },
+      {
+        "path": "scripts/development-package-evidence.test.mjs",
+        "status": "A",
+        "classification": "governance-environment-only",
+        "sourceBlob": "a4124447baf88bc80a6d70f7428f5cddf84c5421"
+      },
+      {
+        "path": "scripts/qualify-viewer-boundary.mjs",
+        "status": "M",
+        "classification": "governance-environment-only",
+        "sourceBlob": "7e739bd6591e96d72f1ae72988803bc3f0d9b7c0"
+      }
+    ],
+    "packageSourceDigest": "343120c368e9038ceb3aace661dc3f404f5fa315dd97ab4bc66a926eb52554db",
+    "evidence": "compatibility/evidence/viewer-boundary-development-environment.json",
+    "releaseReadiness": "HOLD",
+    "artifacts": {
+      "viewerCore": {
+        "file": "menaje-viewer-core-0.1.3.tgz",
+        "sha256": "07eae1a8a006cbb15117d80b08b2e6f657a3619ac0c3a8077683a11c4ae1518c",
+        "bytes": 55675,
+        "contentSha256": "a38a4e35642270c0feb37f28580f97defcb3fcf3cd35639ddae398a0dea4abf7"
+      },
+      "renderProtocol": {
+        "file": "menaje-viewer-render-protocol-0.1.3.tgz",
+        "sha256": "15af8ede30aed5b6dd06bc88b53df2627dccba72e5ded9387f59e7eae0a8d0c9",
+        "bytes": 16646,
+        "contentSha256": "923a7b840ca70fa46c1ff6525852182b1cf1c99fd7bd3fd2a2c344dee4792194"
+      },
+      "viewerUi": {
+        "file": "menaje-viewer-ui-0.1.3.tgz",
+        "sha256": "a0e4e1f916c52fc853380cb4cbd0466933f57d001f2d9334a2a2f1c4e8d7da1e",
+        "bytes": 13835,
+        "contentSha256": "f345aa9078bc0e333b757baebd0882da3f2c345f7fe698857584f743d4652529"
+      }
+    },
+    "evidenceSha256": "ce606b8bb47d4c27b5916934c1966eeb53f5b78df0d226d462627b94cd865564"
   }
 }

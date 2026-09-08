@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "sourceRevision": "5eb6398da33492b458392d7dc96c31af66646fe1",
+  "sourceRevision": "bc8e8a6c428a8ab4e5d671d20de411ea186b7c4c",
   "outputs": [
     "governance/generated/document-catalog.json",
     "governance/generated/document-export.public.json"

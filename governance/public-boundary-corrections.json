@@ -12,7 +12,7 @@
     {
       "path": "compatibility/viewer-core.json",
       "beforeSha256": "9ffeb03d0d26a6b1a23960129a061f64eaf741fb77848741f98df1ee0dea8314",
-      "afterSha256": "126c4a9f078e93eb5493156e184d46857a717c50324f8182fb2a427f56c99b5c",
+      "afterSha256": "f54ba3b9ad0ba091bd5dcb464acb716914134e116428f50c81846b47af48ce76",
       "scope": "remove-noncontractual-external-source-relationship",
       "historicalArtifactsChanged": false
     },
