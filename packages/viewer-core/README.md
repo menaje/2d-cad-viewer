@@ -1,6 +1,6 @@
 # `@menaje/viewer-core`
 
-Viewer renderer와 source/host lifecycle을 VS Code, DWG parser와 Spatial
+Viewer renderer와 source/host lifecycle을 VS Code, DWG parser와 host
 Workspace에서 분리하기 위한 최소 public contract입니다.
 
 ## 설치
@@ -165,7 +165,7 @@ Host event로 전달하고 revision-bound viewport와 `humanAction.request` inte
 message나 전체 entity graph 없이 non-visual change를 표시할 수 있습니다.
 
 현재 package에는 DOM bootstrap, `vscode`, `acquireVsCodeApi()`, Scene Cache
-parser와 Spatial permission code가 없습니다. Browser와 VS Code 제품
+parser와 host permission code가 없습니다. Browser와 VS Code 제품
 진입점은 이미 같은 runtime과 `DwgSceneCacheSource`를 거칩니다.
 source-neutral
 `CameraController2D`와 viewport bounds는 Core의 canonical 구현이며

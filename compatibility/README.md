@@ -37,7 +37,7 @@ comparison mount다.
 - `canonical-dom-lifecycle-with-*-adapter`는 toolbar/result DOM 상태와
   disposal은 Viewer UI가 소유하고 product-specific 결과 의미는 adapter가
   투영한다는 뜻이다.
-- 제품 version, Spatial Protocol version과 Host–Webview message version으로
+- 제품 version, host protocol version과 Host–Webview message version으로
   Viewer Core 호환성을 추측하지 않는다.
 
 실제 package version, protocol version, artifact digest 또는 conformance

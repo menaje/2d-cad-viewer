@@ -1,0 +1,449 @@
+{
+  "schemaVersion": "1.0.0",
+  "repository": "menaje/2d-cad-viewer",
+  "visibility": "public",
+  "baseline": {
+    "branch": "dev",
+    "commit": "b955e9cda3e24bfa4dd9f6fd3597f1aa1d6a5ccb",
+    "tree": "e8b075a927e36c81a64a8435b59088300ce696ee"
+  },
+  "mappingStatus": "complete-with-tracked-holds",
+  "effective": false,
+  "automationStatus": "HOLD",
+  "releaseReadiness": "HOLD",
+  "placeholderSources": [],
+  "units": [
+    {
+      "mappingId": "vscode-product",
+      "approvedReleaseUnitId": null,
+      "versionSource": {
+        "path": "package.json",
+        "field": "/version",
+        "role": "version-source"
+      },
+      "members": [
+        "apps/vscode-extension/package.json"
+      ],
+      "mirrors": [
+        {
+          "path": "apps/vscode-extension/package.json",
+          "field": "/version",
+          "role": "mirror"
+        }
+      ],
+      "stage": {
+        "kind": "derived-route",
+        "locator": {
+          "path": "scripts/release-channel.mjs",
+          "field": "determineReleaseChannel",
+          "role": "executable-rule"
+        },
+        "historicalStage": "prerelease",
+        "candidateAuthority": "HOLD"
+      },
+      "sourceLifecycle": "development",
+      "automationStatus": "HOLD",
+      "publicationAuthority": "HOLD",
+      "followup": 53
+    },
+    {
+      "mappingId": "core-ui-render-protocol",
+      "approvedReleaseUnitId": null,
+      "versionSource": {
+        "path": "packages/viewer-core/package.json",
+        "field": "/version",
+        "role": "version-source"
+      },
+      "members": [
+        "packages/viewer-core/package.json",
+        "packages/viewer-ui/package.json",
+        "packages/render-protocol/package.json"
+      ],
+      "mirrors": [
+        {
+          "path": "packages/viewer-ui/package.json",
+          "field": "/version",
+          "role": "mirror"
+        },
+        {
+          "path": "packages/render-protocol/package.json",
+          "field": "/version",
+          "role": "mirror"
+        },
+        {
+          "path": "compatibility/viewer-core.json",
+          "field": "/viewerCore/version",
+          "role": "mirror"
+        },
+        {
+          "path": "compatibility/viewer-core.json",
+          "field": "/viewerUi/version",
+          "role": "mirror"
+        },
+        {
+          "path": "compatibility/viewer-core.json",
+          "field": "/renderProtocol/version",
+          "role": "mirror"
+        },
+        {
+          "path": "compatibility/viewer-core.json",
+          "field": "/distribution/packageVersions/viewerCore",
+          "role": "historical-mirror"
+        },
+        {
+          "path": "compatibility/viewer-core.json",
+          "field": "/distribution/packageVersions/viewerUi",
+          "role": "historical-mirror"
+        },
+        {
+          "path": "compatibility/viewer-core.json",
+          "field": "/distribution/packageVersions/renderProtocol",
+          "role": "historical-mirror"
+        }
+      ],
+      "stage": {
+        "kind": "historical-distribution",
+        "locator": {
+          "path": "compatibility/viewer-core.json",
+          "field": "/distribution/releaseStage",
+          "role": "stage-observation"
+        },
+        "observedValue": "prerelease",
+        "executable": ".github/workflows/viewer-packages.yml",
+        "candidateAuthority": "HOLD"
+      },
+      "sourceLifecycle": "development",
+      "automationStatus": "HOLD",
+      "publicationAuthority": "HOLD",
+      "followup": 53
+    },
+    {
+      "mappingId": "webgl-dwg-scene-source",
+      "approvedReleaseUnitId": null,
+      "versionSource": {
+        "path": "packages/webview/package.json",
+        "field": "/version",
+        "role": "version-source"
+      },
+      "members": [
+        "packages/webview/package.json",
+        "packages/dwg-scene-source/package.json"
+      ],
+      "mirrors": [
+        {
+          "path": "packages/dwg-scene-source/package.json",
+          "field": "/version",
+          "role": "mirror"
+        },
+        {
+          "path": "compatibility/viewer-webgl.json",
+          "field": "/viewerWebGl/version",
+          "role": "mirror"
+        },
+        {
+          "path": "compatibility/viewer-webgl.json",
+          "field": "/dwgSceneSource/version",
+          "role": "mirror"
+        }
+      ],
+      "stage": {
+        "kind": "ambiguous-executable",
+        "locator": {
+          "path": "compatibility/viewer-webgl.json",
+          "field": "/distribution/releaseStage",
+          "role": "stage-observation"
+        },
+        "observedValue": "prerelease",
+        "executable": ".github/workflows/viewer-webgl.yml",
+        "executableRule": "hardcoded --prerelease",
+        "uniqueAuthority": null,
+        "candidateAuthority": "HOLD"
+      },
+      "sourceLifecycle": "development",
+      "automationStatus": "HOLD",
+      "publicationAuthority": "HOLD",
+      "followup": 53
+    }
+  ],
+  "classifications": [
+    {
+      "kind": "runtime-copy",
+      "path": "packages/viewer-core/src/constants.mjs",
+      "field": "ViewerCoreVersion",
+      "source": "packages/viewer-core/package.json"
+    },
+    {
+      "kind": "runtime-copy",
+      "path": "packages/viewer-ui/src/constants.mjs",
+      "field": "ViewerUiVersion",
+      "source": "packages/viewer-ui/package.json"
+    },
+    {
+      "kind": "runtime-copy",
+      "path": "packages/webview/src/public-api.mjs",
+      "field": "ViewerWebGlVersion",
+      "source": "packages/webview/package.json"
+    },
+    {
+      "kind": "runtime-copy",
+      "path": "packages/native-document-adapter/src/constants.mjs",
+      "field": "NativeDocumentAdapterVersion",
+      "source": "packages/native-document-adapter/package.json"
+    },
+    {
+      "kind": "contract-identity",
+      "path": "packages/render-protocol/src/constants.mjs",
+      "field": "RenderProtocolVersion"
+    },
+    {
+      "kind": "contract-identity",
+      "path": "packages/dwg-scene-source/src/scene-cache.mjs",
+      "field": "CACHE_VERSION_MAJOR/CACHE_VERSION_MINOR"
+    },
+    {
+      "kind": "legacy-reference",
+      "path": "apps/vscode-libredwg-adapter/package.json",
+      "field": "/version"
+    },
+    {
+      "kind": "internal-contract-package",
+      "path": "packages/native-document-adapter/package.json",
+      "field": "/version"
+    },
+    {
+      "kind": "local-tooling",
+      "path": "Cargo.toml",
+      "field": "workspace.package.version",
+      "placeholderAuthority": "unconfirmed-HOLD"
+    },
+    {
+      "kind": "inherited",
+      "path": "crates/dwg-converter/Cargo.toml",
+      "field": "package.version.workspace"
+    },
+    {
+      "kind": "lock-snapshot",
+      "path": "Cargo.lock",
+      "field": "version and package records"
+    },
+    {
+      "kind": "lock-snapshot",
+      "path": "pnpm-lock.yaml",
+      "field": "lockfileVersion and importers"
+    },
+    {
+      "kind": "generated-artifact-copy",
+      "path": "scripts/create-engine-catalog.mjs",
+      "field": "viewerVersion/releaseTag/assets",
+      "source": "package.json"
+    },
+    {
+      "kind": "historical-evidence",
+      "path": "compatibility/viewer-webgl.json",
+      "field": "/distribution"
+    },
+    {
+      "kind": "development-evidence",
+      "path": "compatibility/viewer-webgl.json",
+      "field": "/developmentQualification",
+      "publishedInDistribution": false
+    },
+    {
+      "kind": "historical-evidence",
+      "path": "compatibility/evidence/viewer-boundary-0.1.1-2026-08-04.json",
+      "field": "artifact digests",
+      "disposition": "HOLD",
+      "followup": 53
+    },
+    {
+      "kind": "deferred-baseline",
+      "path": "compatibility/native-document-adapter.json",
+      "field": "query/writer/wasm admission",
+      "disposition": "HOLD",
+      "followup": 54
+    },
+    {
+      "kind": "document-projection",
+      "path": "governance/generated/document-catalog.json",
+      "field": "sourceRevision/documents",
+      "source": "governance/governed-documents.json"
+    }
+  ],
+  "observations": [
+    {
+      "path": ".github/workflows/release-route.yml",
+      "sha256": "ee7ac05bede200736d3691ce5365e2cecaa381ed405cd10bd20d5c270988773b",
+      "scope": "file"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "sha256": "33c3d86ba6f8d8ef4d0df5f0269fb14ee6382ee3a9f63755da5fd6892f10534d",
+      "scope": "file"
+    },
+    {
+      "path": ".github/workflows/viewer-packages.yml",
+      "sha256": "eaf7747ecc25369f75917c63d3b1c67d55a89451a086da67f681dab0c78da519",
+      "scope": "file"
+    },
+    {
+      "path": ".github/workflows/viewer-webgl.yml",
+      "sha256": "6db4e7756f7209601ef1a938503e7cbc591f133df83020c54a661734d57113dc",
+      "scope": "file"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "bfbfb9022cbe802bf98b5fd7a46304f861fce865a6cc06d915d946f26a87c728",
+      "scope": "file"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "26bb27391ae78febf07fd77e176f7fd6542835de2b0a024a73cbb84306f585ad",
+      "scope": "file"
+    },
+    {
+      "path": "apps/vscode-extension/package.json",
+      "sha256": "b11093871ad7ef8f406109cbed7232b23cfba4922e2ec6ee2e5533085f4127c6",
+      "scope": "file"
+    },
+    {
+      "path": "apps/vscode-libredwg-adapter/package.json",
+      "sha256": "7e019b78afaf68861f4b46796dfbffe876de1cae2b6c96b6541d73b045751b70",
+      "scope": "file"
+    },
+    {
+      "path": "compatibility/evidence/viewer-boundary-0.1.1-2026-08-04.json",
+      "sha256": "2463aeab90e42c8a5958e63dfd89b893751c57817001d5a64d5142a4babe2a25",
+      "scope": "file"
+    },
+    {
+      "path": "compatibility/native-document-adapter.json",
+      "sha256": "6b461debc99aeff669c806b9474b246d6cadc0a048ac541a67efe516ad004208",
+      "scope": "file"
+    },
+    {
+      "path": "compatibility/viewer-core.json",
+      "sha256": "126c4a9f078e93eb5493156e184d46857a717c50324f8182fb2a427f56c99b5c",
+      "scope": "file"
+    },
+    {
+      "path": "compatibility/viewer-webgl.json",
+      "sha256": "19fcba352d7069f9d628c693a1a2a8b3c1bb9dc94ca199b1f9bc1665e92a58dc",
+      "scope": "file"
+    },
+    {
+      "path": "crates/dwg-converter/Cargo.toml",
+      "sha256": "0a354f37bd5dd12dd96916233766842d172610fea90662701afac35a25b2cf94",
+      "scope": "file"
+    },
+    {
+      "path": "package.json",
+      "sha256": "b90aa382529355bbcdf2570d96beee91e816e48b880da42d579b856498e39cba",
+      "scope": "non-script-metadata"
+    },
+    {
+      "path": "packages/dwg-scene-source/package.json",
+      "sha256": "b752e79f0ff5009b501827512201a78a652d0a178d05f7bc8ed6214b46d2052b",
+      "scope": "file"
+    },
+    {
+      "path": "packages/dwg-scene-source/src/scene-cache.mjs",
+      "sha256": "017d319e18b6092bec708e03f6d8b9927ea3e7ed3752644b503300597d3002c6",
+      "scope": "file"
+    },
+    {
+      "path": "packages/native-document-adapter/package.json",
+      "sha256": "8542813729d01fb06a6ec18d21fb5e90c43e9fa6fd85a70ff0a29323636ea374",
+      "scope": "file"
+    },
+    {
+      "path": "packages/native-document-adapter/src/constants.mjs",
+      "sha256": "be738196461f2fd53a9fc5708a8c758c83416eea0ea5de28fbcdb88615f9d47e",
+      "scope": "file"
+    },
+    {
+      "path": "packages/render-protocol/package.json",
+      "sha256": "aea22d5390eef5c5c602e51f010875967050d4ba1e080dcb57318ad28b41377b",
+      "scope": "file"
+    },
+    {
+      "path": "packages/render-protocol/src/constants.mjs",
+      "sha256": "7f3adae7fda5d2498338184c4d335b022ea9e6276619a9acb549b6c66b8e92b7",
+      "scope": "file"
+    },
+    {
+      "path": "packages/viewer-core/package.json",
+      "sha256": "c1b76812309422924244bafb5ece746048c69d9991bcca6151e6b63ae50ddee4",
+      "scope": "file"
+    },
+    {
+      "path": "packages/viewer-core/src/constants.mjs",
+      "sha256": "a1f050820ea0a68732c6b6d42537cbd3a2faaa6b2d5fd83e9c36b738d967c522",
+      "scope": "file"
+    },
+    {
+      "path": "packages/viewer-ui/package.json",
+      "sha256": "5b37e752604399bb59718a4275b4548d44c0d5978b32fd7d0e0a6b67674bbf7a",
+      "scope": "file"
+    },
+    {
+      "path": "packages/viewer-ui/src/constants.mjs",
+      "sha256": "c07bad794345cc242dcab1fc391fe7ec6357ce30884cb663a0c8369188f746bd",
+      "scope": "file"
+    },
+    {
+      "path": "packages/webview/package.json",
+      "sha256": "6b586e2cfaf558cb9526d3e3fe4ba6b74c1a729d33e20fe061359d173d3dea4a",
+      "scope": "file"
+    },
+    {
+      "path": "packages/webview/src/public-api.mjs",
+      "sha256": "52d2b6e2afcce263b0853d375db40ae145a61970b46257743efecf43fcf65c6d",
+      "scope": "file"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "a6b00511ac211a73fc9dfda3be19c2124ec0639a51aac84473bc21ddd77018bd",
+      "scope": "file"
+    },
+    {
+      "path": "scripts/create-engine-catalog.mjs",
+      "sha256": "2e144505dad202c5b4e4eda927763f67c7138b0878b4108876cb4b517b457763",
+      "scope": "file"
+    },
+    {
+      "path": "scripts/release-channel.mjs",
+      "sha256": "0dc18e48fd3ee582c64555e27559e13f38649b5ca39297a888fdf31b61f8ee35",
+      "scope": "file"
+    }
+  ],
+  "followups": [
+    {
+      "issue": 53,
+      "url": "https://github.com/menaje/2d-cad-viewer/issues/53",
+      "stateObserved": "OPEN",
+      "observedOn": "2026-09-08",
+      "scope": "authority-and-historical-evidence"
+    },
+    {
+      "issue": 54,
+      "url": "https://github.com/menaje/2d-cad-viewer/issues/54",
+      "stateObserved": "OPEN",
+      "observedOn": "2026-09-08",
+      "scope": "deferred-native-wasm"
+    },
+    {
+      "issue": 55,
+      "url": "https://github.com/menaje/2d-cad-viewer/issues/55",
+      "stateObserved": "OPEN",
+      "observedOn": "2026-09-08",
+      "scope": "product-documentation"
+    },
+    {
+      "issue": 56,
+      "url": "https://github.com/menaje/2d-cad-viewer/issues/56",
+      "stateObserved": "OPEN",
+      "observedOn": "2026-09-08",
+      "scope": "governance-environment"
+    }
+  ]
+}

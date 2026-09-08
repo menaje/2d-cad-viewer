@@ -63,8 +63,7 @@
     "mock": "conformance",
     "mockService": "service-conformance",
     "mockRenderDelta": "delta-conformance",
-    "dwgSceneCache": "conformance",
-    "coniService": "external"
+    "dwgSceneCache": "conformance"
   },
   "hosts": {
     "browser": "product-runtime",

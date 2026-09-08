@@ -2,7 +2,7 @@
 
 Viewer의 source-neutral DOM composition package입니다. Viewer Core의
 renderer/source lifecycle과 분리되어 있으며 DWG Scene Cache, VS Code API,
-Spatial Workspace 또는 제품별 selection record를 import하지 않습니다.
+host workspace 또는 제품별 selection record를 import하지 않습니다.
 0.1.3 public preview는 Viewer Core와 함께 checksum-pinned GitHub Release
 artifact 및 GitHub Packages package로 배포됩니다.
 

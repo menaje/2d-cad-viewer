@@ -42,6 +42,9 @@
     "qualify:reference-annotation-matrix": "node scripts/qualify-reference-annotation-matrix.mjs",
     "qualify:viewer-boundary": "node scripts/qualify-viewer-boundary.mjs",
     "test:webview": "pnpm --filter @menaje/viewer-webgl test",
-    "test:vscode": "pnpm --filter dwg-viewer-vscode test"
+    "test:vscode": "pnpm --filter dwg-viewer-vscode test",
+    "check:governance": "node scripts/check-governance.mjs",
+    "test:governance": "node --test scripts/check-governance.test.mjs scripts/check-public-surface.test.mjs",
+    "check:public-surface": "node scripts/check-public-surface.mjs"
   }
 }
