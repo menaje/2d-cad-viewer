@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "1.0.0",
+  "baselineCommit": "b955e9cda3e24bfa4dd9f6fd3597f1aa1d6a5ccb",
+  "corrections": [
+    {
+      "path": "compatibility/README.md",
+      "beforeSha256": "a7c2c023f5811c4a9f14be690df422fd4f170ead87df12b242846b8c744d8bcc",
+      "afterSha256": "575a1bf00b8b66ac73e2083612bf681cce2c3a64f45357931a7da5c04f2c86d4",
+      "scope": "meaning-preserving-public-boundary-wording",
+      "historicalArtifactsChanged": false
+    },
+    {
+      "path": "compatibility/viewer-core.json",
+      "beforeSha256": "9ffeb03d0d26a6b1a23960129a061f64eaf741fb77848741f98df1ee0dea8314",
+      "afterSha256": "f54ba3b9ad0ba091bd5dcb464acb716914134e116428f50c81846b47af48ce76",
+      "scope": "remove-noncontractual-external-source-relationship",
+      "historicalArtifactsChanged": false
+    },
+    {
+      "path": "docs/adr/ADR-0001-viewer-core-boundary.md",
+      "beforeSha256": "988d0379a3021e8104ec88779c7ebba6468c77474ddad4ff6ec3c1a6c19ba282",
+      "afterSha256": "5d450da9ac8d095f6f8163fbf30259bf270252894ffc6dd479a6c5ea069aaa68",
+      "scope": "meaning-preserving-public-boundary-wording",
+      "historicalArtifactsChanged": false
+    },
+    {
+      "path": "docs/architecture.md",
+      "beforeSha256": "c4f3516944903b71fbec77529dbc9fc08d0a2bcfe48413b763871a4a0d5c2c24",
+      "afterSha256": "99c8feab411fa8e94c6174bdbba169f61ca495a0eb154c3533573a2256868f80",
+      "scope": "meaning-preserving-public-boundary-wording",
+      "historicalArtifactsChanged": false
+    },
+    {
+      "path": "packages/render-protocol/README.md",
+      "beforeSha256": "30cc2221a169a7a80313f511113a9c3308231e0a30c61ef0a57c1cbc6c66497c",
+      "afterSha256": "38af7e50f7bd4c36b93b26b586eacd3570b318cf40e14d1121bdc2ce13fe8281",
+      "scope": "meaning-preserving-public-boundary-wording",
+      "historicalArtifactsChanged": false
+    },
+    {
+      "path": "packages/viewer-core/README.md",
+      "beforeSha256": "c52a780707606635bce80cba206c5f2bdd6dea782d52935d69722369890e7d44",
+      "afterSha256": "e5414d8f27449fdb3cd54a648b564c46b00714ef82323dcd337b6b89eee07001",
+      "scope": "meaning-preserving-public-boundary-wording",
+      "historicalArtifactsChanged": false
+    },
+    {
+      "path": "packages/viewer-ui/README.md",
+      "beforeSha256": "ac9f5b1070da56f388949c0e7cbea4a36bc8028f9e1261072cef7dcf44b451b7",
+      "afterSha256": "a69f2a60d9f762722f5c9e8d1640ae6d64fbf6c25e8aab33cb1a6357e772b120",
+      "scope": "meaning-preserving-public-boundary-wording",
+      "historicalArtifactsChanged": false
+    }
+  ],
+  "productDocumentationConsolidationIssue": 55
+}

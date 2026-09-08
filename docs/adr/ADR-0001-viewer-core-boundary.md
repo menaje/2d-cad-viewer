@@ -9,9 +9,9 @@
 현재 제품은 raw DWG를 여는 VS Code Custom Editor이며, 검증된 renderer,
 camera, interaction, picking과 Scene Cache streaming 구현은
 `packages/webview`에 함께 있다. 이 구현은 독립 2D CAD Viewer에서 계속
-동작해야 하지만, Coni Spatial도 renderer 코드를 복사하거나 설치된
-2D CAD Viewer extension을 제어하지 않고 같은 Viewer Core를 사용할 수 있어야
-한다. raw BIM을 read/index/render하는 독립 `bim-explorer`도 세 번째
+동작해야 하며, 외부 host도 renderer 코드를 복사하거나 설치된
+2D CAD Viewer extension을 제어하지 않고 공개 Viewer Core를 사용할 수 있어야
+한다. raw BIM을 read/index/render하는 독립 `bim-explorer`도 공개
 consumer로 추가됐으며 source-neutral lifecycle, identity와 selection
 계약을 공유해야 한다.
 
@@ -25,17 +25,17 @@ Render Snapshot/Delta와 Service integration을 구현할 때 다시 경계를
 
 ## Decision
 
-독립 2D CAD Viewer, BIM Explorer와 Coni Spatial 제품은 저장소, 설치물과
-release를 분리한다. `2d-cad-viewer`는 다음 versioned package 경계를
+독립 2D CAD Viewer와 BIM Explorer는 각자의 저장소, 설치물과
+release를 소유한다. 외부 host는 공개 package 계약으로만 연결한다. `2d-cad-viewer`는 다음 versioned package 경계를
 소유한다.
 
 | Package | 책임 | 포함하지 않는 것 |
 | --- | --- | --- |
-| `@menaje/viewer-render-protocol` | source/session/snapshot/range의 Viewer-facing 계약과 fail-closed validation | Spatial Workspace, Agent method, Host private message |
+| `@menaje/viewer-render-protocol` | source/session/snapshot/range의 Viewer-facing 계약과 fail-closed validation | host workspace, Agent method, Host private message |
 | `@menaje/viewer-core` | source/host lifecycle, renderer, camera, interaction, picking과 generic layer 합성 | DOM bootstrap, VS Code API, DWG parser, permission 판정 |
-| `@menaje/dwg-scene-source` | Scene Cache reader, range/detail streaming과 `DwgSceneCacheSource` | Viewer UI, Spatial revision authority |
-| `@menaje/viewer-webgl` | Host-neutral WebGL presentation mount와 DWG renderer/delta adapter | VS Code API, Spatial authority, 제품 전용 DOM bootstrap |
-| `@menaje/viewer-ui` | 일반 toolbar, inspector와 DOM composition | Spatial semantic panel |
+| `@menaje/dwg-scene-source` | Scene Cache reader, range/detail streaming과 `DwgSceneCacheSource` | Viewer UI, host revision authority |
+| `@menaje/viewer-webgl` | Host-neutral WebGL presentation mount와 DWG renderer/delta adapter | VS Code API, host authority, 제품 전용 DOM bootstrap |
+| `@menaje/viewer-ui` | 일반 toolbar, inspector와 DOM composition | host semantic panel |
 | `@dwg-viewer/vscode-bridge` | VS Code resource/range/file association adapter | public Service protocol |
 | `@dwg-viewer/browser-bridge` | Blob/HTTP/mock host adapter | VS Code API |
 
@@ -54,8 +54,8 @@ DWG 제품 전용 이름을 유지한다. public protocol/API ID도
 private `dwg-*` message와 혼동하지 않는다.
 
 generic 3D renderer와 BIM exploration UI는 `bim-explorer`가 소유한다.
-Coni Spatial은 호환 3D/BIM package 위에 revision-bound base/live/diff
-overlay와 Context Reference integration을 추가한다. 현재 2D renderer를
+외부 host의 revision-bound base/live/diff overlay와 Context Reference
+integration은 공개 계약을 사용하는 host 소유 adapter의 책임이다. 현재 2D renderer를
 범용 3D engine으로 확장하거나 구현을 저장소 사이에 복사하지 않는다.
 
 ## Public contract 원칙
@@ -79,12 +79,12 @@ human capability를 발급하지 않는다.
 - `acquireVsCodeApi()`와 Custom Editor lifecycle
 - LibreDWG process, native pointer와 실제 source/export path
 - IFC parser object, Express ID pointer와 BIM engine 내부 graph
-- Coni Spatial의 Agent–Service method, credential와 acceptance/publish 권한
+- host의 Agent–Service method, credential와 acceptance/publish 권한
 
 ## Version과 compatibility
 
 Viewer Core package, render protocol과 2D CAD Viewer 제품은 각각 semantic
-version을 가진다. BIM Explorer product/source package, Spatial Protocol과
+version을 가진다. BIM Explorer product/source package, host protocol과
 Viewer package version도 서로 독립적이다.
 
 - `0.x`에서 breaking contract change는 minor version을 올린다.
@@ -120,7 +120,7 @@ publication은 매 version마다 별도 promotion 승인이 있을 때만 수행
 5. Service RenderSource, external identity/context event
 6. ordered Render Delta와 revision diff
 7. BIM Explorer의 source-neutral 3D consumer conformance
-8. Spatial의 BIM base/Canonical identity/live-diff integration conformance
+8. host-owned base/identity/live-diff integration conformance
 
 각 단계는 raw DWG open, selection, measurement, Korean text, first-frame와
 memory qualification을 유지해야 한다. 파일 이동 자체를 완료 조건으로
@@ -134,7 +134,7 @@ memory qualification을 유지해야 한다. 파일 이동 자체를 완료 조�
 - public contract는 현재 VS Code message보다 작고 source-neutral하다.
 - BIM Explorer는 standalone 2D CAD Viewer 설치 없이 `BimModelSource`와
   generic 3D surface를 제공할 수 있다.
-- Coni Spatial은 standalone 2D CAD Viewer 설치 없이 호환 package를 bundle할
+- 외부 host는 standalone 2D CAD Viewer 설치 없이 호환 package를 bundle할
   수 있으며 BIM Explorer extension 설치에도 의존하지 않는다.
 - 2D와 3D surface는 같은 lifecycle/identity/selection 계약을 사용하지만
   서로 다른 renderer backend와 제품 package를 가질 수 있다.
@@ -164,7 +164,7 @@ reveal descriptor도 같은 snapshot layer와 revision에 묶여 검증된다.
 호출하고 opaque reference만 `context.request`와 `source.reveal` Host event로
 전달한다. `MockServiceRenderSource`와 재사용 가능한 service conformance는
 base/live layer 합성, stale pick 거부와 disposal을 실행한다. 실제
-`ConiServiceSource`, Canonical ID authority와 Context 저장소는 계속
+service-backed source, Canonical ID authority와 Context 저장소는 계속
 consumer-specific integration layer의 책임이다.
 `Render Delta`는 base snapshot, exact from/to revision, monotonic sequence,
 affected bounds와 bounded opaque payload에 묶인다.
@@ -274,7 +274,7 @@ DOM listener disposal을 소유한다. 네 diff 상태와 base/target revision�
 아직 `packages/webview`에 있는 실제 WebGL CAD shader, DWG candidate decoder와
 selection/measurement overlay, generic render data model의 물리적 package
 이동은 남아 있다. 일반 Viewer UI의 layer/layout panel composition도 이후
-단계다. #30의 실제 cross-repository `ConiServiceSource` qualification은
+단계다. #30의 실제 cross-repository service-backed source qualification은
 남아 있다. #27은 378,400-base public delta fixture와 2026-08-04의
 24,680,147-byte 제품 재검증으로 완료했다. 실제 제품 결과는 `status: ok`,
 first usable frame 5,220 ms, 증분 물리 메모리 564,907,536 bytes와 완전한
@@ -298,20 +298,19 @@ source/service conformance와 외부 제품 없는 standalone runtime lifecycle�
 현재 `viewer-core-v0.1.3`은 prerelease로 유지한다. 새 tag publish는
 producer manifest의 `tagPublicationApproved`를 별도 변경하지 않으면
 workflow가 거부하며 stable 자동 승격은 없다. 이 qualification은
-`2d-cad-viewer`만 실행하고 BIM Explorer와 Coni Spatial 저장소를 수정하거나
-그 consumer-owned 결과를 대신 주장하지 않는다.
+`2d-cad-viewer` 소유 경계만 실행하며 외부 consumer-owned 결과를
+대신 주장하지 않는다.
 
 `bim-explorer`의 `BimModelSource`와 3D consumer는 아직 구현되지 않았다.
 따라서 current package가 truly source-neutral하거나 3D-compatible하다고
 주장하지 않으며 해당 evidence는
 [bim-explorer #3](https://github.com/menaje/bim-explorer/issues/3)에서
-추적한다. Spatial BIM identity/overlay integration은
-[bim-explorer #9](https://github.com/menaje/bim-explorer/issues/9)가
-추적한다.
+추적한다. 외부 host의 identity/overlay integration qualification은
+해당 host 소유 경계에서 별도로 입증해야 한다.
 
 ## Revisit
 
-실제 `DwgSceneCacheSource`, `BimModelSource` 또는 `ConiServiceSource`
+실제 `DwgSceneCacheSource`, `BimModelSource` 또는 service-backed source
 conformance가 현재 session/snapshot 경계로 구현되지 않거나, 독립 제품
 qualification이 반복해서 깨질 때 이 결정을 재검토한다. public contract
 변경은 기존 version의 의미를 바꾸지 않고 새 version과 migration fixture로

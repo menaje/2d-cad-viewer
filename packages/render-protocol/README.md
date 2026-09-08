@@ -33,7 +33,7 @@ npm install https://github.com/menaje/2d-cad-viewer/releases/download/viewer-cor
 GitHub Packages를 사용할 때는 `@menaje` scope를
 `https://npm.pkg.github.com`에 연결하고 exact `0.1.3`을 설치합니다.
 
-이 package는 Spatial Workspace, Agent method, credential, 실제 file path와
+이 package는 host workspace, Agent method, credential, 실제 file path와
 기존 `dwg-*` Host–Webview message를 포함하지 않습니다.
 `diff.open`과 `humanAction.request`는 ViewerHost intent/event이며 source가
 authority를 선언하는 Render capability가 아닙니다.

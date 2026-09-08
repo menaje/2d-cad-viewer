@@ -21,11 +21,11 @@ DWG
 ## Viewer product and package boundary
 
 The raw 2D CAD Viewer remains an independently installed product. The independent
-`bim-explorer` is the second, 3D consumer, while Coni Spatial owns
-revision/change authority and embeds only compatible packages. Renderer reuse
+`bim-explorer` provides a public 3D consumer boundary. Revision/change authority
+belongs to each host; embedding uses compatible public packages. Renderer reuse
 is through versioned Viewer Core packages rather than an installed extension,
 its process, or its private `dwg-*` Host–Webview messages. The accepted
-three-product boundary and extraction order are recorded in
+product/package boundary and extraction order are recorded in
 [`ADR-0001`](adr/ADR-0001-viewer-core-boundary.md).
 
 The first executable package boundary is:
@@ -91,7 +91,7 @@ descriptors. `ViewerIdentityController` rejects stale in-flight responses and
 publishes only opaque `context.request` and `source.reveal` details to the Host.
 `MockServiceRenderSource` and the reusable service conformance exercise
 base/live/diff/diagnostic layer composition and those hooks without importing
-Spatial code. Ordered `revision.changed` and `diagnostics.changed` streams
+host implementation code. Ordered `revision.changed` and `diagnostics.changed` streams
 preserve the last successful snapshot on build failure and reject replayed
 sequence numbers. `ViewerLayerCompositionController` orders 2D, 3D, and
 semantic layers with atomic visibility rollback. `ViewerServiceEventController`

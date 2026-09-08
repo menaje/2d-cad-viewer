@@ -8,7 +8,8 @@
     { "sourcePath": "docs/distribution.md" },
     { "sourcePath": "docs/engine-decision.md" },
     { "sourcePath": "specs/native-document-adapter.md" },
-    { "sourcePath": "specs/scene-cache.md" }
+    { "sourcePath": "specs/scene-cache.md" },
+    { "sourcePath": "governance/adoption.md" }
   ],
   "externalDocuments": []
 }

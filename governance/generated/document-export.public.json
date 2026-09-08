@@ -2,8 +2,8 @@
   "schemaVersion": "1.1.0",
   "projection": "public",
   "ownerRepository": "viewer",
-  "sourceRevision": "9b509f80d1219896320f216c8a070fec28c6d364",
-  "catalogDigest": "sha256:65f7b279fd0b973425a79da460c54aa057c0de8fb4d3ef1c2e7c8bee43f5ded2",
+  "sourceRevision": "bc8e8a6c428a8ab4e5d671d20de411ea186b7c4c",
+  "catalogDigest": "sha256:fe81faea08bcf840c16f5357ae2e0edb18626664cf7bf3d8aa7766a053ae0593",
   "documents": [
     {
       "schemaVersion": "1.1.0",
@@ -23,7 +23,7 @@
       "effectiveAt": "2026-08-15",
       "ownerRepository": "viewer",
       "sourcePath": "docs/adr/ADR-0001-viewer-core-boundary.md",
-      "digest": "sha256:988d0379a3021e8104ec88779c7ebba6468c77474ddad4ff6ec3c1a6c19ba282"
+      "digest": "sha256:5d450da9ac8d095f6f8163fbf30259bf270252894ffc6dd479a6c5ea069aaa68"
     },
     {
       "schemaVersion": "1.1.0",
@@ -42,7 +42,7 @@
       "effectiveAt": "2026-08-30",
       "ownerRepository": "viewer",
       "sourcePath": "docs/architecture.md",
-      "digest": "sha256:c4f3516944903b71fbec77529dbc9fc08d0a2bcfe48413b763871a4a0d5c2c24"
+      "digest": "sha256:99c8feab411fa8e94c6174bdbba169f61ca495a0eb154c3533573a2256868f80"
     },
     {
       "schemaVersion": "1.1.0",
@@ -119,6 +119,25 @@
       "ownerRepository": "viewer",
       "sourcePath": "specs/scene-cache.md",
       "digest": "sha256:813be1c5d16f213333f57878b3d7074a4519feb8e116e69963cd62acf112372b"
+    },
+    {
+      "schemaVersion": "1.1.0",
+      "documentId": "VIEWER-GOVERNANCE-ADOPTION",
+      "title": "Viewer Repository-local Architecture Adoption Environment",
+      "type": "contract",
+      "version": "1.0.0",
+      "status": "draft",
+      "normativity": "normative",
+      "authority": [
+        "viewer-governance-work-environment"
+      ],
+      "visibility": "public",
+      "supersedes": [],
+      "lastReviewed": "2026-09-08",
+      "effectiveAt": "2026-09-08",
+      "ownerRepository": "viewer",
+      "sourcePath": "governance/adoption.md",
+      "digest": "sha256:c853b5b1c7d376f2216cfaa768e953e7f4bc457a90f81d50ad711c07070ce70c"
     }
   ],
   "externalDocuments": [],
