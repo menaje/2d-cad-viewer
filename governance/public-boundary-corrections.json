@@ -52,5 +52,135 @@
       "historicalArtifactsChanged": false
     }
   ],
-  "productDocumentationConsolidationIssue": 55
+  "productDocumentationConsolidationIssue": 55,
+  "documentationConsolidation": {
+    "issue": 55,
+    "repository": "menaje/2d-cad-viewer",
+    "baselineCommit": "fb625033c2a6d09d1a8be7e261f54c0ab6fef546",
+    "baselineTree": "1a10f9c98d7125658f5e04ca05f69711a5b8e80b",
+    "observedOn": "2026-09-09",
+    "disposition": "existing-owner-documents-cover-product-responsibilities",
+    "documentChanges": 0,
+    "liveLinkChanges": 0,
+    "historicalArtifactsChanged": false,
+    "productChanges": 0,
+    "releaseReadiness": "HOLD",
+    "ownerRole": "repository documentation/API maintainer",
+    "coverage": [
+      {
+        "responsibility": "Standalone installation and read-only DWG use",
+        "path": "README.md",
+        "status": "current-product-usage",
+        "beforeSha256": "d0cb108b6a7dca1100b6fe5a9db18b3acc067b6f6d1ba17df1e28841242a5f0e",
+        "afterSha256": "d0cb108b6a7dca1100b6fe5a9db18b3acc067b6f6d1ba17df1e28841242a5f0e",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Source-neutral product and package boundary",
+        "path": "docs/adr/ADR-0001-viewer-core-boundary.md",
+        "status": "accepted-decision",
+        "beforeSha256": "5d450da9ac8d095f6f8163fbf30259bf270252894ffc6dd479a6c5ea069aaa68",
+        "afterSha256": "5d450da9ac8d095f6f8163fbf30259bf270252894ffc6dd479a6c5ea069aaa68",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Product pipeline and rendering architecture",
+        "path": "docs/architecture.md",
+        "status": "accepted-architecture",
+        "beforeSha256": "99c8feab411fa8e94c6174bdbba169f61ca495a0eb154c3533573a2256868f80",
+        "afterSha256": "99c8feab411fa8e94c6174bdbba169f61ca495a0eb154c3533573a2256868f80",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "RenderSource and ViewerHost API",
+        "path": "packages/viewer-core/README.md",
+        "status": "package-api-usage",
+        "beforeSha256": "e5414d8f27449fdb3cd54a648b564c46b00714ef82323dcd337b6b89eee07001",
+        "afterSha256": "e5414d8f27449fdb3cd54a648b564c46b00714ef82323dcd337b6b89eee07001",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Render protocol",
+        "path": "packages/render-protocol/README.md",
+        "status": "package-api-usage",
+        "beforeSha256": "38af7e50f7bd4c36b93b26b586eacd3570b318cf40e14d1121bdc2ce13fe8281",
+        "afterSha256": "38af7e50f7bd4c36b93b26b586eacd3570b318cf40e14d1121bdc2ce13fe8281",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "UI composition",
+        "path": "packages/viewer-ui/README.md",
+        "status": "package-api-usage",
+        "beforeSha256": "a69f2a60d9f762722f5c9e8d1640ae6d64fbf6c25e8aab33cb1a6357e772b120",
+        "afterSha256": "a69f2a60d9f762722f5c9e8d1640ae6d64fbf6c25e8aab33cb1a6357e772b120",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Scene Cache contract",
+        "path": "specs/scene-cache.md",
+        "status": "accepted-contract",
+        "beforeSha256": "813be1c5d16f213333f57878b3d7074a4519feb8e116e69963cd62acf112372b",
+        "afterSha256": "813be1c5d16f213333f57878b3d7074a4519feb8e116e69963cd62acf112372b",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "DWG source lifecycle",
+        "path": "packages/dwg-scene-source/README.md",
+        "status": "package-api-usage",
+        "beforeSha256": "fd37bcb49cb67f3755aee348e89cce7a0882bd3cd2f84bf8cc5e11affca29d02",
+        "afterSha256": "fd37bcb49cb67f3755aee348e89cce7a0882bd3cd2f84bf8cc5e11affca29d02",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "WebGL presentation and standalone shell",
+        "path": "packages/webview/README.md",
+        "status": "package-api-usage",
+        "beforeSha256": "c99e51c062267a0ec3f0fde916cbee19c526c1ac1dc5846bcc26dc58b32ad7e5",
+        "afterSha256": "c99e51c062267a0ec3f0fde916cbee19c526c1ac1dc5846bcc26dc58b32ad7e5",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Native document query and blocked writer boundary",
+        "path": "specs/native-document-adapter.md",
+        "status": "draft-contract-query-preview",
+        "beforeSha256": "8302de7cba029de8ea31afdd5010d1d0ce0e018553e491ad62ac778826708747",
+        "afterSha256": "8302de7cba029de8ea31afdd5010d1d0ce0e018553e491ad62ac778826708747",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Native document adapter usage",
+        "path": "packages/native-document-adapter/README.md",
+        "status": "query-preview-writer-blocked-wasm-rejected",
+        "beforeSha256": "e154834dbc3606fdc6a2c2448a7f5c1c9af4dfcf8553f773d14f6ef563c1a6ad",
+        "afterSha256": "e154834dbc3606fdc6a2c2448a7f5c1c9af4dfcf8553f773d14f6ef563c1a6ad",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Licensing and corresponding source offer",
+        "path": "docs/licensing.md",
+        "status": "current-product-policy",
+        "beforeSha256": "8415498898fc14c86c5bbae10da1b5defe1de61b8b3d6347ceac71a9596db065",
+        "afterSha256": "8415498898fc14c86c5bbae10da1b5defe1de61b8b3d6347ceac71a9596db065",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Distribution documentation",
+        "path": "docs/distribution.md",
+        "status": "accepted-policy-with-release-authority-hold",
+        "beforeSha256": "1046a9269f98799ed373c4a3bec3e21f4535255e6927d87f340157418eeb0e5f",
+        "afterSha256": "1046a9269f98799ed373c4a3bec3e21f4535255e6927d87f340157418eeb0e5f",
+        "disposition": "retain-single-maintained-source"
+      },
+      {
+        "responsibility": "Artifact and development evidence interpretation",
+        "path": "compatibility/README.md",
+        "status": "current-evidence-navigation",
+        "beforeSha256": "575a1bf00b8b66ac73e2083612bf681cce2c3a64f45357931a7da5c04f2c86d4",
+        "afterSha256": "575a1bf00b8b66ac73e2083612bf681cce2c3a64f45357931a7da5c04f2c86d4",
+        "disposition": "retain-single-maintained-source"
+      }
+    ],
+    "interpretation": "Navigation and examples preserve their owner contract status. Historical artifact observations do not qualify current inputs. New release authority remains under issue 53; native writer and WASM admission remain under issue 54.",
+    "rollback": "Revert only this documentation disposition record through an ordinary reviewed commit. Existing documents, links and historical artifacts require no rollback because their bytes are unchanged."
+  }
 }
