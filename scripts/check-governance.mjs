@@ -3,12 +3,15 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { validateSourceBinding, validateQualificationReport } from './development-package-evidence.mjs';
 import { checkPublicSurface, repositoryPath, root } from './check-public-surface.mjs';
 
 export const commands = Object.freeze({
   'check:governance': 'node scripts/check-governance.mjs',
   'test:governance': 'node --test scripts/check-governance.test.mjs scripts/check-public-surface.test.mjs',
   'check:public-surface': 'node scripts/check-public-surface.mjs',
+  'check:development-artifacts': 'node scripts/development-package-evidence.mjs verify',
+  'test:development-artifacts': 'node --test scripts/development-package-evidence.test.mjs',
 });
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const sorted = (value) => Array.isArray(value) ? value.map(sorted) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])])) : value;
@@ -141,7 +144,10 @@ const allowedPaths = new Set([
   'governance/governed-documents.json', 'governance/document-generation.json',
   'governance/generated/document-catalog.json', 'governance/generated/document-export.public.json',
   'scripts/check-governance.mjs', 'scripts/check-governance.test.mjs',
-  'scripts/check-public-surface.mjs', 'scripts/check-public-surface.test.mjs', ...boundaryPaths,
+  'scripts/check-public-surface.mjs', 'scripts/check-public-surface.test.mjs',
+  'scripts/development-package-evidence.mjs', 'scripts/development-package-evidence.test.mjs',
+  'scripts/qualify-viewer-boundary.mjs',
+  'compatibility/evidence/viewer-boundary-development-environment.json', ...boundaryPaths,
 ]);
 export function validateChangedPaths(paths) {
   assert(paths.every((path) => allowedPaths.has(path)), 'change outside the authorized environment surface');
@@ -160,7 +166,7 @@ function validateBoundary(env) {
   const previous = JSON.parse(baselineFile(env.baseline.commit, 'compatibility/viewer-core.json'));
   const current = json('compatibility/viewer-core.json');
   const { sources: oldSources, ...oldFields } = previous;
-  const { sources: newSources, ...newFields } = current;
+  const { sources: newSources, developmentQualification, ...newFields } = current;
   assert(same(oldFields, newFields), 'compatibility artifact or contract identity changed');
   assert(same(Object.fromEntries(Object.entries(oldSources).filter(([, value]) => value !== 'external')), newSources), 'only external source relationship removal allowed');
 }
@@ -177,6 +183,11 @@ export function checkGovernance() {
   validateChangedPaths(paths);
   validatePackageChange(JSON.parse(baselineFile(env.baseline.commit, 'package.json')), json('package.json'));
   validateBoundary(env);
+  const development = json('compatibility/viewer-core.json').developmentQualification;
+  if (development) {
+    validateSourceBinding(development);
+    validateQualificationReport(development);
+  }
   const agents = read('AGENTS.md');
   for (const required of ['governance/adoption.md', 'governance/environment.json', 'hosted-public', 'full-integration', 'release/X.Y.Z', 'Mapping completion', 'HOLD', ...Object.keys(commands)]) assert(agents.includes(required), 'root working contract missing required boundary');
   const surfaces = checkPublicSurface();

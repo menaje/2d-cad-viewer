@@ -8,7 +8,8 @@ Host–Webview message 없이 사용할 수 있는 WebGL presentation과 DWG Sce
 Cache source package의 버전, 공개 mount, exact artifact digest와 publication
 승인을 별도로 기록한다. 제품 bootstrap은 이 공개 계약에 포함되지 않는다.
 `developmentQualification`은 아직 새 package tag로 배포하지 않은 소스의
-추가 public API와 검증이 있을 때만 기록한다. 개발 소스의 재현 가능한 artifact
+추가 public API와 검증이 있거나, 아래의 좁은 환경·문서-only 재패키징 조건을
+충족할 때 기록한다. 개발 소스의 재현 가능한 artifact
 digest는 이 항목에 별도로 고정하며, 기존 `distribution`의 immutable artifact
 digest를 바꾸거나 새 버전이 배포됐다는 뜻이 아니다. Viewer Core 0.1.3의
 상호작용 중 detail read 중단·최신 camera 재선택 lifecycle과 기존 동기 delta
@@ -61,6 +62,33 @@ VS Code가 같은 Webview entrypoint를 bundle하는지도 확인한다. 이 저
 consumer manifest가 책임진다. 현재 고정 evidence는
 [`evidence/viewer-boundary-0.1.3-2026-08-15.json`](evidence/viewer-boundary-0.1.3-2026-08-15.json)에
 있다.
+
+## Environment/documentation-only development repack
+
+Core `developmentQualification.classification = environment-documentation-only`는
+현재 PR의 정확히 분류된 governance 파일과 세 public package의 `README.md`
+교정에만 적용한다. public API, runtime, package manifest/version/dependency,
+LICENSE/NOTICE, 기존 package script와 release workflow가 하나라도 바뀌면 거부한다.
+이는 일반 제품 변경을 같은 버전의 개발 증거로 승인하는 예외가 아니다.
+
+먼저 clean source commit을 만든다. `node scripts/development-package-evidence.mjs
+measure <40-hex-source-revision> <repository-outside-output-directory>`는 각 package를
+두 번 실제 pack/normalize하고 bytes·SHA-256·content SHA-256과 exact source tree,
+변경 경로·분류·blob, package source digest를 측정한다. `--emit` qualification의
+artifact-only consumer/standalone 검사까지 성공한 결과만 별도 미배포 증거와
+`developmentQualification.artifacts`에 기록한다. source commit에는 자신의
+artifact evidence가 없어야 하고, 뒤의 evidence commit에는 지정된 evidence 및
+catalog/환경 digest 갱신만 허용한다. 문서·validator가 이후 바뀌면 새 source와
+새 qualification이 필요하며 이전 증거를 재사용하지 않는다.
+
+`pnpm run check:development-artifacts`와 `pnpm run qualify:viewer-boundary`는
+exact source ancestry와 tree, 허용 경로, package 입력 불변, 실제 archive digest/size,
+고정 report를 검증한다. CI의 얕은 checkout에서는 이 공개 저장소의 exact Git 입력만
+제한적으로 읽어 온다. 증거 누락·순환·drift·미확인 경로는 HOLD다.
+기존 `distribution.artifacts`와 historical evidence는 byte identity를 보존하며
+수정하지 않는다. 이 예외는 release/promotion/publication/stable readiness를
+생성하지 않는다. `--emit`는 아직 commit하지 않은 증거 수집용이며 승인이나 PASS
+대체 수단이 아니다.
 
 `native-document-adapter.json`은 raw DWG query/change/write backend의
 operation별 admission을 별도로 기록한다. 현재 Native는 bounded packed

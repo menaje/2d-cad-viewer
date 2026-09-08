@@ -55,6 +55,15 @@ change. Do not alter product source, runtime/rendering/native/WASM behavior,
 package versions/dependencies, existing package behavior or workflow deployment
 behavior. New commands are separate from `check` and `test`.
 
+For the separately scoped PR #57 evidence correction, the exact
+[environment/documentation repack rules](compatibility/README.md#environmentdocumentation-only-development-repack)
+permit measured unpublished artifacts and focused package qualification.
+Run `pnpm run test:development-artifacts`, `pnpm run check:development-artifacts`
+and `pnpm run qualify:viewer-boundary` only for that boundary. Preserve historical
+distribution artifacts. The bounded Windows UI comparison invokes the unchanged
+workflow once per exact base/head, records its result separately and grants no
+product remediation or release authority.
+
 ## Gate and promotion boundary
 
 Execution profile: `hosted-public`. The five ordered Gates remain `fast`,

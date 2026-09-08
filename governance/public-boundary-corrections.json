@@ -5,7 +5,7 @@
     {
       "path": "compatibility/README.md",
       "beforeSha256": "a7c2c023f5811c4a9f14be690df422fd4f170ead87df12b242846b8c744d8bcc",
-      "afterSha256": "46d2fd479524fbbb8de80d09bf1bd52af342b31ece35550f1d1b19b5af6fd3f7",
+      "afterSha256": "2bfda655a660758d22084ddf84169b29004ffc54e8d6e791c7110032a66fc481",
       "scope": "meaning-preserving-public-boundary-wording",
       "historicalArtifactsChanged": false
     },

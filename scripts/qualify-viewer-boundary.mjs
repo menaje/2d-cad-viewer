@@ -17,6 +17,8 @@ import {
   normalizeNpmPackageArchive,
 } from "./normalize-npm-package-archive.mjs";
 
+import { validateSourceBinding, validateQualificationReport } from "./development-package-evidence.mjs";
+
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -616,6 +618,8 @@ const developmentQualification =
   manifest.developmentQualification ?? null;
 const developmentActive = developmentQualification !== null;
 if (developmentActive) {
+  validateSourceBinding(developmentQualification, { allowEvidenceWorktree: emitOnly });
+  if (!emitOnly) validateQualificationReport(developmentQualification);
   assert.equal(developmentQualification.status, "passed");
   assert.equal(
     developmentQualification.publishedInDistribution,

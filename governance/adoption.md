@@ -127,6 +127,24 @@ peeled commit, artifact filename/size/SHA-256 and accepted conformance/provenanc
 Unknown, stale or contradictory evidence is HOLD. A result cannot be reused for
 a different input, and local results cannot substitute for required hosted ones.
 
+## Unpublished documentation payload evidence
+
+The [compatibility rule](../compatibility/README.md#environmentdocumentation-only-development-repack)
+narrowly permits PR #57's three package README corrections to change archive
+bytes while public API/runtime/package manifests/versions/dependencies stay
+identical to the recorded baseline. Exact source commit precedes the separate
+artifact-evidence commit; the source cannot contain its own development evidence.
+Only classified environment files are allowed before that source, and only
+specified evidence/catalog digest records afterward. All other changes fail
+closed. Two actual packs, normalized archive and content digests/sizes, source
+ancestry/tree and artifact-only consumer conformance are required. Historical
+`distribution.artifacts` and retained qualification evidence remain unchanged.
+The new checks are `test:development-artifacts` and `check:development-artifacts`;
+`qualify:viewer-boundary` now rejects unbound development evidence before using
+its existing development-artifact selection path. This is not product/release
+qualification authority. The scoped Windows UI comparison records one bounded
+unchanged workflow execution per exact base/head and defers product remediation.
+
 ## Public-surface enforcement and scope
 
 Every public document, metadata/generated field, issue, PR, commit, log and test

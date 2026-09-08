@@ -45,6 +45,8 @@
     "test:vscode": "pnpm --filter dwg-viewer-vscode test",
     "check:governance": "node scripts/check-governance.mjs",
     "test:governance": "node --test scripts/check-governance.test.mjs scripts/check-public-surface.test.mjs",
-    "check:public-surface": "node scripts/check-public-surface.mjs"
+    "check:public-surface": "node scripts/check-public-surface.mjs",
+    "check:development-artifacts": "node scripts/development-package-evidence.mjs verify",
+    "test:development-artifacts": "node --test scripts/development-package-evidence.test.mjs"
   }
 }
