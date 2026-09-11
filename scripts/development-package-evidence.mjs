@@ -15,6 +15,7 @@ export const packageDefinitions = Object.freeze([
   { key: 'viewerUi', directory: 'packages/viewer-ui' },
 ]);
 export const evidencePath = 'compatibility/evidence/viewer-boundary-development-environment.json';
+const evidenceRevision = '0f1b0f0c4bf2ed6ed85bfd34e67e774a81e63ae1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
 const same = (a, b) => assert.deepEqual(a, b);
@@ -47,6 +48,16 @@ export function validateChangePaths(paths, { evidenceOnly = false } = {}) {
   const allowed = evidenceOnly ? evidenceOnlyPaths : sourcePaths;
   assert.ok(paths.length > 0, 'exact nonempty change classification required');
   for (const path of paths) assert.ok(allowed.has(path), 'change exceeds environment/documentation-only scope');
+}
+// Maintenance starts after the immutable measured receipt. This narrow list
+// does not permit a new package payload, qualifier, manifest or release change.
+const maintenancePaths = new Set([...evidenceOnlyPaths,
+  'AGENTS.md', 'governance/adoption.md',
+  'scripts/development-package-evidence.mjs',
+  'scripts/development-package-evidence.test.mjs',
+]);
+export function validateMaintenancePaths(paths) {
+  for (const path of paths) assert.ok(maintenancePaths.has(path), 'change exceeds post-receipt governance maintenance scope');
 }
 export function validateArtifactRecords(artifacts, historical) {
   same(Object.keys(artifacts).sort(), packageDefinitions.map(({ key }) => key).sort());
@@ -165,8 +176,14 @@ export function validateSourceBinding(development, { allowEvidenceWorktree = fal
   assert.equal(git('status', '--porcelain', '--untracked-files=all', '--', ...directories), '', 'dirty/untracked package input forbidden');
   validateRootMetadata(JSON.parse(gitBytes(baselineRevision, 'package.json')), JSON.parse(gitBytes(development.sourceRevision, 'package.json')));
   validateRootMetadata(JSON.parse(gitBytes(baselineRevision, 'package.json')), readJson(join(root, 'package.json')));
-  const afterSource = [...new Set([...git('diff', '--name-only', development.sourceRevision, '--').split('\n'), ...git('ls-files', '--others', '--exclude-standard').split('\n')].filter(Boolean))];
-  if (afterSource.length) validateChangePaths(afterSource, { evidenceOnly: true });
+  ensureHistory(evidenceRevision);
+  git('merge-base', '--is-ancestor', development.sourceRevision, evidenceRevision);
+  const receiptManifest = JSON.parse(gitBytes(evidenceRevision, 'compatibility/viewer-core.json'));
+  same(development, receiptManifest.developmentQualification);
+  const historicalChanges = git('diff', '--name-only', development.sourceRevision, evidenceRevision).split('\n').filter(Boolean);
+  if (historicalChanges.length) validateChangePaths(historicalChanges, { evidenceOnly: true });
+  const maintenance = [...new Set([...git('diff', '--name-only', evidenceRevision, '--').split('\n'), ...git('ls-files', '--others', '--exclude-standard').split('\n')].filter(Boolean))];
+  validateMaintenancePaths(maintenance);
   if (!allowEvidenceWorktree) assert.equal(git('status', '--porcelain', '--untracked-files=all'), '', 'committed evidence inputs required');
   validateArtifactRecords(development.artifacts, historical.distribution.artifacts);
   return historical;

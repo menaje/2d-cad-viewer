@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { validateArtifactRecords, validateChangePaths, validateCompatibilityPreservation, validateRootMetadata, validatePackageFiles, compareMeasuredArtifacts, validateSourceBinding, validateQualificationReport, validateQualifierChange, validateManifestTestChange } from './development-package-evidence.mjs';
+import { validateArtifactRecords, validateChangePaths, validateMaintenancePaths, validateCompatibilityPreservation, validateRootMetadata, validatePackageFiles, compareMeasuredArtifacts, validateSourceBinding, validateQualificationReport, validateQualifierChange, validateManifestTestChange } from './development-package-evidence.mjs';
 
 const manifest = JSON.parse(readFileSync(new URL('../compatibility/viewer-core.json', import.meta.url)));
 const artifacts = structuredClone(manifest.distribution.artifacts);
@@ -35,6 +35,15 @@ test('environment allowance does not permit runtime, API, manifest, dependency o
 test('evidence commit cannot change the qualified source or documentation', () => {
   assert.doesNotThrow(() => validateChangePaths(['compatibility/viewer-core.json'], { evidenceOnly: true }));
   for (const path of ['AGENTS.md', 'packages/viewer-core/README.md', 'scripts/development-package-evidence.mjs', 'package.json']) assert.throws(() => validateChangePaths([path], { evidenceOnly: true }), /exceeds/);
+});
+test('post-receipt maintenance admits only the named governance paths and keeps historical classification strict', () => {
+  for (const path of ['AGENTS.md', 'governance/adoption.md', 'scripts/development-package-evidence.mjs', 'scripts/development-package-evidence.test.mjs']) {
+    assert.doesNotThrow(() => validateMaintenancePaths([path]));
+    assert.throws(() => validateChangePaths([path], { evidenceOnly: true }), /exceeds/);
+  }
+  for (const path of ['packages/viewer-core/README.md', 'packages/viewer-core/src/constants.mjs', 'packages/viewer-core/package.json', 'packages/viewer-core/test/viewer-core.test.mjs', 'apps/vscode-extension/src/extension.ts', 'scripts/qualify-viewer-boundary.mjs', 'scripts/example.mjs', 'package.json', 'pnpm-lock.yaml', '.github/workflows/ci.yml', 'governance/unreviewed.json']) {
+    assert.throws(() => validateMaintenancePaths([path]), /exceeds/);
+  }
 });
 test('historical digest, size, identity and all other compatibility fields are immutable', () => {
   const after = structuredClone(manifest);

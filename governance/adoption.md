@@ -37,7 +37,7 @@ new product policy or release authority.
 
 | Invocation | Actual coverage and trigger | Side effects / evidence limit |
 | --- | --- | --- |
-| Manual `pnpm run check:governance` | `scripts/check-governance.mjs`: historical-baseline/input checks, allowed change paths, AGENTS boundaries and public-surface scan | Reads repository inputs and Git objects; local focused evidence only |
+| Manual `pnpm run check:governance` | `scripts/check-governance.mjs`: historical-baseline/input checks, allowed change paths, AGENTS boundaries and public-surface scan | Reads repository inputs/Git objects and may fetch missing exact public history; requires committed clean evidence inputs. Local focused evidence only |
 | Manual `pnpm run test:governance` | `scripts/check-governance.test.mjs` and `scripts/check-public-surface.test.mjs` | Focused tests may create temporary fixtures; no product qualification |
 | Manual `pnpm run check:public-surface` | `scripts/check-public-surface.mjs`; tracked and non-ignored untracked surfaces | Read-only scan; human contextual review is also required |
 | Manual `pnpm run check:documents` | `scripts/document-governance.mjs validate`; registered documents and generated projections | Read-only validation; fails when source bytes differ from the recorded generation revision |
@@ -173,7 +173,20 @@ replace its stale development-evidence absence assertion with source/report
 validation; any other test edit fails closed. Exact source commit precedes the separate
 artifact-evidence commit; the source cannot contain its own development evidence.
 Only classified environment files are allowed before that source, and only
-specified evidence/catalog digest records afterward. All other changes fail
+specified evidence/catalog digest records between it and the original measured
+receipt commit `0f1b0f0c4bf2ed6ed85bfd34e67e774a81e63ae1`. That historical interval
+still uses the strict evidence-only classification. After the receipt, current
+maintenance additionally permits exactly `AGENTS.md`, `governance/adoption.md`,
+`scripts/development-package-evidence.mjs` and its `.test.mjs` file. Current
+tracked and non-ignored untracked changes are checked against this narrow list
+plus the existing evidence/catalog paths. The original development record must
+match the receipt, and package source bytes must still match the qualified source.
+Package README/source/test/manifests, qualifier behavior, dependencies and
+workflows receive no new allowance. Validator changes require the existing
+`test:development-artifacts` command and `check:governance` retained source/report
+checks. The separate `check:development-artifacts` command creates two temporary
+packs per package and removes them afterward; it remains restricted to separately
+scoped artifact verification. All other changes fail
 closed. Two actual packs, normalized archive and content digests/sizes, source
 ancestry/tree and artifact-only consumer conformance are required. Historical
 `distribution.artifacts` and retained qualification evidence remain unchanged.

@@ -64,6 +64,11 @@ change. Do not alter product source, runtime/rendering/native/WASM behavior,
 package versions/dependencies, existing package behavior or workflow deployment
 behavior. New commands are separate from `check` and `test`.
 
+When changing the retained evidence validator, also run
+`pnpm run test:development-artifacts`; this runs focused validator tests.
+`check:governance` verifies the retained source/report binding without repacking. The adoption contract names the permitted
+post-receipt maintenance paths and preserves the original source/receipt binding.
+
 For the separately scoped PR #57 evidence correction, the exact
 [environment/documentation repack rules](compatibility/README.md#environmentdocumentation-only-development-repack)
 permit measured unpublished artifacts and focused package qualification.
