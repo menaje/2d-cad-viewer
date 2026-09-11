@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.1.0",
   "ownerRepository": "viewer",
-  "sourceRevision": "bc8e8a6c428a8ab4e5d671d20de411ea186b7c4c",
+  "sourceRevision": "925a045ca79670ebf45dc796fff7b6a5026b706f",
   "documents": [
     {
       "schemaVersion": "1.1.0",
@@ -141,7 +141,7 @@
       "effectiveAt": "2026-09-08",
       "ownerRepository": "viewer",
       "sourcePath": "governance/adoption.md",
-      "digest": "sha256:c853b5b1c7d376f2216cfaa768e953e7f4bc457a90f81d50ad711c07070ce70c",
+      "digest": "sha256:c7168cdacdea386700a4551d3a5db262c38e5945dc2cdfaebdd6b69d62dc3b99",
       "supersededBy": []
     }
   ],
