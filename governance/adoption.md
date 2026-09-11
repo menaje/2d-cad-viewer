@@ -10,6 +10,42 @@ release execution. Its draft is reviewable through [#56](https://github.com/mena
 The catalog date is a document metadata date, not a product Effective receipt.
 Root [AGENTS.md](../AGENTS.md) summarizes these working rules.
 
+## Policy entry and current application
+
+Read this contract for work-environment requirements, follow the owner index
+below for concrete product rules, use [AGENTS](../AGENTS.md) for task instructions,
+and bind validation evidence to the exact changed input. This navigation adds no
+new product policy or release authority.
+
+| State | Exact observation / locator | Meaning |
+| --- | --- | --- |
+| Historical inventory baseline | [environment.json](environment.json) `baseline`: commit `b955e9cda3e24bfa4dd9f6fd3597f1aa1d6a5ccb`, tree `e8b075a927e36c81a64a8435b59088300ce696ee` | Initial observation and validator comparison source; preserve it instead of relabeling it current. Dated follow-up states in that inventory remain historical. |
+| Reviewed environment integration | [PR #57](https://github.com/menaje/2d-cad-viewer/pull/57), merged commit `fb625033c2a6d09d1a8be7e261f54c0ab6fef546` | Repository-local working environment was integrated into `dev`; this does not establish product Effective. |
+| Current reviewed development baseline, observed 2026-09-11 | Remote default `dev`: commit `d2aacd31e36f4bcbc1175c0add59a7209f277ba0`, tree `b13383180bc84877419ed3a5c8332c03fe1e5349`; [PR #58](https://github.com/menaje/2d-cad-viewer/pull/58) records product document owners | Exact baseline for this navigation update. Re-observe the remote before subsequent work; a moving branch is a locator. |
+| Stable branch observation, 2026-09-11 | `main`: commit `7910bd125f13b3bc3bcfc2e2af5276cf873a7efb` | Separate distribution history; it is not the current development environment baseline or a new release approval. |
+| Actual repository application | `git rev-parse HEAD HEAD^{tree}`; `git status --porcelain=v2`; current files plus focused validation results | Record each checkout independently. A fetched remote, old receipt or successful check at another input does not prove this checkout is current. |
+| Document projection source | [document-generation.json](document-generation.json) `sourceRevision` and [document catalog](generated/document-catalog.json) | Exact committed document bytes used by the generator; distinct from both the historical inventory baseline and the commit containing generated output. |
+
+| Requirement | Repository application and owner/configuration | Verification / evidence |
+| --- | --- | --- |
+| Work isolation, visibility and exact-input evidence | This contract; [AGENTS](../AGENTS.md); [environment inventory](environment.json) | `check:governance`, `test:governance`, `check:public-surface`; exact source/tree, input digests and limitations |
+| Product and API ownership | [Architecture](../docs/architecture.md), [boundary ADR](../docs/adr/ADR-0001-viewer-core-boundary.md), package READMEs | Existing product contracts own details; the focused document check verifies registered metadata, local links and projection bytes |
+| Version, stage and publication decisions | [Distribution](../docs/distribution.md), repository-owned locators in the inventory; unresolved decisions in [#53](https://github.com/menaje/2d-cad-viewer/issues/53) | `check:governance` checks observations; product/release evidence and unresolved authority remain HOLD |
+| Document ownership and generated records | [Governed document registry](governed-documents.json), [generation instructions](README.md), `scripts/document-governance.mjs` | `check:documents`; regenerate only from an exact committed source and record output digests/drift separately |
+
+## Verification invocation map
+
+| Invocation | Actual coverage and trigger | Side effects / evidence limit |
+| --- | --- | --- |
+| Manual `pnpm run check:governance` | `scripts/check-governance.mjs`: historical-baseline/input checks, allowed change paths, AGENTS boundaries and public-surface scan | Reads repository inputs and Git objects; local focused evidence only |
+| Manual `pnpm run test:governance` | `scripts/check-governance.test.mjs` and `scripts/check-public-surface.test.mjs` | Focused tests may create temporary fixtures; no product qualification |
+| Manual `pnpm run check:public-surface` | `scripts/check-public-surface.mjs`; tracked and non-ignored untracked surfaces | Read-only scan; human contextual review is also required |
+| Manual `pnpm run check:documents` | `scripts/document-governance.mjs validate`; registered documents and generated projections | Read-only validation; fails when source bytes differ from the recorded generation revision |
+| Manual `pnpm run generate:documents -- <40-hex-source-revision>` | Existing document generator, after committing governed source changes | Writes `document-generation.json` and two files under `governance/generated/`; run twice for the same exact source and compare tracked/untracked drift |
+| Aggregate `pnpm check` / `pnpm test` | Neither aggregate invokes the four focused commands above | Product command sets are separate and may build/package or qualify artifacts; do not run them for this navigation-only change |
+| Hosted `.github/workflows/ci.yml` | Push to `main`, `dev`, `prerelease`, and pull requests; runs product Rust/package checks and qualification, not the four focused commands | Automatic hosted runs are separate observations; no local focused result substitutes for hosted Gate evidence |
+| Server-required checks, observed 2026-09-11 | `dev` branch-protection API returned `Branch not protected`; applicable branch rules API returned `[]` | No required status check observed for `dev`; re-observe before integration. Workflow existence alone does not make a check server-required |
+
 ## Authority and lifecycle
 
 The repository owns the rules, locators and public evidence in this contract.

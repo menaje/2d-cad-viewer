@@ -1,5 +1,14 @@
 # 2D CAD Viewer repository working contract
 
+Start at the repository-owned [policy entry](governance/adoption.md). Its
+[current-state table](governance/adoption.md#policy-entry-and-current-application)
+separates historical observations from the reviewed development baseline;
+its [verification map](governance/adoption.md#verification-invocation-map)
+identifies manual commands, aggregate/CI coverage, side effects and server checks.
+Run the four commands under [Governance-only execution](#governance-only-execution)
+for policy/document changes. Record the actual checkout SHA/tree and status
+separately from the remote baseline before starting work.
+
 This repository owns the standalone read-only VS Code 2D CAD Viewer,
 source-neutral Viewer Core/UI, render protocol, WebGL presentation, DWG Scene
 Source/cache and native document adapter boundary. It does not own host
