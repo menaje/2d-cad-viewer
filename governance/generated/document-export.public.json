@@ -2,8 +2,8 @@
   "schemaVersion": "1.1.0",
   "projection": "public",
   "ownerRepository": "viewer",
-  "sourceRevision": "5b870d92928ad38b58bd8926603750adaa118435",
-  "catalogDigest": "sha256:d1509f6586e54626601df1d96aadd14a6c4bda2002b66d4c555732fb99c9b6d7",
+  "sourceRevision": "925a045ca79670ebf45dc796fff7b6a5026b706f",
+  "catalogDigest": "sha256:e498abe6681c12305e08b5eeb90af3e40b2e26fd79aba33917aaaa9990746de1",
   "documents": [
     {
       "schemaVersion": "1.1.0",
@@ -137,7 +137,7 @@
       "effectiveAt": "2026-09-08",
       "ownerRepository": "viewer",
       "sourcePath": "governance/adoption.md",
-      "digest": "sha256:8af2ebb1e8f0a9b4f825971927a80dc52923be6cb5afeac4f81688fd666af9bb"
+      "digest": "sha256:c7168cdacdea386700a4551d3a5db262c38e5945dc2cdfaebdd6b69d62dc3b99"
     }
   ],
   "externalDocuments": [],
