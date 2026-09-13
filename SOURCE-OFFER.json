@@ -1,0 +1,34 @@
+{
+  "schema": "viewer-source-offer/1",
+  "product": "2D CAD Viewer",
+  "marketplaceId": "menaje.dwg-viewer-vscode",
+  "sourceArchive": {
+    "repository": "menaje/2d-cad-viewer-source-archive",
+    "commit": "f2ad51cf775e397f144de90a52dd4c1b3a5760ef",
+    "url": "https://github.com/menaje/2d-cad-viewer-source-archive",
+    "manifestSha256": "bb6aecab60f7a44664f68a32dbcb0164281a6bdf75ddf6e150e31395fa8d3535",
+    "checksumsSha256": "b4b3b6811a4b9912054d0c90c484b5227aff4c44a60bf29f66278d6563e84df4"
+  },
+  "versions": [
+    "v0.1.1",
+    "v0.1.2",
+    "v0.1.3",
+    "v0.1.5",
+    "v0.1.6",
+    "v0.1.7",
+    "v0.1.8",
+    "viewer-core-v0.1.0",
+    "viewer-core-v0.1.1",
+    "viewer-core-v0.1.2",
+    "viewer-core-v0.1.3",
+    "viewer-webgl-v0.1.1"
+  ],
+  "licenses": [
+    "MPL-2.0",
+    "GPL-3.0-or-later",
+    "Original applicable third-party notices"
+  ],
+  "access": "anonymous without payment; no planned expiry",
+  "sourceRequests": "https://github.com/menaje/2d-cad-viewer/issues/new",
+  "scope": "source-acquisition instructions only; no implementation or development history"
+}
